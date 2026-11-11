@@ -200,6 +200,64 @@ export function setTimezone(value: string) {
         instanceTimezone = "Asia/Kolkata";
     }
 }
+function instanceDateTimeText(date: Date): string {
+    const parts = Object.fromEntries(
+        new Intl.DateTimeFormat("en", {
+            timeZone: instanceTimezone,
+            calendar: "iso8601",
+            numberingSystem: "latn",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hourCycle: "h23",
+        })
+            .formatToParts(date)
+            .map(({ type, value }) => [type, value]),
+    );
+    return `${parts.year.padStart(4, "0")}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
+}
+export function formatDateTimeInput(
+    value: string | number | null | undefined,
+): string {
+    if (value == null || value === "") return "";
+    const date = new Date(typeof value === "number" ? value * 1000 : value);
+    return Number.isNaN(date.getTime())
+        ? ""
+        : instanceDateTimeText(date).slice(0, 16);
+}
+export function dateTimeInputToISO(text: string): string {
+    const wallMilliseconds = Date.parse(text + "Z");
+    if (
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(text) ||
+        text.startsWith("0000-") ||
+        !Number.isFinite(wallMilliseconds) ||
+        new Date(wallMilliseconds).toISOString().slice(0, 16) !== text
+    )
+        throw new Error(
+            `Choose a valid expiry date and time in ${instanceTimezone}.`,
+        );
+    const matches = new Set<number>();
+    // Test offsets on both sides of a clock change; never guess through a gap/fold.
+    for (const days of [-2, 0, 2]) {
+        const sampleMilliseconds = wallMilliseconds + days * 86400000;
+        const offsetMilliseconds =
+            Date.parse(
+                instanceDateTimeText(new Date(sampleMilliseconds)) + "Z",
+            ) - sampleMilliseconds;
+        if (!Number.isFinite(offsetMilliseconds)) continue;
+        const candidate = wallMilliseconds - offsetMilliseconds;
+        if (instanceDateTimeText(new Date(candidate)) === text + ":00")
+            matches.add(candidate);
+    }
+    if (matches.size !== 1)
+        throw new Error(
+            `That time ${matches.size ? "occurs twice" : "does not exist"} in ${instanceTimezone} because the clocks change. Choose another expiry time.`,
+        );
+    return new Date([...matches][0]).toISOString();
+}
 export function formatTimestamp(
     value: string | number | null | undefined,
 ): string {

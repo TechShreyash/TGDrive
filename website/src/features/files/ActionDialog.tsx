@@ -22,7 +22,13 @@ import {
 } from "lucide-react";
 import { api, request, ApiError, errorMessage } from "../../shared/api";
 import { performanceApi } from "../performance/performanceApi";
-import { itemPath, formatTimestamp, type DriveItem } from "../../shared/types";
+import {
+    itemPath,
+    formatTimestamp,
+    dateTimeInputToISO,
+    getTimezone,
+    type DriveItem,
+} from "../../shared/types";
 import { transfers } from "../transfers/transfers";
 import { Modal, ErrorNotice, Spinner } from "../../shared/components";
 import { embedUrl } from "../shares/embedLinks";
@@ -356,7 +362,7 @@ export default function ActionDialog({
                                         : Number(expires),
                                     shareLabel,
                                     expires === "custom"
-                                        ? new Date(customExpiry).toISOString()
+                                        ? dateTimeInputToISO(customExpiry)
                                         : undefined,
                                 );
                                 setLink(
@@ -410,7 +416,7 @@ export default function ActionDialog({
                         {expires === "custom" && (
                             <>
                                 <label htmlFor="share-custom-expiry">
-                                    Expiry date and time
+                                    Expiry date and time ({getTimezone()})
                                 </label>
                                 <input
                                     id="share-custom-expiry"

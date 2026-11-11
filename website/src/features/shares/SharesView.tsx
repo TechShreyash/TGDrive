@@ -14,6 +14,8 @@ import { useManualRefresh } from "../../shared/useManualRefresh";
 import {
     formatDate,
     formatTimestamp,
+    formatDateTimeInput,
+    dateTimeInputToISO,
     getTimezone,
     type Share,
 } from "../../shared/types";
@@ -813,18 +815,7 @@ function EditShare({
     onSaved: () => void;
 }) {
     const [label, setLabel] = useState(share.label || "");
-    const date = share.expires_at
-        ? new Date(
-              typeof share.expires_at === "number"
-                  ? share.expires_at * 1000
-                  : share.expires_at,
-          )
-        : null;
-    const localDate = date
-        ? new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-              .toISOString()
-              .slice(0, 16)
-        : "";
+    const localDate = formatDateTimeInput(share.expires_at);
     const [expiry, setExpiry] = useState(localDate);
     const [never, setNever] = useState(!share.expires_at);
     const [busy, setBusy] = useState(false);
@@ -841,9 +832,7 @@ function EditShare({
             } = { share_id: share.id! };
             if (label !== (share.label || "")) changes.label = label;
             if (never !== !share.expires_at || (!never && expiry !== localDate))
-                changes.expires_at = never
-                    ? null
-                    : new Date(expiry).toISOString();
+                changes.expires_at = never ? null : dateTimeInputToISO(expiry);
             await request("/api/v1/shares", changes, { method: "PATCH" });
             onSaved();
         } catch (cause) {
@@ -884,7 +873,7 @@ function EditShare({
                 {!never && (
                     <>
                         <label htmlFor="edit-share-expiry">
-                            Expiry date and time
+                            Expiry date and time ({getTimezone()})
                         </label>
                         <input
                             id="edit-share-expiry"

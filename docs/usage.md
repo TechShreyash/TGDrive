@@ -253,6 +253,11 @@ playback even with a fast connection; use **Download Original** for another play
 2. Choose an expiry: one, seven or 30 days, no expiry, or a custom date/time.
 3. Copy the link. Review, edit, copy or revoke it later in **Shared Links**.
 
+Custom expiry uses the installation timezone shown beside the date/time field,
+including when editing a link. If a clock change skips that time or makes it
+occur twice, choose another expiry time; TGDrive rejects it rather than guessing
+an offset. Editing only a label preserves the existing expiry.
+
 New file shares open TGDrive's viewer at `/embed`; unsupported formats offer an
 original download. That file Share Link also works as an iframe source. Folder
 shares open the shared file browser and offer **Copy Embed Link** for an iframe.

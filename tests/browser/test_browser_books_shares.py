@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from urllib.parse import urlparse
 
 import pytest
@@ -228,6 +229,150 @@ def test_independent_share_ui_and_public_reader_revocation(server, desktop, brow
         public.close()
 
 
+@pytest.mark.parametrize(
+    "zone,browser_zone,expected,edited",
+    [
+        ("UTC", "Asia/Kolkata", "2030-01-15T18:00:00.000Z", "2030-01-16T19:15:00.000Z"),
+        ("Asia/Kolkata", "UTC", "2030-01-15T12:30:00.000Z", "2030-01-16T13:45:00.000Z"),
+        (
+            "America/New_York",
+            "UTC",
+            "2030-01-15T23:00:00.000Z",
+            "2030-01-17T00:15:00.000Z",
+        ),
+    ],
+)
+def test_custom_share_expiry_uses_instance_timezone(
+    server, browser, zone, browser_zone, expected, edited
+):
+    context = browser.new_context(timezone_id=browser_zone)
+    try:
+        page = context.new_page()
+
+        def config(route):
+            response = route.fetch()
+            route.fulfill(response=response, json={**response.json(), "timezone": zone})
+
+        page.route("**/api/config", config)
+        login(page, server.url)
+        page.locator('summary[aria-label="Actions for 資料"]').click()
+        page.get_by_role("button", name="Share Link", exact=True).click()
+        page.get_by_label("Link label (optional)", exact=True).fill("Zone test")
+        page.get_by_role("button", name="Custom", exact=True).click()
+        if zone == "America/New_York":
+            creates = []
+            page.on(
+                "request",
+                lambda request: (
+                    creates.append(request)
+                    if request.method == "POST"
+                    and urlparse(request.url).path == "/api/v1/shares"
+                    else None
+                ),
+            )
+            for value, message in (
+                ("2030-03-10T02:30", "does not exist"),
+                ("2030-11-03T01:30", "occurs twice"),
+            ):
+                page.locator("#share-custom-expiry").fill(value)
+                page.get_by_role("button", name="Create Share Link", exact=True).click()
+                expect(page.get_by_role("alert")).to_contain_text(message)
+                assert not creates
+        page.locator("#share-custom-expiry").fill("2030-01-15T18:00")
+        with page.expect_request(
+            lambda request: (
+                urlparse(request.url).path == "/api/v1/shares"
+                and request.method == "POST"
+            )
+        ) as created:
+            page.get_by_role("button", name="Create Share Link", exact=True).click()
+        assert created.value.post_data_json["expires_at"] == expected
+        expect(page.get_by_label("Share Link", exact=True)).to_be_visible()
+        page.get_by_role("button", name="Done", exact=True).click()
+        share = page.request.get(server.url + "/api/v1/shares").json()["shares"][0]
+        # A label-only edit must preserve the original seconds, not its minute input.
+        assert page.request.patch(
+            server.url + "/api/v1/shares",
+            data={
+                "share_id": share["id"],
+                "expires_at": expected.replace(":00.000Z", ":37.000Z"),
+            },
+        ).ok
+        page.goto(server.url + "/?view=shares")
+        before = page.request.get(server.url + "/api/v1/shares").json()["shares"][0]
+        page.get_by_role("button", name="Edit link Zone test", exact=True).click()
+        expiry = page.get_by_label(f"Expiry date and time ({zone})", exact=True)
+        expect(expiry).to_have_value("2030-01-15T18:00")
+        page.get_by_label("Link label", exact=True).fill("Zone label-only")
+        with page.expect_request(
+            lambda request: (
+                urlparse(request.url).path == "/api/v1/shares"
+                and request.method == "PATCH"
+            )
+        ) as patched:
+            page.get_by_role("button", name="Save changes", exact=True).click()
+        assert "expires_at" not in patched.value.post_data_json
+        expect(
+            page.get_by_role("button", name="Edit link Zone label-only", exact=True)
+        ).to_be_visible()
+        after = page.request.get(server.url + "/api/v1/shares").json()["shares"][0]
+        assert after["expires_at"] == before["expires_at"]
+        page.get_by_role("button", name="Edit link Zone label-only", exact=True).click()
+        expiry.fill("2030-01-16T19:15")
+        with page.expect_request(
+            lambda request: (
+                urlparse(request.url).path == "/api/v1/shares"
+                and request.method == "PATCH"
+            )
+        ) as patched:
+            page.get_by_role("button", name="Save changes", exact=True).click()
+        assert patched.value.post_data_json["expires_at"] == edited
+        expect(page.get_by_role("dialog", name="Edit share link")).not_to_be_visible()
+        if zone == "America/New_York":
+            page.get_by_role(
+                "button", name="Edit link Zone label-only", exact=True
+            ).click()
+            requests = []
+            page.on(
+                "request",
+                lambda request: (
+                    requests.append(request) if request.method == "PATCH" else None
+                ),
+            )
+            for value, message in (
+                ("2030-03-10T02:30", "does not exist"),
+                ("2030-11-03T01:30", "occurs twice"),
+            ):
+                expiry.fill(value)
+                page.get_by_role("button", name="Save changes", exact=True).click()
+                expect(page.get_by_role("alert")).to_contain_text(message)
+                assert not requests
+            page.get_by_role("dialog", name="Edit share link").get_by_role(
+                "button", name="Cancel"
+            ).click()
+            assert page.request.patch(
+                server.url + "/api/v1/shares",
+                data={"share_id": share["id"], "expires_at": "2030-11-03T06:30:37Z"},
+            ).ok
+            page.reload()
+            before = page.request.get(server.url + "/api/v1/shares").json()["shares"][0]
+            page.get_by_role(
+                "button", name="Edit link Zone label-only", exact=True
+            ).click()
+            expect(expiry).to_have_value("2030-11-03T01:30")
+            page.get_by_label("Link label", exact=True).fill("Fold kept")
+            page.get_by_role("button", name="Save changes", exact=True).click()
+            expect(
+                page.get_by_role("button", name="Edit link Fold kept", exact=True)
+            ).to_be_visible()
+            after = page.request.get(server.url + "/api/v1/shares").json()["shares"][0]
+            assert after["expires_at"] == before["expires_at"]
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=ARTIFACTS / f"expiry-{zone.replace('/', '-')}.png")
+    finally:
+        context.close()
+
+
 def test_create_multiple_links_from_share_dialog(server, desktop):
     _, page = desktop
     login(page, server.url)
@@ -239,7 +384,7 @@ def test_create_multiple_links_from_share_dialog(server, desktop):
         page.get_by_label("Link label (optional)", exact=True).fill(label)
         page.get_by_role("button", name=expiry, exact=True).click()
         if expiry == "Custom":
-            page.get_by_label("Expiry date and time", exact=True).fill(
+            page.get_by_label(re.compile(r"^Expiry date and time")).fill(
                 "2030-01-01T12:00"
             )
         page.get_by_role("button", name="Create Share Link", exact=True).click()
