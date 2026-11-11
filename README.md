@@ -46,18 +46,6 @@ availability still apply. [Learn the essentials →](docs/new-user-guide.md)
 > The demo is shared with other visitors, who can change or delete unprotected
 > files. Upload only non-private samples. [Demo guide](docs/usage.md#try-the-public-demo)
 
-## See it in action
-
-[Watch the 62-second feature tour](docs/assets/current-features.mp4): torrent
-imports, ZIP jobs, extraction, video Continue, player settings and the recovery form.
-
-| Video player | Phone layout |
-| :---: | :---: |
-| [<img src="docs/assets/video-continue.jpg" alt="Video player offering Continue; opens the feature tour" width="560">](docs/assets/current-features.mp4) | <img src="docs/assets/mobile-drive.jpg" alt="TGDrive file browser in a phone-sized window" width="240"> |
-
-Captured on 28 October 2026, before the 2.3 interface redesign. The phone view is emulated and the tour's recovery
-screen is an obsolete local demo, not current recovery instructions. [Full gallery](docs/showcase.md)
-
 ## Get started
 
 TGDrive is free and open source with every feature included. You need:
@@ -75,6 +63,23 @@ TGDrive is free and open source with every feature included. You need:
 > Keep TGDrive running for website access, share links and background work.
 > Keep separate copies of important files: TGDrive does not guarantee
 > permanent storage. [Backup basics](docs/backup-recovery.md)
+
+## See it in action
+
+<details>
+<summary>Older feature tour — before the current interface</summary>
+
+[Watch the 62-second feature tour](docs/assets/current-features.mp4): torrent
+imports, ZIP jobs, extraction, video Continue, player settings and the recovery form.
+
+| Video player | Phone layout |
+| :---: | :---: |
+| [<img src="docs/assets/video-continue.jpg" alt="Video player offering Continue; opens the feature tour" width="560">](docs/assets/current-features.mp4) | <img src="docs/assets/mobile-drive.jpg" alt="TGDrive file browser in a phone-sized window" width="240"> |
+
+Captured on 28 October 2026, before the 2.3 interface redesign. The phone view is emulated and the tour's recovery
+screen is an obsolete local demo, not current recovery instructions. [Full gallery](docs/showcase.md)
+
+</details>
 
 ## Documentation
 

@@ -2,8 +2,7 @@
 
 [Docs home](README.md) · [New-user essentials](new-user-guide.md) · Next: [Using TGDrive](usage.md)
 
-**On your computer:** follow steps 1–5 below. **On a server:** prepare MongoDB
-and Telegram, then use [Coolify](#coolify) or [server Compose](#docker-compose-on-a-server).
+Choose [where to install](#choose-your-installation), then follow its path below.
 For self-hosting or setup help, ask in the [support group](https://t.me/TechZBots_Support).
 
 Docker Compose supplies Python, the website and preview/import tools. You do not
@@ -39,9 +38,15 @@ MongoDB database and a new private Telegram channel; v1 catalogs are not importe
 
 ## Choose your installation
 
-Local TGDrive works while your computer and Docker are running. A sleeping or
-stopped computer cannot serve transfers, backups or share links. Use a server
-for access while your computer is off. [Compare self-hosting options](hosting.md#local-computer-or-server).
+| Run it on | Follow this path |
+| --- | --- |
+| Your computer | Complete the prerequisites and steps 1–5 below. Docker must stay running. |
+| A server managed by Coolify | Complete the prerequisites and steps 1–3, then [deploy with Coolify](#coolify) and [verify your drive](#5-open-your-drive). |
+| A server with your own HTTPS proxy | Complete the prerequisites and steps 1–3, then use [server Compose](#docker-compose-on-a-server) and [verify your drive](#5-open-your-drive). |
+
+A sleeping or stopped host cannot serve transfers, backups or share links. Use
+a server for access while your computer is off.
+[Compare hosting options](hosting.md#local-computer-or-server).
 
 ## Before you start
 
