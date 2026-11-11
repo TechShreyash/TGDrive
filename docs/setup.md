@@ -22,6 +22,7 @@ MongoDB database and a new private Telegram channel; v1 catalogs are not importe
 - [2. Prepare Telegram](#2-prepare-telegram)
 - [3. Configure your drive](#3-configure-your-drive)
 - [4. Start locally](#4-start-locally)
+  - [Build from the repository, dev or local edits](#build-from-the-repository-dev-or-local-edits)
 - [5. Open your drive](#5-open-your-drive)
 - [Apply updates to an existing drive](#apply-updates-to-an-existing-drive)
 - [If setup stops](#if-setup-stops)
@@ -222,10 +223,10 @@ docker compose ps
 The pull path requires a published image for the selected release. Set
 `TGDRIVE_VERSION=X.Y.Z` in `.env` to match the checked-out application tag
 `vX.Y.Z`; the default is `latest`. Release maintainers must verify the amd64 and
-arm64 manifest before announcing image-based setup. An unreleased source
-revision may have no matching image; build it with `docker compose up -d --build`
-(requires [Buildx](https://docs.docker.com/build/concepts/overview/), included in
-Docker Desktop). This tags the local build with the same image name.
+arm64 manifest before announcing image-based setup. To run a fork, `dev` or
+local changes, follow [Build from the repository](#build-from-the-repository-dev-or-local-edits)
+instead of pulling a release image.
+
 `config --quiet` checks syntax, not credentials; plain
 `docker compose config` prints secrets.
 
@@ -251,6 +252,59 @@ after Docker starts, set `TGDRIVE_RESTART_POLICY=unless-stopped` and recreate.
 > `docker compose down -v` or volume prune as a repair: they remove keys,
 > unfinished uploads and recovery journals. Data lives in Docker volumes,
 > not host `data/` and `cache/` folders.
+
+### Build from the repository, dev or local edits
+
+TGDrive supports both published images and builds from source. A published image
+is a packaged copy of the code at the time it was built. Pushing a new commit to
+`dev` changes the repository; it does not update an existing release image.
+The release publisher runs for eligible application release tags, not every
+`dev` commit.
+
+| What you want to run | Source to build |
+| --- | --- |
+| A commit pushed to `dev` | Check out that branch or exact commit on the build machine. |
+| Your fork | Check out your fork and selected branch. |
+| Local application edits | Use the edited checkout; the edits need not be committed or pushed. |
+
+After preparing `.env`, run from that checkout:
+
+~~~bash
+docker compose build app
+docker compose up -d --no-build --pull never app
+docker compose ps
+~~~
+
+The first command builds the backend and website from this folder. The second
+starts that local image without replacing it with a registry download. Buildx
+is required and is included in Docker Desktop. On a server, keep both
+`-f compose.yaml -f compose.server.yaml` arguments in every command.
+
+The Dockerfile's pinned base images and dependency lockfiles select the build
+environment; they do not prevent building changed application code. The local
+build uses the image name configured in Compose and does not publish it. A later
+`docker compose pull` can replace that local tag with the published image.
+Preserve `.env`, keys, volumes and the Compose project name when updating an
+existing drive, and run only one instance per drive.
+
+For a **Git-based Coolify source deployment**, select the wanted repository and
+branch, such as `dev`, using the [Coolify setup](#coolify). Because the supplied
+service has both `image` and `build`, explicitly select building from source:
+add `pull_policy: build` under `services.app` in that deployment's Compose file:
+
+~~~yaml
+services:
+    app:
+        pull_policy: build
+~~~
+
+This is an excerpt: add the property to the existing service, keeping its
+`image`, `build`, environment and volumes. It is a sibling of `build`, not a
+setting inside it. Redeploying then builds the checked-out source instead of
+relying on a published release image. See
+[Compose pull policy](https://docs.docker.com/reference/compose-file/services/#pull_policy).
+A remote Git deployment cannot see unpushed local edits: transfer the source or
+built image to that machine, or push the changes to the branch it builds.
 
 ## 5. Open your drive
 
@@ -334,6 +388,10 @@ on your Docker server. Its self-hosted edition is free; infrastructure costs rem
    Visitors use normal HTTPS.
 5. **Deploy**, wait for `app` to become healthy, then complete
    [first login and backup](#5-open-your-drive) at your domain.
+
+To deploy `dev` or a fork from source, follow
+[Build from the repository](#build-from-the-repository-dev-or-local-edits).
+Selecting a Git branch alone does not update a separately published image.
 
 Use a domain with a valid HTTPS certificate; the default HTTP `sslip.io` address
 does not meet TGDrive's [remote browser requirements](operations.md#can-tgdrive-run-over-http).
