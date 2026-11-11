@@ -2,18 +2,27 @@ import { useEffect, useState } from "react";
 import { formatBytes, formatTimestamp } from "../../shared/types";
 import type { PerformanceDiagnosis } from "./performanceApi";
 
-const WAITS: Record<string, { title: string; action: string }> = {
+const WAITS: Record<
+    string,
+    { title: string; action: string; metric: string; metricLabel: string }
+> = {
     telegram_queue: {
-        title: "Work is waiting for Telegram admission",
-        action: "Check Accounts for queue and capacity details. Configured ceilings are policy limits, not a measurement of physical capacity.",
+        title: "Telegram queue",
+        metric: "pool_queued_operations",
+        metricLabel: "Pool queue",
+        action: "Open Accounts to inspect queues and configured limits.",
     },
     telegram_cooldown: {
-        title: "Queued work overlaps a Telegram cooldown",
+        title: "Telegram cooldown",
+        metric: "longest_cooldown_seconds",
+        metricLabel: "Longest cooldown",
         action: "Wait for the reported cooldown, then recheck Accounts.",
     },
     scratch_wait: {
-        title: "Reads are waiting for stream-buffer memory",
-        action: "Let current reads finish or reduce simultaneous reads. Compare reserved bytes with the effective stream-buffer limit below.",
+        title: "Stream-buffer wait",
+        metric: "waiting_heads",
+        metricLabel: "Streams waiting",
+        action: "Let current reads finish or reduce simultaneous reads.",
     },
 };
 const EVIDENCE: Record<string, string> = {
@@ -29,10 +38,10 @@ const EVIDENCE: Record<string, string> = {
     effective_limit_bytes: "Effective stream-buffer memory limit",
 };
 const WORKLOAD = {
-    playback_requests: "Playback requests",
-    download_requests: "Download requests",
-    unknown_file_requests: "Unclassified file requests",
-    upload_requests: "Device upload requests",
+    playback_requests: "Playback",
+    download_requests: "Downloads",
+    unknown_file_requests: "Other files",
+    upload_requests: "Device uploads",
 };
 function measured(value: number | null | undefined, unit = "") {
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
@@ -75,27 +84,45 @@ export default function PerformanceExplanation({
         return () => clearTimeout(timer);
     }, [diagnosis, age, validAge]);
     const summary = !diagnosis
-        ? "Performance explanations are unavailable from this server. Raw measurements remain available below."
+        ? "Performance explanations are unavailable. Raw measurements remain available below."
         : !available
-          ? "Current performance evidence is unavailable or stale. Refresh Performance to collect a new reading. Raw measurements remain available below."
+          ? "Evidence is unavailable or stale. Refresh Performance to update."
           : diagnosis.state === "idle"
-            ? "No workload activity was observed in this window. Spare resources can be appropriate when no work can benefit."
+            ? "No workload activity was observed in this window."
             : diagnosis.state === "observing"
-              ? "Collecting samples. Early readings do not establish a sustained constraint."
+              ? "Collecting samples; early readings are inconclusive."
               : diagnosis.constraints.length
-                ? "Activity was observed with the following reported waits. Multiple waits can occur together."
-                : "Activity was observed, with no supported wait identified in the latest sample. This does not establish spare capacity or locate a bottleneck.";
+                ? "Reported waits in the latest sample."
+                : "No supported wait identified; spare capacity is unknown.";
     return (
         <section
             className="performance-section performance-explanation"
             aria-labelledby="performance-explanation-heading"
         >
-            <h3 id="performance-explanation-heading">
-                Performance explanation
-            </h3>
-            <p className="settings-help">{summary}</p>
+            <div className="performance-explanation-heading">
+                <h3 id="performance-explanation-heading">Current activity</h3>
+                <span
+                    className="performance-sample-state"
+                    data-current={available}
+                >
+                    {!diagnosis
+                        ? "Unavailable"
+                        : !available
+                          ? diagnosis.state === "unavailable"
+                              ? "Unavailable"
+                              : "Stale"
+                          : diagnosis.state === "idle"
+                            ? "Idle"
+                            : diagnosis.state === "observing"
+                              ? "Observing"
+                              : "Active"}
+                </span>
+            </div>
+            <p className="performance-explanation-summary" role="status">
+                {summary}
+            </p>
             {diagnosis && (
-                <p className="settings-help">
+                <p className="performance-sample-meta">
                     {available
                         ? "Latest sample: "
                         : "Last sample (not current): "}
@@ -103,13 +130,18 @@ export default function PerformanceExplanation({
                     Number.isFinite(diagnosis.sampled_at)
                         ? formatTimestamp(diagnosis.sampled_at)
                         : "Unavailable"}
-                    . Observed {measured(diagnosis.observed_seconds, "seconds")}{" "}
-                    of a {measured(diagnosis.window_seconds, "second")} window.
+                    {" · "}
+                    {measured(diagnosis.observed_seconds, "s")} observed
+                    {" · "}
+                    {measured(diagnosis.window_seconds, "s")} window
                 </p>
             )}
             {available && diagnosis && (
                 <>
-                    <dl className="performance-facts">
+                    <p className="performance-workload-scope">
+                        In-flight requests · latest sample
+                    </p>
+                    <dl className="performance-workload">
                         {Object.entries(WORKLOAD).map(([key, label]) => (
                             <div key={key}>
                                 <dt>{label}</dt>
@@ -123,59 +155,87 @@ export default function PerformanceExplanation({
                             </div>
                         ))}
                     </dl>
-                    <p className="settings-help">
-                        Activity counts are in-flight HTTP requests at the
-                        latest sample, not users or background-job counts. Rates
-                        and cache deltas below cover the observed window.
-                    </p>
-                    {diagnosis.constraints.map((constraint, index) => (
-                        <div
-                            className="performance-wait"
-                            key={constraint.code + index}
-                        >
-                            <h4>
-                                {constraint.certainty === "observed"
-                                    ? "Observed: "
-                                    : constraint.certainty === "likely"
-                                      ? "Likely explanation: "
-                                      : "Reported: "}
-                                {WAITS[constraint.code]?.title ||
-                                    "Additional constraint"}
-                            </h4>
-                            {WAITS[constraint.code] && (
-                                <p>{WAITS[constraint.code].action}</p>
-                            )}
-                            <details className="performance-detail-note">
-                                <summary>Evidence for this wait</summary>
-                                <p>
-                                    Reported code: {constraint.code}. Scope:
-                                    latest sample.
-                                </p>
-                                <dl className="performance-facts">
-                                    {constraint.evidence.map(
-                                        (item, itemIndex) => (
-                                            <div key={item.name + itemIndex}>
-                                                <dt>
-                                                    {EVIDENCE[item.name] ||
-                                                        item.name}
-                                                </dt>
-                                                <dd>
-                                                    {measured(
-                                                        item.value,
-                                                        item.unit,
-                                                    )}
-                                                </dd>
-                                            </div>
-                                        ),
-                                    )}
-                                </dl>
-                            </details>
-                        </div>
-                    ))}
+                    {diagnosis.constraints.length > 0 && (
+                        <ul className="performance-waits">
+                            {diagnosis.constraints.map((constraint, index) => {
+                                const wait = WAITS[constraint.code];
+                                const primary =
+                                    wait &&
+                                    constraint.evidence.find(
+                                        (item) => item.name === wait.metric,
+                                    );
+                                return (
+                                    <li key={constraint.code + index}>
+                                        <details className="performance-wait">
+                                            <summary>
+                                                <span className="performance-wait-title">
+                                                    <strong>
+                                                        {wait?.title ||
+                                                            "Additional constraint"}
+                                                    </strong>
+                                                    <span>
+                                                        {constraint.certainty ===
+                                                        "observed"
+                                                            ? "Observed"
+                                                            : constraint.certainty ===
+                                                                "likely"
+                                                              ? "Likely"
+                                                              : "Reported"}
+                                                    </span>
+                                                </span>
+                                                {primary && (
+                                                    <span className="performance-wait-reading">
+                                                        <strong>
+                                                            {measured(
+                                                                primary.value,
+                                                                primary.unit,
+                                                            )}
+                                                        </strong>
+                                                        <span>
+                                                            {wait.metricLabel}
+                                                        </span>
+                                                    </span>
+                                                )}
+                                            </summary>
+                                            {wait && <p>{wait.action}</p>}
+                                            <dl className="performance-facts">
+                                                {constraint.evidence.map(
+                                                    (item, itemIndex) => (
+                                                        <div
+                                                            key={
+                                                                item.name +
+                                                                itemIndex
+                                                            }
+                                                        >
+                                                            <dt>
+                                                                {EVIDENCE[
+                                                                    item.name
+                                                                ] || item.name}
+                                                            </dt>
+                                                            <dd>
+                                                                {measured(
+                                                                    item.value,
+                                                                    item.unit,
+                                                                )}
+                                                            </dd>
+                                                        </div>
+                                                    ),
+                                                )}
+                                            </dl>
+                                            <p className="settings-help">
+                                                Reported code: {constraint.code}
+                                                . Scope: latest sample.
+                                            </p>
+                                        </details>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
                 </>
             )}
             <details className="performance-detail-note">
-                <summary>Measurements and interpretation</summary>
+                <summary>Measurements and scope</summary>
                 {available && diagnosis && (
                     <dl className="performance-facts">
                         <div>
@@ -207,22 +267,20 @@ export default function PerformanceExplanation({
                     </dl>
                 )}
                 <p>
-                    Pool operations and per-account requests are different
-                    admission layers; their queue counts can overlap.
-                    Stream-buffer limits are admission budgets, not evidence
-                    that system RAM is exhausted.
+                    Counts are in-flight HTTP requests, not users or
+                    background-job counts. Pool operations and per-account
+                    requests can overlap.
                 </p>
                 <p>
-                    Useful throughput and responsive playback matter more than
-                    filling CPU or memory. Idle resources can be appropriate
-                    when no work can benefit.
+                    Configured ceilings are policy limits, not a measurement of
+                    physical capacity. Stream-buffer pressure does not establish
+                    that server RAM is exhausted.
                 </p>
                 <p>
                     Telegram reads and HTTP delivery measure different parts of
-                    the path. Cached bytes can be delivered without another
-                    Telegram read. Low throughput alone cannot locate a network
-                    bottleneck, and delivery backpressure does not identify the
-                    client as its cause.
+                    the path. Cached delivery can avoid Telegram reads. Low
+                    throughput alone cannot locate a network bottleneck. Idle
+                    resources can be appropriate when no work can benefit.
                 </p>
             </details>
         </section>

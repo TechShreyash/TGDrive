@@ -91,8 +91,18 @@
 
 /* ---------- Performance: overview ---------- */
 .performance-page .performance-overview-grid:not([hidden]) {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 18px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px 32px;
+}
+.performance-page
+    .performance-overview-grid
+    > :is(
+        .performance-health,
+        .performance-network-chart,
+        .tuning-section,
+        .performance-all-time
+    ) {
+    grid-column: 1 / -1;
 }
 /* Health line, then a compact live strip. */
 .performance-page .performance-health {
@@ -131,8 +141,9 @@
 .performance-page .performance-health span {
     color: var(--muted);
 }
-:root .performance-page .performance-overview-grid .performance-live-traffic,
+.performance-page .performance-live-traffic,
 .performance-page .performance-limits {
+    grid-column: auto;
     margin: 0;
     padding: 16px 20px;
     border: 1px solid var(--line-subtle);
@@ -156,16 +167,12 @@
 }
 .performance-page .performance-live-strip {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    margin: 0;
-    border-top: 1px solid var(--line-subtle);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 24px;
+    margin: 16px 0 0;
 }
 .performance-page .performance-live-strip > div {
-    padding: 10px 14px 0 0;
-}
-.performance-page .performance-live-strip > div + div {
-    padding-left: 14px;
-    border-left: 1px solid var(--line-subtle);
+    min-width: 0;
 }
 .performance-page .performance-live-strip dt {
     display: flex;
@@ -183,12 +190,12 @@
 .performance-page .performance-live-strip dd {
     margin: 2px 0 0;
     color: var(--ink);
-    font-size: 18px;
+    font-size: 22px;
     font-weight: 650;
     font-variant-numeric: tabular-nums;
 }
 
-/* What limits speed: one row per account, then resource meters */
+/* Resource meters lead; account capacity stays available on demand. */
 .performance-page .performance-limit-list {
     display: grid;
     margin: 0;
@@ -230,11 +237,9 @@
 }
 .performance-page .performance-resource-meters {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: 1fr;
     gap: 16px;
-    margin-top: 6px;
-    padding-top: 14px;
-    border-top: 1px solid var(--line-subtle);
+    margin-block: 16px;
 }
 .performance-page .performance-resource-meters .performance-usage strong {
     font-size: 14px;
@@ -917,20 +922,19 @@
 
 /* ---------- Phone ---------- */
 @media (max-width: 960px) {
-    .performance-page .performance-live-strip,
-    .performance-page .performance-resource-meters {
+    .performance-page .performance-live-strip {
         grid-template-columns: repeat(2, minmax(0, 1fr));
         row-gap: 10px;
-    }
-    .performance-page .performance-live-strip > div:nth-child(3) {
-        padding-left: 0;
-        border-left: 0;
     }
     .performance-page .performance-resource-summary {
         grid-template-columns: minmax(0, 1fr);
     }
 }
 @media (max-width: 720px) {
+    .performance-page .performance-overview-grid:not([hidden]) {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
     .performance-page .performance-metric-chart.mantine-Paper-root,
     .performance-page .performance-all-time,
     .performance-page .performance-account-section {

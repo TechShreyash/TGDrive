@@ -30,13 +30,15 @@ def test_performance_explanation_without_backend_support(server, desktop):
     snapshot.pop("diagnosis", None)
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
-    explanation = page.get_by_role("region", name="Performance explanation", exact=True)
-    expect(explanation).to_contain_text("unavailable from this server")
+    explanation = page.get_by_role("region", name="Current activity", exact=True)
+    expect(explanation).to_contain_text("Performance explanations are unavailable")
     expect(page.get_by_role("heading", name="Live file transfers")).to_be_visible()
     summary = explanation.locator("summary")
     summary.focus()
     page.keyboard.press("Enter")
-    expect(explanation.get_by_text("Useful throughput", exact=False)).to_be_visible()
+    expect(
+        explanation.get_by_text("Idle resources can be appropriate", exact=False)
+    ).to_be_visible()
     expect(explanation).to_contain_text("Low throughput alone cannot locate")
     page.screenshot(
         path=ARTIFACTS / "performance-explanation-desktop.png",
@@ -91,7 +93,7 @@ def test_performance_diagnosis_evidence_states_and_expiry(server, desktop, width
     page.set_viewport_size({"width": width, "height": 900})
     page.clock.install()
     page.goto(server.url + "/?view=performance")
-    explanation = page.get_by_role("region", name="Performance explanation", exact=True)
+    explanation = page.get_by_role("region", name="Current activity", exact=True)
     expect(explanation).to_contain_text("No workload activity was observed")
     diagnosis["state"] = "observing"
     page.get_by_role("button", name="Refresh Performance", exact=True).click()
@@ -125,14 +127,20 @@ def test_performance_diagnosis_evidence_states_and_expiry(server, desktop, width
         },
     ]
     page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(explanation.get_by_role("heading", level=4)).to_have_count(3)
-    expect(explanation).to_contain_text("Observed 12 seconds of a 30 second window")
-    evidence = explanation.locator("summary").filter(has_text="Evidence for this wait")
+    expect(explanation.locator(".performance-wait > summary")).to_have_count(3)
+    expect(explanation).to_contain_text("12 s observed")
+    expect(explanation).to_contain_text("30 s window")
+    page.screenshot(
+        path=ARTIFACTS / f"performance-overview-waits-default-{width}.png",
+        full_page=True,
+        animations="disabled",
+    )
+    evidence = explanation.locator(".performance-wait > summary")
     evidence.first.focus()
     page.keyboard.press("Enter")
     expect(explanation.get_by_text("3 operations", exact=True)).to_be_visible()
     measurements = explanation.locator("summary").filter(
-        has_text="Measurements and interpretation"
+        has_text="Measurements and scope"
     )
     measurements.click()
     expect(explanation.get_by_text("1 KB/s", exact=True)).to_be_visible()
@@ -150,11 +158,11 @@ def test_performance_diagnosis_evidence_states_and_expiry(server, desktop, width
     page.clock.fast_forward(16000)
     expect(explanation).to_contain_text("unavailable or stale")
     expect(explanation.get_by_text("1 KB/s", exact=True)).to_have_count(0)
-    expect(explanation.get_by_role("heading", level=4)).to_have_count(0)
+    expect(explanation.locator(".performance-wait > summary")).to_have_count(0)
     failing = False
     snapshot["traffic"]["at"] = diagnosis["sampled_at"] = 2000
     page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(explanation.get_by_role("heading", level=4)).to_have_count(3)
+    expect(explanation.locator(".performance-wait > summary")).to_have_count(3)
     diagnosis["state"] = "unavailable"
     page.get_by_role("button", name="Refresh Performance", exact=True).click()
     expect(explanation).to_contain_text("unavailable or stale")
@@ -498,6 +506,9 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     expect(overview).to_have_attribute("aria-selected", "true")
     expect(page.get_by_role("tabpanel", name="Overview")).to_be_visible()
     tuning = page.get_by_role("region", name="Automatic tuning", exact=True)
+    expect(tuning.get_by_text("Memory cache", exact=True)).not_to_be_visible()
+    tuning.locator("summary").focus()
+    page.keyboard.press("Enter")
     expect(tuning.get_by_text("Memory cache", exact=True)).to_be_visible()
     expect(tuning.get_by_role("definition")).to_have_text("256 MB")
     expect(tuning).to_contain_text("Sized from free memory")
@@ -534,12 +545,18 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     )
     page.screenshot(path=ARTIFACTS / "owner-performance-resources.png", full_page=True)
     page.get_by_role("tab", name="Overview", exact=True).click()
-    page.screenshot(path=ARTIFACTS / "owner-performance-desktop.png", full_page=True)
+    page.screenshot(
+        path=ARTIFACTS / "owner-performance-desktop.png",
+        full_page=True,
+        animations="disabled",
+    )
     page.set_viewport_size({"width": 390, "height": 844})
     page.evaluate("document.documentElement.dataset.theme = 'dark'")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.screenshot(
-        path=ARTIFACTS / "owner-performance-mobile-dark.png", full_page=True
+        path=ARTIFACTS / "owner-performance-mobile-dark.png",
+        full_page=True,
+        animations="disabled",
     )
     for tab in ["Accounts", "Resources"]:
         page.get_by_role("tab", name=tab, exact=True).click()
@@ -677,6 +694,52 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
         has=page.get_by_role("heading", name="Live file transfers", exact=True),
     ).last
     expect(file_traffic).to_contain_text("0 B/s")
+
+    def record_overview_style(label):
+        activity = page.get_by_role("region", name="Current activity", exact=True)
+        expect(activity).to_have_css("opacity", "1")
+        (ARTIFACTS / f"performance-overview-style-{label}.json").write_text(
+            activity.evaluate("""node => JSON.stringify({
+              opacity: getComputedStyle(node).opacity,
+              panelOpacity: getComputedStyle(node.closest('[role=tabpanel]')).opacity,
+              headingColor: getComputedStyle(node.querySelector('h3')).color,
+              summaryColor: getComputedStyle(node.querySelector('[role=status]')).color,
+              animationName: getComputedStyle(node).animationName,
+              theme: document.documentElement.dataset.theme,
+              drawerExpanded: document.querySelector('#navigation-toggle')?.getAttribute('aria-expanded'),
+              drawerBounds: document.querySelector('#drive-navigation')?.getBoundingClientRect()
+            }, null, 2)""")
+        )
+
+    page.set_viewport_size({"width": 1440, "height": 1100})
+    page.get_by_role(
+        "heading", name="Performance", exact=True
+    ).scroll_into_view_if_needed()
+    page.mouse.move(0, 0)
+    record_overview_style("desktop")
+    page.screenshot(
+        path=ARTIFACTS / "performance-overview-default-desktop.png",
+        full_page=True,
+        animations="disabled",
+    )
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.evaluate("document.documentElement.dataset.theme = 'dark'")
+    toggle = page.get_by_role("button", name="Toggle Navigation", exact=True)
+    if toggle.get_attribute("aria-expanded") == "true":
+        toggle.click()
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+    page.wait_for_function(
+        "() => document.querySelector('#drive-navigation').getBoundingClientRect().right <= 1"
+    )
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    record_overview_style("mobile-dark")
+    page.screenshot(
+        path=ARTIFACTS / "performance-overview-default-mobile-dark.png",
+        full_page=True,
+        animations="disabled",
+    )
+    page.set_viewport_size({"width": 1440, "height": 1100})
+    page.evaluate("document.documentElement.dataset.theme = 'light'")
     page.get_by_role("tab", name="Resources", exact=True).click()
     cpu = page.get_by_role("region", name="Container CPU", exact=True)
     expect(cpu.locator(".performance-chart-axis")).to_contain_text("100.0%")
@@ -702,7 +765,10 @@ def test_network_includes_url_downloads_and_resources_use_container_limits(
     )
     snapshot["server"]["memory"]["cgroup_limit"] = None
     page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(ram).to_contain_text("No container memory limit.")
+    expect(ram.locator(".performance-chart-heading")).to_contain_text(
+        "limit unavailable"
+    )
+    expect(ram).to_contain_text("No container memory limit reported.")
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.get_by_role(

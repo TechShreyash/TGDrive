@@ -35,9 +35,7 @@ const TUNING_LABELS: Record<string, string> = {
 
 const TUNING_CATEGORIES = [
     {
-        title: "Cache Storage",
-        description:
-            "Memory and disk allocations for media streaming and quick file access.",
+        title: "Cache",
         keys: [
             "cache_memory_bytes",
             "cache_disk_bytes",
@@ -45,15 +43,11 @@ const TUNING_CATEGORIES = [
         ],
     },
     {
-        title: "Upload Staging & Disk Safety",
-        description:
-            "Disk space for staging Telegram uploads and maximum supported file sizes.",
+        title: "Upload staging",
         keys: ["staging_budget_bytes", "max_file_size", "min_free_bytes"],
     },
     {
-        title: "Transfer & Network Concurrency",
-        description:
-            "Active pipelines, bot connections, and parallel download limits.",
+        title: "Transfer limits",
         keys: [
             "telegram_uploads_per_bot",
             "telegram_upload_pipeline",
@@ -97,14 +91,12 @@ function AutomaticTuning({
     const groups = [
         ...TUNING_CATEGORIES.map((cat) => ({
             title: cat.title,
-            description: cat.description,
             keys: cat.keys.filter((k) => k in tuning.values),
         })).filter((group) => group.keys.length > 0),
         ...(otherKeys.length > 0
             ? [
                   {
                       title: "Other Parameters",
-                      description: "Additional dynamic tuning settings.",
                       keys: otherKeys,
                   },
               ]
@@ -118,53 +110,61 @@ function AutomaticTuning({
         >
             <div className="performance-section-title">
                 <h3 id="automatic-tuning-heading">Automatic tuning</h3>
+                <span className="performance-summary-value">
+                    {tuning.running ? "Resource sizing" : "Not running"}
+                </span>
             </div>
-            <p className="tuning-intro">
-                {tuning.running
-                    ? "Cache and staging budgets follow available server resources. Transfer concurrency uses configured limits, with a CPU cap for preloads. Telegram accounts manage their own cooldown and recovery."
-                    : "Automatic tuning starts with the drive."}
-            </p>
-            <div className="tuning-groups">
-                {groups.map((group) => (
-                    <div key={group.title} className="tuning-group-card">
-                        <div className="tuning-group-header">
-                            <h4>{group.title}</h4>
-                            <p>{group.description}</p>
-                        </div>
-                        <dl className="performance-facts tuning-facts">
-                            {group.keys.map((key) => {
-                                const label = TUNING_LABELS[key] || key;
-                                const val =
-                                    key.endsWith("_bytes") ||
-                                    key === "max_file_size"
-                                        ? formatBytes(tuning.values[key])
-                                        : tuning.values[key].toLocaleString();
-                                const reason = tuning.reasons[key];
-                                const fallback = TUNING_DESCRIPTIONS[key];
-                                return (
-                                    <div key={key} className="tuning-fact-item">
-                                        <div className="tuning-fact-top">
-                                            <dt>{label}</dt>
-                                            <dd>{val}</dd>
+            <details className="performance-detail-note">
+                <summary>Applied limits and reasons</summary>
+                <p className="tuning-intro">
+                    {tuning.running
+                        ? "Cache and staging follow available resources. Transfer limits remain configured; preloads also have a CPU cap. Telegram cooldowns apply per account."
+                        : "Automatic tuning starts with the drive."}
+                </p>
+                <div className="tuning-groups">
+                    {groups.map((group) => (
+                        <div key={group.title} className="tuning-group">
+                            <div className="tuning-group-header">
+                                <h4>{group.title}</h4>
+                            </div>
+                            <dl className="performance-facts tuning-facts">
+                                {group.keys.map((key) => {
+                                    const label = TUNING_LABELS[key] || key;
+                                    const val =
+                                        key.endsWith("_bytes") ||
+                                        key === "max_file_size"
+                                            ? formatBytes(tuning.values[key])
+                                            : tuning.values[
+                                                  key
+                                              ].toLocaleString();
+                                    const reason = tuning.reasons[key];
+                                    const fallback = TUNING_DESCRIPTIONS[key];
+                                    return (
+                                        <div
+                                            key={key}
+                                            className="tuning-fact-item"
+                                        >
+                                            <div className="tuning-fact-top">
+                                                <dt>{label}</dt>
+                                                <dd>{val}</dd>
+                                            </div>
+                                            {(reason || fallback) && (
+                                                <small className="tuning-fact-detail">
+                                                    {reason || fallback}
+                                                </small>
+                                            )}
                                         </div>
-                                        {(reason || fallback) && (
-                                            <small className="tuning-fact-detail">
-                                                {reason
-                                                    ? `${fallback ? fallback + " · " : ""}${reason}`
-                                                    : fallback}
-                                            </small>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </dl>
-                    </div>
-                ))}
-            </div>
-            <p className="settings-help">
-                To set a hard ceiling on a shared server, configure Docker
-                memory and CPU limits.
-            </p>
+                                    );
+                                })}
+                            </dl>
+                        </div>
+                    ))}
+                </div>
+                <p className="settings-help">
+                    To set a hard ceiling on a shared server, configure Docker
+                    memory and CPU limits.
+                </p>
+            </details>
         </section>
     );
 }
@@ -310,7 +310,7 @@ function MetricChart({
             </div>
             {series.length > 1 && (
                 <div className="performance-chart-legend">
-                    {series.map(({ key, label, hint, secondary }) => (
+                    {series.map(({ key, label, secondary }) => (
                         <span
                             key={key}
                             className={
@@ -320,7 +320,6 @@ function MetricChart({
                             }
                         >
                             {label}
-                            {hint && <small>{hint}</small>}
                         </span>
                     ))}
                 </div>
@@ -592,10 +591,27 @@ function MetricChart({
                           : "No history yet. Readings appear as the server samples activity."}
                 </p>
             )}
-            <p className="performance-chart-note">
-                {quiet ? "Idle during this observed window. " : ""}
-                {note}
-            </p>
+            {quiet && (
+                <p className="performance-chart-idle">
+                    Idle during this observed window.
+                </p>
+            )}
+            <details className="performance-detail-note performance-chart-details">
+                <summary>Measurement scope</summary>
+                <p className="performance-chart-note">{note}</p>
+                {series.some((item) => item.hint) && (
+                    <dl className="performance-facts">
+                        {series
+                            .filter((item) => item.hint)
+                            .map(({ key, label, hint }) => (
+                                <div key={key}>
+                                    <dt>{label}</dt>
+                                    <dd>{hint}</dd>
+                                </div>
+                            ))}
+                    </dl>
+                )}
+            </details>
         </Paper>
     );
 }
@@ -1276,6 +1292,46 @@ export default function PerformancePanel({
                             diagnosis={snapshot.diagnosis}
                             serverAt={snapshot.traffic?.at}
                         />
+                        <MetricChart
+                            windowSeconds={windowSeconds}
+                            historical={historical}
+                            bucketSeconds={
+                                historical ? recorded?.bucket_seconds || 60 : 3
+                            }
+                            title="Network traffic"
+                            samples={resourceHistory}
+                            series={[
+                                {
+                                    key: "received_bytes_per_second",
+                                    label: "Download to server",
+                                    hint: "from Telegram, URLs and devices",
+                                },
+                                {
+                                    key: "sent_bytes_per_second",
+                                    label: "Upload from server",
+                                    hint: "to viewers and Telegram",
+                                    secondary: true,
+                                },
+                            ]}
+                            maximum={networkCeiling}
+                            format={(value) => formatBytes(value) + "/s"}
+                            scope="network_interface"
+                            current={
+                                "Download " +
+                                networkRate(
+                                    network?.received_bytes_per_second,
+                                ) +
+                                " · Upload " +
+                                networkRate(network?.sent_bytes_per_second)
+                            }
+                            note={
+                                "Includes Telegram, URL downloads, device uploads and viewer downloads" +
+                                (network?.interface
+                                    ? " on " + network.interface
+                                    : "") +
+                                "."
+                            }
+                        />
                         {traffic && (
                             <section
                                 className="performance-section performance-live-traffic"
@@ -1289,10 +1345,6 @@ export default function PerformancePanel({
                                         Now
                                     </span>
                                 </div>
-                                <p className="settings-help">
-                                    What TGDrive is sending and receiving for
-                                    files right now, including cached downloads.
-                                </p>
                                 <dl className="performance-live-strip">
                                     <div data-series="out">
                                         <dt>
@@ -1337,136 +1389,22 @@ export default function PerformancePanel({
                                         </dd>
                                     </div>
                                 </dl>
+                                <details className="performance-detail-note">
+                                    <summary>Traffic scope</summary>
+                                    <p>
+                                        Current file-body traffic, including
+                                        cached downloads. Device uploads and
+                                        viewer delivery are separate from
+                                        server-network traffic.
+                                    </p>
+                                </details>
                             </section>
                         )}
-                        <MetricChart
-                            windowSeconds={windowSeconds}
-                            historical={historical}
-                            bucketSeconds={
-                                historical ? recorded?.bucket_seconds || 60 : 3
-                            }
-                            title="Network traffic"
-                            samples={resourceHistory}
-                            series={[
-                                {
-                                    key: "received_bytes_per_second",
-                                    label: "Download to server",
-                                    hint: "from Telegram, URLs and devices",
-                                },
-                                {
-                                    key: "sent_bytes_per_second",
-                                    label: "Upload from server",
-                                    hint: "to viewers and Telegram",
-                                    secondary: true,
-                                },
-                            ]}
-                            maximum={networkCeiling}
-                            format={(value) => formatBytes(value) + "/s"}
-                            scope="network_interface"
-                            current={
-                                "Download " +
-                                networkRate(
-                                    network?.received_bytes_per_second,
-                                ) +
-                                " · Upload " +
-                                networkRate(network?.sent_bytes_per_second)
-                            }
-                            note={
-                                "Includes Telegram, URL downloads, device uploads and viewer downloads" +
-                                (network?.interface
-                                    ? " on " + network.interface
-                                    : "") +
-                                "."
-                            }
-                        />
                         <section
                             className="performance-section performance-limits"
                             aria-labelledby="speed-limits-heading"
                         >
-                            <h3 id="speed-limits-heading">What limits speed</h3>
-                            <p className="settings-help">
-                                Each Telegram account runs a few transfers at
-                                once. A flood wait is a pause Telegram imposes
-                                when an account sends too many requests.
-                            </p>
-                            {telegram.accounts.length ? (
-                                <ul className="performance-limit-list">
-                                    {telegram.accounts.map((account) => {
-                                        const busy =
-                                            account.uploads + account.downloads;
-                                        const wait = Math.max(
-                                            account.cooldown_seconds,
-                                            account.requests
-                                                ?.cooldown_seconds || 0,
-                                        );
-                                        return (
-                                            <li key={account.name}>
-                                                <span className="performance-limit-name">
-                                                    <strong>
-                                                        {account.name}
-                                                    </strong>
-                                                    <small>
-                                                        {account.kind === "user"
-                                                            ? "Premium account"
-                                                            : "Storage bot"}
-                                                    </small>
-                                                </span>
-                                                <span className="performance-limit-meter">
-                                                    <small>
-                                                        {busy} of{" "}
-                                                        {account.combined_limit}{" "}
-                                                        transfer slots
-                                                    </small>
-                                                    <progress
-                                                        aria-label={
-                                                            account.name +
-                                                            " transfer slots"
-                                                        }
-                                                        value={Math.min(
-                                                            busy,
-                                                            account.combined_limit,
-                                                        )}
-                                                        max={Math.max(
-                                                            1,
-                                                            account.combined_limit,
-                                                        )}
-                                                    />
-                                                </span>
-                                                <span
-                                                    className="performance-limit-state"
-                                                    data-state={
-                                                        wait > 0
-                                                            ? "wait"
-                                                            : "ready"
-                                                    }
-                                                >
-                                                    {wait > 0
-                                                        ? "Flood wait " +
-                                                          historyDuration(
-                                                              Math.ceil(wait),
-                                                          )
-                                                        : "Ready"}
-                                                    {account.requests && (
-                                                        <small>
-                                                            {
-                                                                account.requests
-                                                                    .floods
-                                                            }{" "}
-                                                            flood waits this
-                                                            session
-                                                        </small>
-                                                    )}
-                                                </span>
-                                            </li>
-                                        );
-                                    })}
-                                </ul>
-                            ) : (
-                                <p className="performance-empty">
-                                    No account samples are available. Check
-                                    Connections.
-                                </p>
-                            )}
+                            <h3 id="speed-limits-heading">Resources</h3>
                             <div className="performance-resource-meters">
                                 <UsageMeter
                                     label="CPU"
@@ -1482,26 +1420,124 @@ export default function PerformancePanel({
                                     unavailableLabel={
                                         Number.isFinite(memoryUsed)
                                             ? formatBytes(memoryUsed) +
-                                              " in use, no limit"
+                                              " in use · limit unavailable"
                                             : "Unavailable"
                                     }
                                 />
                                 <UsageMeter
-                                    label="Cache disk"
+                                    label="Cache volume"
                                     used={snapshot.server.disk.used_bytes}
                                     total={snapshot.server.disk.total_bytes}
                                 />
                             </div>
+                            <details className="performance-detail-note">
+                                <summary>
+                                    Account capacity and cooldowns
+                                </summary>
+                                <p className="settings-help">
+                                    Slots are configured limits. Flood waits are
+                                    pauses imposed by Telegram.
+                                </p>
+                                {telegram.accounts.length ? (
+                                    <ul className="performance-limit-list">
+                                        {telegram.accounts.map((account) => {
+                                            const busy =
+                                                account.uploads +
+                                                account.downloads;
+                                            const wait = Math.max(
+                                                account.cooldown_seconds,
+                                                account.requests
+                                                    ?.cooldown_seconds || 0,
+                                            );
+                                            return (
+                                                <li key={account.name}>
+                                                    <span className="performance-limit-name">
+                                                        <strong>
+                                                            {account.name}
+                                                        </strong>
+                                                        <small>
+                                                            {account.kind ===
+                                                            "user"
+                                                                ? "Premium account"
+                                                                : "Storage bot"}
+                                                        </small>
+                                                    </span>
+                                                    <span className="performance-limit-meter">
+                                                        <small>
+                                                            {busy} of{" "}
+                                                            {
+                                                                account.combined_limit
+                                                            }{" "}
+                                                            transfer slots
+                                                        </small>
+                                                        <progress
+                                                            aria-label={
+                                                                account.name +
+                                                                " transfer slots"
+                                                            }
+                                                            value={Math.min(
+                                                                busy,
+                                                                account.combined_limit,
+                                                            )}
+                                                            max={Math.max(
+                                                                1,
+                                                                account.combined_limit,
+                                                            )}
+                                                        />
+                                                    </span>
+                                                    <span
+                                                        className="performance-limit-state"
+                                                        data-state={
+                                                            wait > 0
+                                                                ? "wait"
+                                                                : "ready"
+                                                        }
+                                                    >
+                                                        {wait > 0
+                                                            ? "Flood wait " +
+                                                              historyDuration(
+                                                                  Math.ceil(
+                                                                      wait,
+                                                                  ),
+                                                              )
+                                                            : "Ready"}
+                                                        {account.requests && (
+                                                            <small>
+                                                                {
+                                                                    account
+                                                                        .requests
+                                                                        .floods
+                                                                }{" "}
+                                                                flood waits this
+                                                                session
+                                                            </small>
+                                                        )}
+                                                    </span>
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
+                                ) : (
+                                    <p className="performance-empty">
+                                        No account samples are available. Check
+                                        Connections.
+                                    </p>
+                                )}
+                            </details>
                         </section>
                         {snapshot.tuning && (
                             <AutomaticTuning tuning={snapshot.tuning} />
                         )}
                         {recorded && (
-                            <section
-                                className="performance-all-time"
+                            <details
+                                className="performance-all-time performance-detail-note"
                                 aria-labelledby="all-time-heading"
                             >
-                                <h3 id="all-time-heading">All-time totals</h3>
+                                <summary>
+                                    <h3 id="all-time-heading">
+                                        All-time totals
+                                    </h3>
+                                </summary>
                                 <p className="settings-help">
                                     {recorded.tracked_since
                                         ? `Since ${formatTimestamp(recorded.tracked_since)}.`
@@ -1568,7 +1604,7 @@ export default function PerformancePanel({
                                     them together. Usage before tracking began
                                     is not included.
                                 </p>
-                            </section>
+                            </details>
                         )}
                     </Tabs.Panel>
                     <Tabs.Panel
@@ -1945,7 +1981,7 @@ export default function PerformancePanel({
                                         ? formatBytes(memoryUsed) +
                                           (memoryLimit
                                               ? " / " + formatBytes(memoryLimit)
-                                              : " in use")
+                                              : " in use · limit unavailable")
                                         : "Unavailable"
                                 }
                                 note={
@@ -1953,7 +1989,7 @@ export default function PerformancePanel({
                                         ? "Current container limit: " +
                                           formatBytes(memoryLimit) +
                                           ". Includes all processes in this container."
-                                        : "No container memory limit. The graph scales to observed usage, not total capacity."
+                                        : "No container memory limit reported. The graph scales to observed usage, not total capacity."
                                 }
                             />
                         </div>
@@ -2048,72 +2084,77 @@ export default function PerformancePanel({
                                     partial
                                 </span>
                             </p>
-                            <h3>Memory details</h3>
-                            <dl className="performance-facts performance-memory-details">
-                                <div>
-                                    <dt>TGDrive process</dt>
-                                    <dd>
-                                        {typeof snapshot.server
-                                            .process_rss_bytes === "number"
-                                            ? formatBytes(
-                                                  snapshot.server
-                                                      .process_rss_bytes,
-                                              )
-                                            : "Unavailable"}
-                                    </dd>
-                                    <small>
-                                        Part of container RAM · peak{" "}
-                                        {formatBytes(
-                                            snapshot.server
-                                                .process_peak_rss_bytes,
-                                        )}
-                                    </small>
-                                </div>
-                                <div>
-                                    <dt>Host memory available</dt>
-                                    <dd>
-                                        {typeof memory?.MemAvailable ===
-                                        "number"
-                                            ? formatBytes(memory.MemAvailable)
-                                            : "Unavailable"}
-                                    </dd>
-                                    <small>
-                                        {typeof memory?.MemTotal === "number"
-                                            ? "Host total " +
-                                              formatBytes(memory.MemTotal)
-                                            : "Host memory is unavailable"}
-                                    </small>
-                                </div>
-                                <StreamMemoryFact
-                                    scratch={snapshot.cache.scratch}
-                                />
-                                <div>
-                                    <dt>RAM cache lookups</dt>
-                                    <dd>
-                                        {snapshot.cache.memory.hits.toLocaleString()}{" "}
-                                        hits ·{" "}
-                                        {snapshot.cache.memory.misses.toLocaleString()}{" "}
-                                        misses
-                                    </dd>
-                                    <small>
-                                        Block lookups, including preloading; not
-                                        a bandwidth-saving percentage
-                                    </small>
-                                </div>
-                            </dl>
-                            <p className="settings-help">
-                                Upload staging budget:{" "}
-                                {formatBytes(
-                                    snapshot.server.staging_budget_bytes,
-                                )}
-                                .{" "}
-                                <a
-                                    className="inline-link"
-                                    href="/?view=storage"
-                                >
-                                    Storage &amp; Backups
-                                </a>
-                            </p>
+                            <details className="performance-detail-note">
+                                <summary>Memory and cache details</summary>
+                                <dl className="performance-facts performance-memory-details">
+                                    <div>
+                                        <dt>TGDrive process</dt>
+                                        <dd>
+                                            {typeof snapshot.server
+                                                .process_rss_bytes === "number"
+                                                ? formatBytes(
+                                                      snapshot.server
+                                                          .process_rss_bytes,
+                                                  )
+                                                : "Unavailable"}
+                                        </dd>
+                                        <small>
+                                            Part of container RAM · peak{" "}
+                                            {formatBytes(
+                                                snapshot.server
+                                                    .process_peak_rss_bytes,
+                                            )}
+                                        </small>
+                                    </div>
+                                    <div>
+                                        <dt>Host memory available</dt>
+                                        <dd>
+                                            {typeof memory?.MemAvailable ===
+                                            "number"
+                                                ? formatBytes(
+                                                      memory.MemAvailable,
+                                                  )
+                                                : "Unavailable"}
+                                        </dd>
+                                        <small>
+                                            {typeof memory?.MemTotal ===
+                                            "number"
+                                                ? "Host total " +
+                                                  formatBytes(memory.MemTotal)
+                                                : "Host memory is unavailable"}
+                                        </small>
+                                    </div>
+                                    <StreamMemoryFact
+                                        scratch={snapshot.cache.scratch}
+                                    />
+                                    <div>
+                                        <dt>RAM cache lookups</dt>
+                                        <dd>
+                                            {snapshot.cache.memory.hits.toLocaleString()}{" "}
+                                            hits ·{" "}
+                                            {snapshot.cache.memory.misses.toLocaleString()}{" "}
+                                            misses
+                                        </dd>
+                                        <small>
+                                            Block lookups, including preloading;
+                                            not a bandwidth-saving percentage
+                                        </small>
+                                    </div>
+                                </dl>
+                                <p className="settings-help">
+                                    Upload staging budget:{" "}
+                                    {formatBytes(
+                                        snapshot.server.staging_budget_bytes,
+                                    )}
+                                    .{" "}
+                                    <a
+                                        className="inline-link"
+                                        href="/?view=storage"
+                                    >
+                                        Storage &amp; Backups
+                                    </a>
+                                </p>
+                            </details>
                             <details className="performance-detail-note">
                                 <summary>Resource measurement details</summary>
                                 <p className="settings-help">

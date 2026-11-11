@@ -42,9 +42,10 @@ describe("performance explanations", () => {
         expect(html).toContain("Low throughput alone cannot locate");
     });
     it("does not turn a measured active window into an identified bottleneck", () => {
-        expect(render()).toContain("no supported wait identified");
-        expect(render()).toContain("does not establish spare capacity");
-        expect(render()).toContain("Observed 12 seconds of a 30 second window");
+        expect(render()).toContain("No supported wait identified");
+        expect(render()).toContain("spare capacity is unknown");
+        expect(render()).toContain("12 s");
+        expect(render()).toContain("30 s");
     });
     it.each([
         ["idle", "No workload activity was observed"],
@@ -60,7 +61,7 @@ describe("performance explanations", () => {
         (serverAt) => {
             const html = render({}, serverAt);
             expect(html).toContain("Last sample (not current)");
-            expect(html).not.toContain("Playback requests");
+            expect(html).not.toContain("<dt>Playback</dt>");
             expect(html).not.toContain("1 KB/s");
         },
     );
@@ -97,18 +98,20 @@ describe("performance explanations", () => {
                     certainty: "observed",
                     evidence: [
                         { name: "reserved_bytes", value: 1024, unit: "bytes" },
+                        { name: "waiting_heads", value: 2, unit: "streams" },
                     ],
                 },
                 { code: "future_code", certainty: "likely", evidence: [] },
             ],
         });
-        expect(html).toContain(
-            "Observed: Work is waiting for Telegram admission",
-        );
-        expect(html).toContain(
-            "Observed: Reads are waiting for stream-buffer memory",
-        );
-        expect(html).toContain("Likely explanation: Additional constraint");
+        const summaries = html.match(/<summary>[\s\S]*?<\/summary>/g) || [];
+        expect(summaries[0]).toContain("Telegram queue");
+        expect(summaries[0]).toContain("Observed");
+        expect(summaries[0]).not.toContain("3 operations");
+        expect(summaries[1]).toContain("Stream-buffer wait");
+        expect(summaries[1]).toContain("2 streams");
+        expect(summaries[2]).toContain("Additional constraint");
+        expect(summaries[2]).toContain("Likely");
         expect(html).toContain("3 operations");
         expect(html).toContain("1 KB");
         expect(html).toContain("not a measurement of physical capacity");
