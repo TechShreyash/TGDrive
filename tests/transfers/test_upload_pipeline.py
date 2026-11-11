@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import threading
 from collections import Counter
 from types import SimpleNamespace
 from typing import cast
@@ -13,6 +14,7 @@ from telethon.errors import FloodPremiumWaitError, FloodWaitError
 
 from tgdrive.media.media_scheduler import MediaScheduler
 from tgdrive.telegram.clients import Client
+from tgdrive.transfers.file_window import FileWindow
 
 PART = 512 * 1024
 
@@ -209,6 +211,61 @@ async def test_pipeline_cancellation_drains_all_parts_and_does_not_publish(tmp_p
     assert native.published == []
     assert adapter._media_scheduler.active == 0
     assert adapter._media_scheduler.snapshot()["queued"] == 0
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancel_drains_staged_read_before_closing_source(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "staged"
+    path.write_bytes(b"data")
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    windows = []
+
+    class HeldWindow(FileWindow):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            windows.append(self)
+
+        def read(self, size=-1):
+            entered.set()
+            try:
+                assert release.wait(5)
+                return super().read(size)
+            finally:
+                finished.set()
+
+    monkeypatch.setattr("tgdrive.telegram.clients.FileWindow", HeldWindow)
+    native = Native()
+    adapter = client(native)
+    task = asyncio.create_task(
+        adapter.send_staged(
+            123,
+            path,
+            file_name="file.bin",
+            random_id=1,
+            size=4,
+            generate_thumbnail=False,
+        )
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=0.02)
+        assert not done, "Cancellation abandoned the running staged-file read"
+        assert windows and not windows[0].closed
+        assert not native.calls and not native.published
+    finally:
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 2)
+        await asyncio.gather(task, return_exceptions=True)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert windows[0].closed
+    assert not native.calls and not native.published
+    assert adapter._media_scheduler.active == 0
 
 
 @pytest.mark.asyncio

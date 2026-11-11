@@ -40,8 +40,10 @@ from tgdrive.telegram.client_identity import IdentityCache, account_identity
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.connection_errors import TelegramConnectionError
 from tgdrive.transfers.file_window import FileWindow
+from tgdrive.transfers.tasks import _journalled
 
 log = logging.getLogger(__name__)
+_worker = _journalled(asyncio.to_thread)
 
 _DOWNLOAD_BLOCK = 1024**2
 _DOWNLOAD_REQUEST = 512 * 1024
@@ -970,13 +972,8 @@ class Client:
             for index in range(part_count):
                 if len(pending) >= self._upload_pipeline:
                     await collect()
-                read = asyncio.create_task(asyncio.to_thread(source.read, part_size))
-                try:
-                    payload = await asyncio.shield(read)
-                except asyncio.CancelledError:
-                    # FileWindow must outlive an already running filesystem read.
-                    await read
-                    raise
+                # FileWindow must outlive reads through repeated cancellation.
+                payload = await _worker(source.read, part_size)
                 expected = min(part_size, length - index * part_size)
                 if len(payload) != expected:
                     raise OSError("Staged file ended before the declared upload length")
