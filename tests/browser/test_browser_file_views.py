@@ -220,18 +220,18 @@ def test_long_file_cards_and_compact_list_thumbnails(server, desktop, width, the
     expect(first.locator(".file-tile-preview img")).to_be_visible()
     title = first.get_by_role("button", name=names[0], exact=True)
     expect(title).to_have_attribute("title", names[0])
-    assert title.evaluate("node => getComputedStyle(node).webkitLineClamp") == "3"
+    assert title.evaluate("node => getComputedStyle(node).webkitLineClamp") == "2"
     card, preview, footer = (
         first.bounding_box(),
         first.locator(".file-tile-preview").bounding_box(),
         first.locator(".size-cell").bounding_box(),
     )
-    assert abs(preview["width"] / preview["height"] - 1.6) < 0.03
+    assert abs(preview["width"] / preview["height"] - 16 / 9) < 0.03
     if width > 720:
         assert 180 <= card["width"] <= 200
-        assert card["height"] <= 260
+        assert card["height"] <= card["width"]
     else:
-        assert card["width"] >= (260 if width <= 360 else 160)
+        assert 130 <= card["width"] <= 190
     assert footer["y"] >= title.bounding_box()["y"] + title.bounding_box()["height"]
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.mouse.move(0, 0)
@@ -254,10 +254,22 @@ def test_long_file_cards_and_compact_list_thumbnails(server, desktop, width, the
     assert not originals
 
 
-@pytest.mark.parametrize("width", [1440, 1536, 1920])
-@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize(
+    "width,theme",
+    [
+        (1440, "light"),
+        (1440, "dark"),
+        (1536, "light"),
+        (1536, "dark"),
+        (1920, "light"),
+        (1920, "dark"),
+        (390, "light"),
+        (320, "dark"),
+    ],
+)
 def test_root_mixed_cards_keep_compact_desktop_bounds(server, desktop, width, theme):
     _, page = desktop
+    folder_name = "Cyberpunk.Edgerunners.S02.1080p.NF.WEB-DL.DUAL.DDP5.1"
     page.set_viewport_size({"width": width, "height": 1080})
     page.add_init_script(f"localStorage.setItem('tgdrive.appearance', '{theme}')")
 
@@ -274,6 +286,9 @@ def test_root_mixed_cards_keep_compact_desktop_bounds(server, desktop, width, th
                 }
             ],
         )
+        first_folder = next(item for item in data["items"] if item["type"] == "folder")
+        first_folder["name"] = folder_name
+        first_folder["starred"] = True
         route.fulfill(response=response, json=data)
 
     page.route(NODES, listing)
@@ -283,18 +298,34 @@ def test_root_mixed_cards_keep_compact_desktop_bounds(server, desktop, width, th
     expect(rows).to_have_count(4)
     for row in rows.all():
         box = row.bounding_box()
-        assert 180 <= box["width"] <= 200
         folder = row.locator('.file-tile-preview[data-kind="folder"]')
-        assert box["height"] <= (230 if folder.count() else 260)
+        if width > 720:
+            assert 180 <= box["width"] <= 200
         if folder.count():
-            preview = folder.bounding_box()
-            assert abs(preview["width"] / preview["height"] - 2) < 0.03
+            expect(folder).not_to_be_visible()
+            assert 70 <= box["height"] <= 90
+            expect(row.locator(".file-kind-icon")).to_be_visible()
+            if width <= 720:
+                assert box["width"] > 260
+                name = row.locator(".file-name").bounding_box()
+                menu = row.locator("summary").bounding_box()
+                assert name["x"] + name["width"] <= menu["x"] - 4
+        elif width > 720:
+            assert box["height"] <= box["width"]
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.mouse.move(0, 0)
     page.screenshot(
         path=ARTIFACTS / f"root-mixed-cards-compact-{width}-{theme}.png",
         animations="disabled",
     )
+    folder_row = rows.filter(has=page.get_by_text(folder_name, exact=True))
+    folder_row.locator("summary").click()
+    expect(folder_row.locator(".action-menu")).to_be_visible()
+    page.keyboard.press("Escape")
+    page.get_by_role("button", name="Select", exact=True).click()
+    page.get_by_role("checkbox", name="Select " + folder_name, exact=True).check()
+    expect(folder_row).to_have_class("file-row selected")
+    assert 70 <= folder_row.bounding_box()["height"] <= 90
 
 
 def test_sort_direction_and_trash_original_location_work_in_both_views(server, desktop):

@@ -1287,6 +1287,7 @@ export default function FileBrowser({
                                                     : "")
                                             }
                                             data-item-id={item.id}
+                                            data-kind={item.type}
                                             style={
                                                 {
                                                     "--i": Math.min(index, 14),
