@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 from types import SimpleNamespace
 from typing import Any, cast
@@ -518,6 +519,72 @@ def test_cancel_request_before_start_prevents_late_remote_job(
     )
     assert started.status_code == 409
     assert runtime.transfers.remote_requests == []
+
+
+def test_url_cancel_during_job_persistence_reaches_the_later_bound_record(
+    app_client, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import AsyncMock
+
+    client, _, runtime, _ = app_client
+    login(client)
+    registry = runtime.transfers.registry
+    entered, release = asyncio.Event(), asyncio.Event()
+    persist = registry._persist
+    held = False
+
+    async def held_persist(record):
+        nonlocal held
+        if not held:
+            held = True
+            entered.set()
+            await release.wait()
+        await persist(record)
+
+    cancel = AsyncMock(side_effect=registry.cancel)
+    monkeypatch.setattr(registry, "_persist", held_persist)
+    monkeypatch.setattr(runtime.transfers, "cancel_job", cancel, raising=False)
+    request_id = "cancel-during-url-persist"
+    payload = {
+        "url": "https://example.com/file.bin",
+        "path": "/",
+        "client_request_id": request_id,
+    }
+    assert client.portal is not None
+
+    async def wait_for_persistence():
+        await asyncio.wait_for(entered.wait(), 3)
+
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        starting = workers.submit(
+            client.post, "/api/startFileDownloadFromUrl", json=payload
+        )
+        try:
+            client.portal.call(wait_for_persistence)
+            cancelled = client.post(
+                "/api/cancelUpload", json={"client_request_id": request_id}
+            )
+            assert cancelled.status_code == 200
+            assert cancelled.json()["data"]["status"] == "cancelled"
+            assert cancelled.json()["id"] == ""
+            cancel.assert_not_awaited()
+        finally:
+            client.portal.call(release.set)
+        started = starting.result(timeout=3)
+
+    assert started.status_code == 200
+    record_id = started.json()["id"]
+    cancel.assert_awaited_once_with(record_id)
+    record = registry.get(record_id)
+    assert record.status == "cancelled" and record.cancel_event.is_set()
+    lookup = client.post(
+        "/api/getTransferByRequest", json={"client_request_id": request_id}
+    )
+    assert lookup.json()["id"] == record_id
+    assert lookup.json()["data"]["status"] == "cancelled"
+    assert client.post("/api/startFileDownloadFromUrl", json=payload).status_code == 409
+    assert len(runtime.transfers.remote_requests) == 1
 
 
 def test_upload_request_reuses_record_and_cancel_tombstone_blocks_late_body(

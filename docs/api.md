@@ -417,6 +417,14 @@ not HTTP errors. Reusing a `client_request_id` with different values returns
 `409`. That ID mapping lives in memory and is lost on restart; keep the job ID.
 Retry phases and bounds: [URL import intake](performance.md#url-import-intake).
 
+To cancel a URL start whose response is lost or still pending, use the same
+`client_request_id` with `/api/cancelUpload` rather than starting another
+request. Cancellation can record an intent before the job ID is bound; a
+cancelled start cannot be retried with that same request ID. These intents are
+process-local, not durable across restarts. Once you have a job ID, retain it
+and inspect the job after interruption; cancellation cannot undo an already
+committed upload.
+
 ## Torrent imports
 
 `POST /api/startTorrentDownload` (**Owner**) takes

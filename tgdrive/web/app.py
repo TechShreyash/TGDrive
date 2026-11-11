@@ -957,8 +957,8 @@ def create_app(
             if entry:
                 starts.fail(entry, str(exc) or type(exc).__name__)
             raise
-        if entry:
-            starts.bind(entry, record)
+        if entry and starts.bind(entry, record):
+            await manager.cancel_job(record.id)
         return {"status": "ok", "id": record.id}
 
     @app.post("/api/startTorrentDownload")
