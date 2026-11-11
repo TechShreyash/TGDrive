@@ -1,5 +1,6 @@
 """Warm-cache cover repair never extends current file or share access."""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -22,7 +23,7 @@ def install_repair(client, pool, *, before_return=None):
     async def repair(cache, **kwargs):
         assert cache is pool._media_read_cache
         assert kwargs["version"] is version
-        kwargs["authorize"]()
+        await kwargs["authorize"]()
         calls.append(kwargs["source"])
         if before_return is not None:
             before_return()
@@ -57,6 +58,27 @@ def test_repaired_thumbnail_reuses_payload_but_rechecks_access(app_client):
         == 403
     )
     assert len(calls) == account.reads == 1
+
+
+def test_all_thumbnail_catalog_rechecks_run_off_the_event_loop(app_client, monkeypatch):
+    client, store, pool, _, path = use_thumbnail_pool(app_client, content=None)
+    original = store.get_file
+    checks = []
+
+    def get_file(path, **kwargs):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            checks.append(True)
+        else:
+            raise AssertionError("Catalog authorization blocked the event loop")
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(store, "get_file", get_file)
+    install_repair(client, pool)
+    login(client)
+    assert client.get("/api/v1/thumbnail", params={"path": path}).status_code == 200
+    assert len(checks) >= 3
 
 
 @pytest.mark.parametrize("change", ["revoke", "replace"])

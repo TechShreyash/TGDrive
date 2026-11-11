@@ -64,10 +64,11 @@ finish with the browser closed; on-demand preview decoding needs the viewer open
 
 ## Bandwidth and storage
 
-Grid view loads nearby covers: generated local JPEG first, Telegram thumbnail
-second, then an icon. It **never downloads an original from Telegram just to
-make a grid cover**. A complete original already cached on the server may support
-local repair.
+Grid view loads nearby covers. A missing local cover can be generated from the
+file's verified saved poster, fetching only that JPEG when needed. Older local
+or Telegram-provided covers remain fallbacks, followed by cached-original repair
+or an icon. It **never downloads an original from Telegram just to make a grid
+cover**.
 
 Loaded covers stay on the current grid page (up to 100 items). Unfinished
 requests cancel offscreen and retry when visible. Changing views, folders,
@@ -95,6 +96,10 @@ counter includes cache reads, so it is not a network meter.
 [See the older rebuild control](assets/thumbnail-rebuild.jpg). This capture
 predates the current navigation and does not show a completed full-library rebuild.
 
+For videos with a usable saved poster, rebuilding first tries to derive the
+small cover from that JPEG; it falls back to the bounded original-read path if
+needed. It does not create missing durable posters.
+
 The worker handles one file at a time and waits while transfers or media requests
 are active. If foreground work is encountered before fetching another source
 block, it cleans up the current renderer and temporary source, waits, then retries
@@ -113,8 +118,9 @@ Reads use the lower-priority queue, paced to 2 MiB/s before block/cache overhead
 Each block missing from the rebuild source's small hot-block cache is
 charged before fetching, including interrupted attempts; retries do not refund
 that charge. Returned blocks can come from shared cache, not just Telegram.
-The displayed source-byte counter counts fully returned blocks, so it can be
-below an exhausted admission budget.
+A poster attempt is charged its declared size before loading. The displayed
+source-byte counter counts fully returned blocks and loaded poster bytes, so
+it can be below an exhausted admission budget.
 
 The cumulative attempt budget covers renderer-slot waiting, source reads,
 pacing, rendering and cleanup across retries. The initial
@@ -144,13 +150,16 @@ start or cancel rebuilding.
 
 New encrypted uploads cache generated covers locally and do not attach plaintext
 Telegram thumbnails. Legacy plaintext uploads can have an attached provider
-cover. To repair one file with no provider cover:
+cover. For a missing cover:
 
-1. Choose **Preload file** and wait for full **Ready** coverage in **Preloads**.
-2. Return to its folder in Grid view.
+1. Return to the folder in Grid view. If the file has a usable saved poster,
+   TGDrive can generate a small cover from it without preloading the original.
+2. If no usable poster or provider cover is available, choose **Preload file**
+   and wait for full **Ready** coverage in **Preloads**, then reopen the folder.
 
-Repair needs a complete cached original no larger than **128 MiB**. It creates a
-disposable local JPEG, without changing the catalog or uploading a Telegram cover.
+Cached-original repair needs a complete original no larger than **128 MiB**. It
+creates a disposable local JPEG, without changing the catalog or uploading a
+Telegram cover.
 Partial, cold, larger, unsupported, damaged or overly complex sources
 keep their provider cover/icon. A container such as MOV still needs a supported
 codec and decoding cost; a missing cover does not establish playback failure.

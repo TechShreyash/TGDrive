@@ -572,9 +572,9 @@ class MediaReadCache:
         """
         from tgdrive.storage.file_parts import validate_parts
 
-        def current():
+        async def current():
             if authorize is not None:
-                authorize()
+                await authorize()
             if (
                 self._closed
                 or version is None
@@ -588,7 +588,7 @@ class MediaReadCache:
             ):
                 raise CachedSourceUnavailable
 
-        current()
+        await current()
         if not 0 < size <= max_bytes:
             raise CachedSourceUnavailable
         documents = (
@@ -631,7 +631,7 @@ class MediaReadCache:
             if self.disk is not None
             else set()
         )
-        current()
+        await current()
         # Expire RAM hits here as well; an old inventory entry is not proof that
         # the complete original is still retained.
         if any(
@@ -645,13 +645,13 @@ class MediaReadCache:
             checksum = hashlib.sha256()
             position = 0
             for key, expected in blocks:
-                current()
+                await current()
                 payload = self._pending.get(key)
                 if payload is None:
                     payload = self.memory._hit(key)
                 if payload is None and self.disk is not None:
                     payload = await asyncio.to_thread(self.disk.read, key, expected)
-                current()
+                await current()
                 if payload is None or len(payload) != expected:
                     raise CachedSourceUnavailable
                 # The cache holds Telegram's bytes; derivatives need plaintext.
@@ -659,7 +659,7 @@ class MediaReadCache:
                 position += expected
                 checksum.update(payload)
                 yield payload
-                current()
+                await current()
             if part.get("sha256") and checksum.hexdigest() != part["sha256"]:
                 raise CachedSourceUnavailable
 

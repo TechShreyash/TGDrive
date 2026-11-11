@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -18,6 +19,7 @@ from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.core.errors import TrashedItemError
 from tgdrive.media import thumbnail_rebuild as module
 from tgdrive.media.generated_thumbnails import read, save
+from tgdrive.media.posters import poster_identity
 from tgdrive.media.thumbnails import Thumbnail, ThumbnailCache
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 from tgdrive.web.app import create_app
@@ -229,6 +231,125 @@ async def test_failed_optional_render_retains_existing_thumbnail(rebuild, monkey
     assert manager.state["skipped"] == 1
     assert manager.state["status"] == "completed"
     assert read(manager.directory, manager.settings.storage_channel, 3) == COVER
+
+
+@pytest.mark.parametrize(
+    "poster_result", ["valid", "invalid", "unavailable", "decode_failure"]
+)
+async def test_rebuild_prefers_verified_poster_and_retains_native_fallback(
+    rebuild, monkeypatch, poster_result
+):
+    manager, store, _ = rebuild
+    poster = dict(
+        message_id=21,
+        size=len(COVER),
+        sha256=hashlib.sha256(COVER).hexdigest(),
+        document_id=1234,
+        nonce="a" * 32,
+    )
+    item = store.add_file("/", "large.mkv", 20, 9_000_000_000, poster=poster)
+    reads, renders = [], []
+
+    async def fetch(pool, channel, data, start, count, authorize, *, background):
+        assert background and data["message_id"] == poster["message_id"]
+        await authorize()
+        reads.append(count)
+        if poster_result == "unavailable":
+            raise OSError("isolated transport outage")
+        return COVER if poster_result != "invalid" else COVER[:-1] + b"x"
+
+    async def generate(path, name, **kwargs):
+        renders.append((name, kwargs.get("remote_url")))
+        if name == "cover.jpg":
+            assert path.read_bytes() == COVER
+            return None if poster_result == "decode_failure" else COVER
+        return COVER
+
+    monkeypatch.setattr("tgdrive.media.books.read_range", fetch)
+    monkeypatch.setattr(module.covers, "generate", generate)
+    await manager.start()
+    assert manager.task is not None
+    await manager.task
+    assert manager.state["generated"] == 1 and manager.state["skipped"] == 0
+    assert reads == [len(COVER)]
+    if poster_result == "valid":
+        assert renders == [("cover.jpg", None)]
+        assert (
+            read(
+                manager.directory,
+                manager.settings.storage_channel,
+                20,
+                version=poster_identity(item),
+            )
+            == COVER
+        )
+        assert read(manager.directory, manager.settings.storage_channel, 20) is None
+    else:
+        assert renders[-1][0] == "large.mkv" and renders[-1][1]
+        assert read(manager.directory, manager.settings.storage_channel, 20) == COVER
+    assert not list(manager.directory.glob(".repair-*.source"))
+
+
+async def test_poster_retries_reuse_verified_bytes_and_keep_admission(
+    rebuild, monkeypatch
+):
+    manager, store, _ = rebuild
+    poster = dict(
+        message_id=21, size=len(COVER), sha256=hashlib.sha256(COVER).hexdigest()
+    )
+    item = store.add_file("/", "large.mkv", 20, module.BLOCK, poster=poster)
+    manager.drive_id = store.drive_id
+    source = module.RebuildSource(manager, item)
+    reads, renders = [], []
+
+    async def fetch(*args, **kwargs):
+        reads.append(True)
+        return COVER
+
+    async def render(content, *, authorize, background):
+        await authorize()
+        renders.append(content)
+        if len(renders) == 1:
+            source.deferred = True
+            return None
+        return COVER
+
+    async def no_cover(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("tgdrive.media.books.read_range", fetch)
+    monkeypatch.setattr(manager.staging, "render_image", render)
+    monkeypatch.setattr(module.covers, "generate", no_cover)
+    assert await manager.render_when_runnable(source) == COVER
+    assert len(reads) == 1 and renders == [COVER, COVER]
+    assert source.admitted_bytes == source.used == len(COVER)
+    assert source.cover_version == poster_identity(item)
+    source.budget = len(COVER)
+    with pytest.raises(module.SourceLimit, match="Source read budget reached"):
+        await source.read(0, 1)
+
+
+async def test_poster_budget_and_identity_fail_before_publication(rebuild, monkeypatch):
+    manager, store, _ = rebuild
+    poster = dict(
+        message_id=21, size=len(COVER), sha256=hashlib.sha256(COVER).hexdigest()
+    )
+    item = store.add_file("/", "large.mkv", 20, module.BLOCK, poster=poster)
+    manager.drive_id = store.drive_id
+    source = module.RebuildSource(manager, item)
+    source.budget = 0
+    with pytest.raises(module.SourceLimit, match="Source read budget reached"):
+        await source.read_poster()
+    original = store.get_file
+
+    def changed(path, **kwargs):
+        data = original(path, **kwargs)
+        return {**data, "poster": {**data["poster"], "nonce": "a" * 32}}
+
+    monkeypatch.setattr(store, "get_file", changed)
+    with pytest.raises(module.SourceLimit, match="File removed or changed"):
+        await source.read_poster()
+    assert source.admitted_bytes == source.used == 0
 
 
 @pytest.mark.parametrize("cancel", [False, True])

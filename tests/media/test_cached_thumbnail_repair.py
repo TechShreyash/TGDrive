@@ -78,12 +78,15 @@ def forbid_origin(monkeypatch, cache):
 
 
 async def repair(helper, cache, metadata):
+    async def authorize():
+        pass
+
     return await helper.get(
         cache,
         source=metadata,
         name="clip.mov",
         version=cache.cached_source_version(**metadata),
-        authorize=lambda: None,
+        authorize=authorize,
     )
 
 

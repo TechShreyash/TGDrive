@@ -180,6 +180,55 @@ class CachedThumbnailRepair:
         finally:
             path.unlink(missing_ok=True)
 
+    async def render_image(self, content, *, authorize, background=False):
+        from tgdrive.media.thumbnails import ThumbnailBusy
+
+        await authorize()
+        if not (
+            isinstance(content, bytes)
+            and 0 < len(content) <= MAX_POSTER_BYTES
+            and content.startswith(b"\xff\xd8\xff")
+            and content.endswith(b"\xff\xd9")
+        ):
+            return None
+        try:
+            if background:
+                await self._slot.acquire()
+            else:
+                await asyncio.wait_for(self._slot.acquire(), timeout=0.05)
+        except TimeoutError as error:
+            raise ThumbnailBusy from error
+        output = path = None
+        try:
+            async with asyncio.timeout(None if background else REPAIR_SECONDS):
+                opening = asyncio.create_task(
+                    asyncio.to_thread(self._open_source, len(content), 64 * 1024**2)
+                )
+                opened, interrupted = await _finish_owned(opening)
+                if opened is not None:
+                    output, path = opened
+                if interrupted:
+                    raise asyncio.CancelledError
+                assert output is not None and path is not None
+                written = await _owned_disk_call(output.write, content)
+                if written != len(content):
+                    raise OSError("Thumbnail source ended early")
+                await _owned_disk_call(output.flush)
+                await authorize()
+                result = await generate(
+                    path, "cover.jpg", background=background, raise_busy=True
+                )
+                await authorize()
+                return result
+        except (OSError, TimeoutError, ThumbnailRendererBusy) as error:
+            raise ThumbnailBusy from error
+        finally:
+            try:
+                if output is not None:
+                    await _owned_disk_call(self._cleanup_source, output, path)
+            finally:
+                self._slot.release()
+
     async def get(self, cache, *, source, name, version, authorize):
         from tgdrive.media.media_reader import CachedSourceUnavailable
         from tgdrive.media.thumbnails import ThumbnailBusy
@@ -249,12 +298,12 @@ class CachedThumbnailRepair:
                 await _owned_disk_call(output.flush)
                 if await _owned_disk_call(lambda: path.stat().st_size) != written:
                     raise CachedSourceUnavailable
-                authorize()
+                await authorize()
                 cover = await generate(
                     path, name, raise_busy=True, on_start=native_started
                 )
                 rendered = True
-                authorize()
+                await authorize()
                 if cache.cached_source_version(**source) != version:
                     raise CachedSourceUnavailable
                 if cover:
@@ -265,7 +314,7 @@ class CachedThumbnailRepair:
                         source["message_id"],
                         cover,
                     )
-                    authorize()
+                    await authorize()
                     if cache.cached_source_version(**source) != version:
                         raise CachedSourceUnavailable
                 elif rendering:
@@ -471,15 +520,18 @@ async def _generate(
     return None
 
 
-def location(directory: Path, channel: int, message: int) -> Path:
-    identity = hashlib.sha256(f"{channel}:{message}".encode()).hexdigest()
+def location(directory: Path, channel: int, message: int, *, version=None) -> Path:
+    value = f"{channel}:{message}"
+    if version is not None:
+        value += f":{version!r}"
+    identity = hashlib.sha256(value.encode()).hexdigest()
     return directory / (identity + ".jpg")
 
 
 def read(
-    directory: Path, channel: int, message: int, *, maximum=MAX_BYTES
+    directory: Path, channel: int, message: int, *, maximum=MAX_BYTES, version=None
 ) -> bytes | None:
-    path = location(directory, channel, message)
+    path = location(directory, channel, message, version=version)
     try:
         if path.is_symlink() or path.stat().st_size > maximum:
             return None
@@ -495,7 +547,13 @@ def read(
 
 
 def save(
-    directory: Path, channel: int, message: int, data: bytes, *, maximum=MAX_BYTES
+    directory: Path,
+    channel: int,
+    message: int,
+    data: bytes,
+    *,
+    maximum=MAX_BYTES,
+    version=None,
 ) -> None:
     if not 0 < len(data) <= maximum or not data.startswith(b"\xff\xd8\xff"):
         return
@@ -506,7 +564,7 @@ def save(
     try:
         with os.fdopen(descriptor, "wb") as output:
             output.write(data)
-        os.replace(temporary, location(directory, channel, message))
+        os.replace(temporary, location(directory, channel, message, version=version))
     finally:
         with suppress(FileNotFoundError):
             os.unlink(temporary)

@@ -29,12 +29,14 @@ from tgdrive.core.errors import (
 from tgdrive.media import generated_thumbnails as covers
 from tgdrive.media.books import parse_book, read_range
 from tgdrive.media.media_scheduler import media_priority
+from tgdrive.media.posters import load_poster, poster_identity
 from tgdrive.media.thumbnail_worker import (
     AUDIO_FORMATS,
     IMAGE_CODECS,
     OFFICE_FORMATS,
     VIDEO_FORMATS,
 )
+from tgdrive.media.thumbnails import ThumbnailBusy
 from tgdrive.storage import pacing
 
 BLOCK = 1024**2
@@ -45,7 +47,7 @@ SUPPORTED = covers.SUPPORTED | {".cbr"}
 
 
 def file_identity(data):
-    return data["message_id"], data["size"], data.get("parts")
+    return data["message_id"], data["size"], data.get("parts"), poster_identity(data)
 
 
 def write_state(path, data):
@@ -77,6 +79,9 @@ class RebuildSource:
         self.admitted_bytes = 0
         self.deferred = False
         self.failure_reason = None
+        self.poster_loaded = False
+        self.poster_content = None
+        self.cover_version = None
         self.budget = (
             PDF_BUDGET if Path(data["name"]).suffix.lower() == ".pdf" else SOURCE_BUDGET
         )
@@ -143,6 +148,42 @@ class RebuildSource:
                     ]
                 )
         return bytes(output)
+
+    async def read_poster(self):
+        await self.authorize()
+        if self.poster_loaded:
+            return self.poster_content
+        poster = self.data.get("poster")
+        if poster is None:
+            return None
+        if self.admitted_bytes + poster["size"] > self.budget:
+            raise SourceLimit("Source read budget reached")
+        if self.owner.busy():
+            self.deferred = True
+            raise SourceDeferred
+        self.admitted_bytes += poster["size"]
+        self.poster_loaded = True
+        began = time.monotonic()
+        try:
+            image = await load_poster(
+                pool=self.owner.runtime().pool,
+                channel_id=self.owner.settings.storage_channel,
+                poster=poster,
+                directory=self.owner.settings.resolved_cache_dir / "posters",
+                authorize=self.authorize,
+            )
+        except ThumbnailBusy:
+            return None
+        if image is not None:
+            self.poster_content = image.content
+            self.used += len(image.content)
+            self.owner.state["source_bytes"] += len(image.content)
+            self.owner.state["current_bytes"] = self.used
+            await self.owner.persist_progress()
+            await asyncio.sleep(
+                max(0, len(image.content) / RATE - (time.monotonic() - began))
+            )
+        return self.poster_content
 
     async def serve(self, request):
         if request.path != "/" + self.token or request.method not in {"GET", "HEAD"}:
@@ -326,6 +367,19 @@ class ThumbnailRebuild:
     async def render_file(self, source):
         data = source.data
         suffix = Path(data["name"]).suffix.lower()
+        source.cover_version = None
+        if suffix in VIDEO_FORMATS and data.get("poster") is not None:
+            content = await source.read_poster()
+            if content is not None:
+                try:
+                    cover = await self.staging.render_image(
+                        content, authorize=source.authorize, background=True
+                    )
+                except ThumbnailBusy:
+                    cover = None
+                if cover:
+                    source.cover_version = poster_identity(data)
+                    return cover
         temporary = output = None
         try:
             if (
@@ -473,12 +527,14 @@ class ThumbnailRebuild:
                                 self.settings.storage_channel,
                                 data["message_id"],
                                 cover,
+                                version=source.cover_version,
                             )
                             stored = await asyncio.to_thread(
                                 covers.read,
                                 self.directory,
                                 self.settings.storage_channel,
                                 data["message_id"],
+                                version=source.cover_version,
                             )
                             if stored != cover:
                                 raise SourceLimit(

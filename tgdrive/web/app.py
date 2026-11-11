@@ -54,7 +54,7 @@ from tgdrive.core.security import (
     demo_admin_session_key,
     verify_password,
 )
-from tgdrive.media.posters import load_poster
+from tgdrive.media.posters import load_poster, poster_identity
 from tgdrive.media.previews import describe_media, describe_preview
 from tgdrive.media.streaming import (
     TelegramFileNotFound,
@@ -1228,8 +1228,7 @@ def create_app(
         auth: Annotated[str | None, Query(max_length=512)] = None,
     ) -> Response:
         path, file_data = await asyncio.to_thread(authorized_file, request, path, auth)
-        # Prefer upload-generated/provider covers; missing derivatives can use
-        # a complete verified original already cached, without origin reads.
+        # A verified poster can supply a small cover without reading the video.
         headers = {"Cache-Control": "private, no-cache", "Vary": "Cookie"}
 
         def file_identity(data):
@@ -1240,6 +1239,7 @@ def create_app(
                     (part["message_id"], part["offset"], part["size"], part["sha256"])
                     for part in data.get("parts") or []
                 ),
+                poster_identity(data),
             )
 
         identity = file_identity(file_data)
@@ -1254,13 +1254,15 @@ def create_app(
         }
         version = cache.cached_source_version(**source) if cache is not None else None
 
-        def recheck():
-            _current_path, current = authorized_file(request, path, auth)
+        async def recheck():
+            _current_path, current = await asyncio.to_thread(
+                authorized_file, request, path, auth
+            )
             if file_identity(current) != identity:
                 raise HTTPException(409, "File changed; refresh the directory")
 
         async def load_cover():
-            from tgdrive.media.generated_thumbnails import read
+            from tgdrive.media.generated_thumbnails import _owned_disk_call, read, save
             from tgdrive.media.thumbnails import Thumbnail
 
             content = await asyncio.to_thread(
@@ -1268,10 +1270,48 @@ def create_app(
                 settings.resolved_cache_dir / "thumbnails",
                 settings.storage_channel,
                 file_data["message_id"],
+                version=poster_identity(file_data),
             )
             if content:
                 return Thumbnail(content, "image/jpeg")
             provider_error = None
+            if file_data.get("poster") is not None:
+                try:
+                    image = await load_poster(
+                        pool=pool,
+                        channel_id=settings.storage_channel,
+                        poster=file_data["poster"],
+                        directory=settings.resolved_cache_dir / "posters",
+                        authorize=recheck,
+                    )
+                    if image is not None:
+                        content = await app.state.thumbnail_repair.render_image(
+                            image.content, authorize=recheck
+                        )
+                        if content:
+                            await recheck()
+                            await _owned_disk_call(
+                                save,
+                                settings.resolved_cache_dir / "thumbnails",
+                                settings.storage_channel,
+                                file_data["message_id"],
+                                content,
+                                version=poster_identity(file_data),
+                            )
+                            await recheck()
+                            return Thumbnail(content, "image/jpeg")
+                except ThumbnailBusy as exc:
+                    provider_error = exc
+                # Preserve older upload/native covers as a fallback, separately
+                # from a cover verified against this exact poster identity.
+                content = await asyncio.to_thread(
+                    read,
+                    settings.resolved_cache_dir / "thumbnails",
+                    settings.storage_channel,
+                    file_data["message_id"],
+                )
+                if content:
+                    return Thumbnail(content, "image/jpeg")
             try:
                 provider = await load_thumbnail(
                     pool=pool,
@@ -1303,7 +1343,7 @@ def create_app(
                 missing_revision=version.data_revision if version is not None else None,
             )
         except ThumbnailBusy:
-            recheck()
+            await recheck()
             return JSONResponse(
                 {
                     "code": "THUMBNAIL_BUSY",
@@ -1314,7 +1354,7 @@ def create_app(
             )
         # Even a cache hit or conditional 304 must pass today's share/session
         # authorization. Nothing in the payload cache grants access to a file.
-        recheck()
+        await recheck()
         if thumbnail is None:
             # Optional derivative absence is a successful icon fallback, not a
             # missing original. Keep real authorization/file failures distinct.

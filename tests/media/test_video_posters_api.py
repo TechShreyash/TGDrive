@@ -43,6 +43,140 @@ def setup_poster(app_client, monkeypatch, *, content=JPEG, before_read=None):
     return client, store, "/" + item["id"], reads
 
 
+def test_grid_thumbnail_uses_verified_poster_and_versioned_disk_cache_only(
+    app_client, monkeypatch
+):
+    client, _, path, reads = setup_poster(app_client, monkeypatch)
+    small = b"\xff\xd8\xffsmall\xff\xd9"
+    renders = []
+
+    async def render(content, *, authorize, background=False):
+        assert content == JPEG and background is False
+        await authorize()
+        renders.append(content)
+        return small
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("A usable poster must not read the original/provider")
+
+    monkeypatch.setattr(client.app.state.thumbnail_repair, "render_image", render)
+    monkeypatch.setattr("tgdrive.web.app.load_thumbnail", forbidden)
+    fixtures.login(client)
+    response = client.get("/api/v1/thumbnail", params={"path": path})
+    assert response.status_code == 200 and response.content == small
+    assert len(reads) == len(renders) == 1
+    client.app.state.thumbnails._entries.clear()
+    client.app.state.thumbnails.bytes = 0
+    assert client.get("/api/v1/thumbnail", params={"path": path}).content == small
+    assert len(reads) == len(renders) == 1
+    assert (
+        client.get(
+            "/api/v1/thumbnail",
+            params={"path": path},
+            headers={"If-None-Match": response.headers["etag"]},
+        ).status_code
+        == 304
+    )
+    assert (
+        client.get(
+            "/api/v1/thumbnail", params={"path": path, "auth": "invalid"}
+        ).status_code
+        == 403
+    )
+
+
+@pytest.mark.parametrize("field,value", [("document_id", 9002), ("nonce", "a" * 32)])
+def test_changed_poster_does_not_reuse_small_disk_or_ram_cover(
+    app_client, monkeypatch, field, value
+):
+    client, store, path, _ = setup_poster(app_client, monkeypatch)
+    changed = False
+    original = store.get_file
+    renders = []
+
+    def get_file(path, **kwargs):
+        data = original(path, **kwargs)
+        return {**data, "poster": {**data["poster"], field: value}} if changed else data
+
+    async def render(content, *, authorize, **kwargs):
+        await authorize()
+        result = b"\xff\xd8\xff" + str(len(renders)).encode() + b"\xff\xd9"
+        renders.append(result)
+        return result
+
+    monkeypatch.setattr(store, "get_file", get_file)
+    monkeypatch.setattr(client.app.state.thumbnail_repair, "render_image", render)
+    fixtures.login(client)
+    first = client.get("/api/v1/thumbnail", params={"path": path})
+    changed = True
+    second = client.get(
+        "/api/v1/thumbnail",
+        params={"path": path},
+        headers={"If-None-Match": first.headers["etag"]},
+    )
+    assert second.status_code == 200 and first.content != second.content
+    assert len(renders) == 2
+
+
+def test_poster_added_after_negative_cache_is_reconsidered(app_client, monkeypatch):
+    from tests.media.test_thumbnails import use_thumbnail_pool
+
+    client, store, _, _, path = use_thumbnail_pool(app_client, content=None)
+    original = store.get_file
+    added = False
+
+    def get_file(path, **kwargs):
+        data = original(path, **kwargs)
+        return {**data, "poster": POSTER} if added else data
+
+    async def poster_read(*args, **kwargs):
+        return JPEG
+
+    async def render(content, *, authorize, **kwargs):
+        await authorize()
+        return b"\xff\xd8\xffnew\xff\xd9"
+
+    monkeypatch.setattr(store, "get_file", get_file)
+    monkeypatch.setattr("tgdrive.media.books.read_range", poster_read)
+    monkeypatch.setattr(client.app.state.thumbnail_repair, "render_image", render)
+    fixtures.login(client)
+    assert client.get("/api/v1/thumbnail", params={"path": path}).status_code == 204
+    added = True
+    assert client.get("/api/v1/thumbnail", params={"path": path}).status_code == 200
+
+
+@pytest.mark.parametrize("change", ["revoke", "replace"])
+def test_grid_poster_render_rechecks_share_and_full_poster_identity(
+    app_client, monkeypatch, change
+):
+    client, store, path, _ = setup_poster(app_client, monkeypatch)
+    token = store.create_share(path)
+    original = store.get_file
+    replaced = False
+
+    def get_file(path, **kwargs):
+        data = original(path, **kwargs)
+        return (
+            {**data, "poster": {**data["poster"], "nonce": "a" * 32}}
+            if replaced
+            else data
+        )
+
+    async def render(content, *, authorize, **kwargs):
+        nonlocal replaced
+        await authorize()
+        if change == "revoke":
+            store.revoke_share(path)
+        else:
+            replaced = True
+        return b"\xff\xd8\xffmust not escape\xff\xd9"
+
+    monkeypatch.setattr(store, "get_file", get_file)
+    monkeypatch.setattr(client.app.state.thumbnail_repair, "render_image", render)
+    response = client.get("/api/v1/thumbnail", params={"path": path, "auth": token})
+    assert response.status_code == (403 if change == "revoke" else 409)
+
+
 def test_poster_owner_cache_and_conditional_response_always_require_access(
     app_client, monkeypatch
 ):

@@ -13,8 +13,15 @@ from tgdrive.media import books
 from tgdrive.media.generated_thumbnails import read, save
 from tgdrive.media.streaming import TelegramFileNotFound
 from tgdrive.media.thumbnails import Thumbnail, ThumbnailBusy
-from tgdrive.storage.file_parts import MAX_POSTER_BYTES
+from tgdrive.storage.file_parts import MAX_POSTER_BYTES, validate_poster
 from tgdrive.telegram.client_pool import ClientPoolError
+
+
+def poster_identity(data):
+    poster = validate_poster(
+        data.get("poster"), message_id=data["message_id"], parts=data.get("parts")
+    )
+    return tuple(sorted(poster.items())) if poster is not None else None
 
 
 async def load_poster(*, pool, channel_id, poster, directory, authorize):

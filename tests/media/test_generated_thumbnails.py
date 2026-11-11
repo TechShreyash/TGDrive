@@ -37,6 +37,79 @@ async def test_native_generation_is_small_and_preserves_original(tmp_path, name)
     assert path.read_bytes() == original
 
 
+async def test_verified_poster_staging_renders_bounded_cover_and_cleans_up(tmp_path):
+    if not shutil.which("ffmpeg"):
+        pytest.skip("native ffmpeg not installed")
+    original = tmp_path / "source.png"
+    original.write_bytes(png())
+    poster = await generate(original, original.name)
+    assert poster is not None
+    helper = covers.CachedThumbnailRepair(tmp_path / "covers")
+    checks = []
+
+    async def authorize():
+        checks.append(True)
+
+    result = await helper.render_image(poster, authorize=authorize)
+    assert (
+        result and result.startswith(b"\xff\xd8\xff") and result.endswith(b"\xff\xd9")
+    )
+    assert len(result) <= MAX_BYTES and len(checks) == 3
+    assert not helper._slot.locked() and not list(helper.directory.glob(".repair-*"))
+    assert (
+        await helper.render_image(
+            poster + b"x" * covers.MAX_POSTER_BYTES, authorize=authorize
+        )
+        is None
+    )
+
+
+async def test_poster_staging_cancellation_drains_native_work_and_private_file(
+    tmp_path, monkeypatch
+):
+    helper = covers.CachedThumbnailRepair(tmp_path / "covers")
+    entered, cleaned = asyncio.Event(), asyncio.Event()
+    paths = []
+
+    async def authorize():
+        pass
+
+    async def render(path, name, **kwargs):
+        paths.append(path)
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cleaned.set()
+
+    monkeypatch.setattr(covers, "generate", render)
+    task = asyncio.create_task(
+        helper.render_image(b"\xff\xd8\xffdata\xff\xd9", authorize=authorize)
+    )
+    await asyncio.wait_for(entered.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cleaned.is_set() and not helper._slot.locked()
+    assert paths and not paths[0].exists()
+
+
+def test_versioned_small_covers_preserve_legacy_paths_and_separate_full_poster_identity(
+    tmp_path,
+):
+    cover = b"\xff\xd8\xffcover\xff\xd9"
+    versioned = b"\xff\xd8\xffversioned cover\xff\xd9"
+    first = (("document_id", 100), ("sha256", "a" * 64), ("nonce", "1" * 32))
+    second = (("document_id", 100), ("sha256", "a" * 64), ("nonce", "2" * 32))
+    save(tmp_path, -100, 1, cover)
+    legacy = covers.location(tmp_path, -100, 1)
+    save(tmp_path, -100, 1, versioned, version=first)
+    assert read(tmp_path, -100, 1) == cover
+    assert read(tmp_path, -100, 1, version=first) == versioned
+    assert read(tmp_path, -100, 1, version=second) is None
+    assert covers.location(tmp_path, -100, 1) == legacy
+
+
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_background_admission_waits_and_cancels_without_releasing_another_slot(
     tmp_path, monkeypatch, cancel
