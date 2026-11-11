@@ -674,6 +674,71 @@ def test_database_status_reports_active_independent_checkpoint_without_recursion
     service.replica.status.assert_not_called()
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("phase", ["protected", "syncing", "paused", "error"])
+def test_database_status_distinguishes_independent_backup_evidence(
+    snapshot_source, enabled, phase
+):
+    service, store, _backend = snapshot_source
+    service._last_success_at = "2026-11-03T06:17:59+00:00"
+    saved_status = {
+        "phase": phase,
+        "protected_revision": max(0, store.revision - 1),
+        "last_success_at": None,
+        "error": {"code": "PIN_WAIT", "detail": "Waiting for Telegram"},
+    }
+    journal = SimpleNamespace(
+        get_many=Mock(
+            return_value={"config": {"enabled": enabled}, "status": saved_status}
+        )
+    )
+    service.replica = SimpleNamespace(journal=journal)
+
+    result = service.protection_status(store)
+
+    assert result["state"] == "protected"
+    assert result["independent_backup"] == {
+        "enabled": enabled,
+        "phase": phase if enabled else None,
+        "protected_revision": saved_status["protected_revision"] if enabled else None,
+        "last_success_at": None,
+        "error": saved_status["error"] if enabled else None,
+    }
+    journal.get_many.assert_called_once_with({"config": {}, "status": {}})
+
+
+def test_database_status_retains_independent_confirmation_without_history_lookup(
+    snapshot_source,
+):
+    service, store, _backend = snapshot_source
+    confirmed_at = "2026-11-11T15:02:47+00:00"
+    service._last_success_at = "2026-11-03T06:17:59+00:00"
+    service.replica = SimpleNamespace(
+        journal=SimpleNamespace(
+            get_many=lambda _defaults: {
+                "config": {"enabled": True},
+                "status": {
+                    "phase": "protected",
+                    "protected_revision": store.revision,
+                    "last_success_at": confirmed_at,
+                    "error": None,
+                },
+            }
+        )
+    )
+
+    result = service.protection_status(store)
+
+    assert result["independent_backup"] == {
+        "enabled": True,
+        "phase": "protected",
+        "protected_revision": store.revision,
+        "last_success_at": confirmed_at,
+        "error": None,
+    }
+    assert result["last_success_at"] == confirmed_at
+
+
 def test_owner_renewal_waits_for_open_catalog_transactions():
     from tgdrive.storage.mongo import MongoBackend
 

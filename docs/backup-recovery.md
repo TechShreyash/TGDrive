@@ -55,6 +55,13 @@ protection; it does not by itself confirm a Telegram backup. Check **Last
 Confirmed Telegram Backup** and verify its pin. A byte counter
 at 100% can still be waiting for verification/publication.
 
+When independent protection is enabled, check that channel's current backup
+confirmation, pending work and errors separately from main-channel backup
+history. An old unverified main-channel archive can remain in history even after
+a newer independent backup succeeds; it does not by itself mean current
+protection failed. Keep the old archive and its evidence intact. Current
+waiting or error states still need attention.
+
 `pin_verified_at` records when a recovery pin was checked, not a continuous
 guarantee that it remains current. An **unverified** discovery status can mean a
 changed pin or unavailable Telegram access; it does not establish archive

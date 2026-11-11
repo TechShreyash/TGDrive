@@ -140,6 +140,13 @@ export interface PublicConfig {
     timezone?: string;
 }
 export interface DriveProtection {
+    independent_backup?: {
+        enabled: boolean;
+        phase: string | null;
+        protected_revision: number | null;
+        last_success_at: string | null;
+        error: { code?: string; detail?: string } | null;
+    };
     backend?: "mongodb";
     backup_error?: string | null;
     recovery_required?: boolean;

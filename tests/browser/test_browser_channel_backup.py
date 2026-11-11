@@ -577,3 +577,81 @@ def test_slow_backup_poll_updates_progress_before_starting_the_next_request(
         for route in held:
             route.fulfill(json=payload)
         page.unroute("**/api/v1/replica", delay_status)
+
+
+@pytest.mark.parametrize(
+    "phase,has_prior",
+    [
+        ("protected", True),
+        ("syncing", True),
+        ("waiting", True),
+        ("error", True),
+        ("syncing", False),
+    ],
+)
+def test_independent_backup_scopes_standalone_history(
+    server, desktop, phase, has_prior
+):
+    _, page = desktop
+    problem = (
+        {"code": "PROVIDER_WAIT", "detail": "The backup provider is unavailable"}
+        if phase == "error"
+        else None
+    )
+    page.route(
+        "**/api/v1/status",
+        lambda route: route.fulfill(
+            json={
+                "telegram_ready": True,
+                "admission_paused": False,
+                "backup": [{"status": "unverified"}],
+                "recovery": {
+                    "state": "protected",
+                    "metadata_revision": 84,
+                    "protected_revision": 84,
+                    "last_success_at": "2026-11-03T08:00:00Z",
+                    "independent_backup": {
+                        "enabled": True,
+                        "phase": phase,
+                        "protected_revision": (84 if phase == "protected" else 83)
+                        if has_prior
+                        else 0,
+                        "last_success_at": "2026-11-11T08:00:00Z"
+                        if has_prior
+                        else None,
+                        "error": problem,
+                    },
+                },
+            }
+        ),
+    )
+    login(page, server.url + "/?view=storage")
+    database = page.get_by_role("region", name="Cloud Database", exact=True)
+    expect(database).to_contain_text("Saved to MongoDB")
+    expect(
+        database.get_by_text("Backup discovery unverified", exact=True)
+    ).not_to_be_visible()
+    if has_prior:
+        expect(database.locator(".backup-confirmation-date strong")).to_contain_text(
+            "Nov 11, 2026"
+        )
+    else:
+        expect(database.locator(".backup-confirmation-date")).to_contain_text(
+            "Not confirmed yet"
+        )
+    if phase != "protected":
+        expect(database).to_contain_text(
+            "needs attention"
+            if phase == "error"
+            else "Files are being copied"
+            if phase == "syncing"
+            else "has not confirmed"
+        )
+    database.get_by_text("Main-channel backup history", exact=True).click()
+    expect(database).to_contain_text(
+        "Unverified discovery does not establish archive corruption"
+    )
+    expect(database).to_contain_text("remains downloadable below")
+    expect(
+        database.get_by_role("button", name="Back Up Now", exact=True)
+    ).to_be_enabled()

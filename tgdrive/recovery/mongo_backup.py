@@ -274,8 +274,17 @@ class MongoProtection:
         }
         journal = getattr(getattr(self, "replica", None), "journal", None)
         saved = journal.get_many({"config": {}, "status": {}}) if journal else {}
-        if saved.get("config", {}).get("enabled"):
-            independent = saved["status"]
+        enabled = bool(saved.get("config", {}).get("enabled"))
+        independent = saved.get("status", {}) if enabled else {}
+        # MongoDB ownership above does not establish Telegram backup confirmation.
+        result["independent_backup"] = {
+            "enabled": enabled,
+            "phase": independent.get("phase"),
+            "protected_revision": independent.get("protected_revision"),
+            "last_success_at": independent.get("last_success_at"),
+            "error": independent.get("error"),
+        }
+        if enabled:
             result["last_success_at"] = (
                 independent.get("last_success_at") or self._last_success_at
             )

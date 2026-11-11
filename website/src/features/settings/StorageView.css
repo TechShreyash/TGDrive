@@ -227,3 +227,12 @@
     min-height: 44px;
     margin-inline-end: 20px;
 }
+
+.backup-history-note {
+    margin-block: 16px;
+}
+.backup-history-note summary {
+    cursor: pointer;
+    min-height: 44px;
+    align-content: center;
+}

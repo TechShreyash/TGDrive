@@ -134,9 +134,32 @@ export default function StorageView({
         recovery?.state === "error" ||
         uploadProtection === "attention",
     );
-    const lastBackup = recovery?.last_success_at
-        ? new Date(recovery.last_success_at)
-        : null;
+    const independent = recovery?.independent_backup;
+    const confirmedIndependent = Boolean(
+        independent?.enabled &&
+        independent.phase === "protected" &&
+        !independent.error &&
+        independent.protected_revision != null &&
+        independent.protected_revision >=
+            (recovery?.metadata_revision ?? Infinity) &&
+        independent.last_success_at &&
+        Number.isFinite(Date.parse(independent.last_success_at)),
+    );
+    const priorIndependentSuccess = Boolean(
+        independent?.enabled &&
+        independent.protected_revision != null &&
+        independent.protected_revision > 0 &&
+        independent.last_success_at &&
+        Number.isFinite(Date.parse(independent.last_success_at)),
+    );
+    const confirmedDate = independent?.enabled
+        ? priorIndependentSuccess
+            ? independent.last_success_at
+            : null
+        : status?.backup?.[0]?.status === "confirmed"
+          ? recovery?.last_success_at
+          : null;
+    const lastBackup = confirmedDate ? new Date(confirmedDate) : null;
     const label = loading
         ? "Checking storage…"
         : protectedDrive
@@ -230,7 +253,7 @@ export default function StorageView({
                     Last Confirmed Telegram Backup:{" "}
                     <strong>
                         {lastBackup && !Number.isNaN(lastBackup.getTime())
-                            ? formatTimestamp(recovery?.last_success_at)
+                            ? formatTimestamp(confirmedDate)
                             : "Not confirmed yet"}
                     </strong>
                 </p>
@@ -239,22 +262,47 @@ export default function StorageView({
                     Encrypted recovery files are created in the background.
                     Unfinished uploads still need their local files.
                 </p>
-                {unverifiedBackup && (
-                    <Alert
-                        color="yellow"
-                        variant="light"
-                        title="Backup discovery unverified"
-                        icon={<AlertCircle size={18} aria-hidden="true" />}
-                        role="status"
-                    >
-                        TGDrive could not verify the latest backup as the
-                        channel’s current pin. This does not establish that the
-                        archive is corrupt. Keep existing backups and your
-                        ENCRYPTION_KEY. If a local copy is available, download
-                        it below. Use Back Up Now to publish a fresh recovery
-                        point.
-                    </Alert>
+                {independent?.enabled && !confirmedIndependent && (
+                    <p role="status" className="backup-safety-note">
+                        {independent.error
+                            ? "The independent Telegram backup needs attention."
+                            : independent.phase === "syncing"
+                              ? "Files are being copied to the independent backup channel."
+                              : "The independent Telegram backup has not confirmed the current revision yet."}
+                        {independent.error?.detail &&
+                            " " + independent.error.detail}
+                    </p>
                 )}
+                {unverifiedBackup &&
+                    (independent?.enabled ? (
+                        <details className="backup-history-note">
+                            <summary>Main-channel backup history</summary>
+                            <p>
+                                The most recent standalone archive has
+                                unverified pin discovery. This is separate from
+                                the current independent backup status shown
+                                above. Unverified discovery does not establish
+                                archive corruption. Keep the archive and your
+                                ENCRYPTION_KEY. An intact local archive remains
+                                downloadable below.
+                            </p>
+                        </details>
+                    ) : (
+                        <Alert
+                            color="yellow"
+                            variant="light"
+                            title="Backup discovery unverified"
+                            icon={<AlertCircle size={18} aria-hidden="true" />}
+                            role="status"
+                        >
+                            TGDrive could not verify the latest backup as the
+                            channel’s current pin. This does not establish that
+                            the archive is corrupt. Keep existing backups and
+                            your ENCRYPTION_KEY. If a local copy is available,
+                            download it below. Use Back Up Now to publish a
+                            fresh recovery point.
+                        </Alert>
+                    ))}
                 <ErrorNotice
                     message={
                         backupError ||
