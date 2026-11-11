@@ -1258,7 +1258,7 @@ export default function PerformancePanel({
                             <span>{healthDetail}</span>
                         </section>
                         <section
-                            className="performance-section performance-account-section"
+                            className="performance-section performance-account-section performance-account-capacity"
                             aria-labelledby="account-load-heading"
                         >
                             <div className="performance-account-heading">
@@ -1327,6 +1327,25 @@ export default function PerformancePanel({
                                                                     account.combined_limit
                                                                 }
                                                             </small>
+                                                            {account.combined_limit >
+                                                                0 && (
+                                                                <meter
+                                                                    className="performance-account-meter"
+                                                                    min={0}
+                                                                    max={
+                                                                        account.combined_limit
+                                                                    }
+                                                                    value={
+                                                                        account.uploads +
+                                                                        account.downloads
+                                                                    }
+                                                                    aria-label={
+                                                                        "Media operations for " +
+                                                                        account.name
+                                                                    }
+                                                                    aria-valuetext={`${account.uploads + account.downloads} active of ${account.combined_limit} configured`}
+                                                                />
+                                                            )}
                                                         </td>
                                                         <td>
                                                             {typeof account
@@ -1377,6 +1396,30 @@ export default function PerformancePanel({
                                                                       " requests waiting"
                                                                     : "No request sample"}
                                                             </small>
+                                                            {account.requests &&
+                                                                account.requests
+                                                                    .effective_limit >
+                                                                    0 && (
+                                                                    <meter
+                                                                        className="performance-account-meter"
+                                                                        min={0}
+                                                                        max={
+                                                                            account
+                                                                                .requests
+                                                                                .effective_limit
+                                                                        }
+                                                                        value={
+                                                                            account
+                                                                                .requests
+                                                                                .active
+                                                                        }
+                                                                        aria-label={
+                                                                            "Part requests for " +
+                                                                            account.name
+                                                                        }
+                                                                        aria-valuetext={`${account.requests.active} active of ${account.requests.effective_limit} effective limit`}
+                                                                    />
+                                                                )}
                                                         </td>
                                                         <td>
                                                             {account.requests

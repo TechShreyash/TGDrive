@@ -453,6 +453,47 @@
 .performance-page .performance-account-section {
     padding: 20px 22px;
 }
+.performance-page .performance-account-capacity {
+    grid-column: 1 / -1;
+}
+.performance-page .performance-account-capacity .performance-table {
+    min-width: 900px;
+}
+.performance-page
+    .performance-account-capacity
+    .performance-table
+    th:first-child {
+    min-width: 190px;
+    width: 20%;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+.performance-page .performance-account-capacity .performance-table :is(td, th) {
+    vertical-align: top;
+    padding: 14px 12px;
+    line-height: 1.5;
+}
+.performance-page .performance-account-meter {
+    display: block;
+    width: 100%;
+    height: 6px;
+    margin-top: 8px;
+}
+.performance-page .performance-account-meter::-webkit-meter-bar {
+    border: 0;
+    border-radius: 999px;
+    background: var(--monitor-track);
+}
+.performance-page .performance-account-meter::-webkit-meter-optimum-value,
+.performance-page .performance-account-meter::-webkit-meter-suboptimum-value,
+.performance-page
+    .performance-account-meter::-webkit-meter-even-less-good-value {
+    border-radius: 999px;
+    background: var(--action);
+}
+.performance-page .performance-account-meter::-moz-meter-bar {
+    background: var(--action);
+}
 .performance-page .performance-account-heading h3,
 .performance-page .performance-account-section > h3 {
     margin: 0;

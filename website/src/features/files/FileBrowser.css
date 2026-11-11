@@ -388,13 +388,13 @@
     height: 5px;
     border-radius: 999px;
     overflow: hidden;
-    background: #181b22;
+    background: #f1f5f9;
     pointer-events: none;
 }
 .file-playback-progress > span {
     display: block;
     height: 100%;
-    background: #7aa7ff;
+    background: #2563eb;
     border-radius: inherit;
 }
 .file-list-thumbnail .file-playback-progress {
@@ -1420,9 +1420,6 @@
     width: 100%;
     animation: none;
 }
-.file-skeleton[data-layout="grid"] {
-    grid-template-columns: repeat(auto-fill, 200px);
-}
 .file-skeleton[data-layout="list"] {
     display: flex !important;
     flex-direction: column !important;
@@ -1614,10 +1611,10 @@
     }
 }
 
-/* Bound desktop cards so wide or sparse folders keep a compact footprint. */
+/* Fill each row while retaining empty tracks in sparse folders. */
 .file-grid > ul,
 .file-skeleton[data-layout="grid"] {
-    grid-template-columns: repeat(auto-fill, 200px);
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 12px;
     align-items: start;
 }
@@ -1647,6 +1644,9 @@
 .file-grid .file-row[data-kind="folder"] .file-tile-preview {
     display: none;
 }
+.file-grid .file-row[data-kind="folder"] .name-cell {
+    position: static;
+}
 .file-grid .file-row[data-kind="folder"] .name-cell-content {
     grid-template-columns: 24px minmax(0, 1fr);
     align-items: center;
@@ -1663,7 +1663,32 @@
     height: 24px;
 }
 .file-grid .file-row[data-kind="folder"] .file-item-status {
-    position: static;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    gap: 4px;
+}
+.file-grid .file-row[data-kind="folder"] .file-status-label,
+.file-grid
+    .file-row[data-kind="folder"]
+    .file-status-label
+    + .file-status-label {
+    width: 14px;
+    height: 14px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+}
+.file-grid .file-row[data-kind="folder"] .file-status-label::after {
+    inset: 0;
+}
+.file-grid
+    .file-row[data-kind="folder"]:has(.file-status-label:nth-child(3))
+    .name-cell-content {
+    padding-right: 64px;
 }
 .file-grid .file-row[data-kind="folder"] .size-cell {
     min-height: 0;

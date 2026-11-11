@@ -417,6 +417,23 @@
     grid-column: 1 / -1;
     margin: 0;
 }
+.performance-explanation > .performance-detail-note > .performance-facts {
+    width: 100%;
+    max-width: 30rem;
+    gap: 0;
+    margin-block: 12px;
+}
+.performance-explanation > .performance-detail-note > .performance-facts > div {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 8px 20px;
+    padding-block: 6px;
+    border-bottom: 1px solid var(--line-subtle);
+}
+.performance-explanation > .performance-detail-note > .performance-facts dd {
+    text-align: end;
+    white-space: nowrap;
+}
 .cache-inventory-toolbar {
     display: flex;
     align-items: center;

@@ -316,6 +316,128 @@ def test_storage_measurements_distinguish_guest_backing_and_headroom(
             )
 
 
+@pytest.mark.parametrize("width", [1440, 1920, 390, 320])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_performance_measurements_keep_labels_with_their_values(
+    server, desktop, width, theme
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 1080})
+    page.emulate_media(reduced_motion="reduce")
+    page.add_init_script(f"localStorage.setItem('tgdrive.appearance', '{theme}')")
+    login(page, server.url)
+    snapshot = page.request.get(server.url + "/api/v1/performance").json()
+    now = time.time()
+    snapshot["traffic"]["at"] = now
+    snapshot["diagnosis"] = {
+        "sampled_at": now,
+        "window_seconds": 30,
+        "observed_seconds": 27,
+        "stale_after_seconds": 60,
+        "state": "idle",
+        "workload": {
+            "playback_requests": 0,
+            "download_requests": 0,
+            "unknown_file_requests": 0,
+            "upload_requests": 0,
+        },
+        "telegram_inbound_bytes_per_second": 0,
+        "http_delivered_bytes_per_second": 0,
+        "cache_hits": None,
+        "cache_misses": 0,
+        "constraints": [],
+    }
+    template = snapshot["telegram"]["accounts"][0]
+    names = ["storage-bot-8066775295", "storage-bot-8015449640"]
+    snapshot["telegram"]["accounts"] = [
+        {
+            **template,
+            "name": name,
+            "uploads": 1 if index == 0 else 0,
+            "downloads": 0,
+            "combined_limit": 3,
+            "cooldown_seconds": 0,
+            "requests": {
+                "active": 4,
+                "queued": 0,
+                "configured_limit": 8,
+                "effective_limit": 8,
+                "configured_parts_per_second": 48,
+                "effective_parts_per_second": 48,
+                "floods": 0,
+                "failed": 0,
+                "completed": 1,
+                "bytes": 1024,
+                "upload_bytes": 1024,
+                "download_bytes": 0,
+            }
+            if index == 0
+            else None,
+        }
+        for index, name in enumerate(names)
+    ]
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    activity = page.get_by_role("region", name="Current activity", exact=True)
+    activity.get_by_text("Measurements and scope", exact=True).click()
+    facts = activity.locator(":scope > details > .performance-facts")
+    expect(facts.locator(":scope > div")).to_have_count(8)
+    expect(facts.get_by_role("definition")).to_have_text(
+        ["0", "0", "0", "0", "0 B/s", "0 B/s", "Unavailable", "0"]
+    )
+    assert facts.bounding_box()["width"] <= 481
+    for row in facts.locator(":scope > div").all():
+        label = row.locator("dt").bounding_box()
+        value = row.locator("dd").bounding_box()
+        assert value["x"] >= label["x"] + label["width"] + 10
+        assert abs(value["y"] - label["y"]) <= 8
+        assert row.evaluate("node => getComputedStyle(node).borderBottomWidth") == "1px"
+    page.screenshot(
+        path=ARTIFACTS / f"performance-measurement-rows-{width}-{theme}.png",
+        full_page=True,
+        animations="disabled",
+    )
+    page.get_by_role("tab", name="Accounts", exact=True).click()
+    accounts = page.get_by_role("region", name="Account capacity", exact=True)
+    panel = page.get_by_role("tabpanel", name="Accounts", exact=True)
+    assert accounts.bounding_box()["width"] == pytest.approx(
+        panel.bounding_box()["width"], abs=2
+    )
+    queue = page.get_by_role("region", name="Waiting for Telegram", exact=True)
+    assert queue.bounding_box()["y"] >= (
+        accounts.bounding_box()["y"] + accounts.bounding_box()["height"]
+    )
+    meter = accounts.get_by_role("meter", name="Media operations for " + names[0])
+    expect(meter).to_have_attribute("value", "1")
+    expect(meter).to_have_attribute("max", "3")
+    requests = accounts.get_by_role("meter", name="Part requests for " + names[0])
+    expect(requests).to_have_attribute("value", "4")
+    expect(requests).to_have_attribute("max", "8")
+    missing = accounts.locator("tbody tr").nth(1)
+    expect(missing).to_contain_text("No request sample")
+    expect(
+        missing.get_by_role("meter", name="Part requests for " + names[1])
+    ).to_have_count(0)
+    if width > 720:
+        for name in names:
+            assert (
+                accounts.get_by_role(
+                    "rowheader", name=name, exact=False
+                ).bounding_box()["width"]
+                >= 190
+            )
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(
+        path=ARTIFACTS / f"performance-fullwidth-accounts-{width}-{theme}.png",
+        full_page=True,
+        animations="disabled",
+    )
+    page.get_by_role("tab", name="Overview", exact=True).click()
+    activity.get_by_role("link", name="View Transfers", exact=True).click()
+    expect(page).to_have_url(server.url + "/?view=activity")
+    expect(page.get_by_role("heading", name="Transfers", exact=True)).to_be_visible()
+
+
 def test_performance_explanation_without_backend_support(server, desktop):
     _, page = desktop
     login(page, server.url)

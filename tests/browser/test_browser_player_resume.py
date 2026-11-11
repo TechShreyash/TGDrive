@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import time
 from typing import Any
 from urllib.parse import urljoin
@@ -759,12 +760,26 @@ def test_resumed_notice_waits_while_start_over_has_keyboard_focus(server, deskto
 
 @pytest.mark.parametrize("layout", ["Grid view", "List view"])
 @pytest.mark.parametrize("theme", ["light", "dark"])
-@pytest.mark.parametrize("new_position", [90, 0])
+@pytest.mark.parametrize("new_position", [90, 1.2, 0])
 def test_thumbnail_position_uses_one_batch_and_keeps_newer_confirmed_event(
     server, desktop, layout, new_position, theme
 ):
     _, page = desktop
     held, media = [], []
+    poster = page.evaluate("""() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 320; canvas.height = 180;
+      const paint = canvas.getContext('2d');
+      paint.fillStyle = '#050505'; paint.fillRect(0, 0, 160, 180);
+      paint.fillStyle = '#fafafa'; paint.fillRect(160, 0, 160, 180);
+      return canvas.toDataURL('image/png').split(',')[1];
+    }""")
+    page.route(
+        "**/api/v1/thumbnail?**",
+        lambda route: route.fulfill(
+            body=base64.b64decode(poster), content_type="image/png"
+        ),
+    )
     page.route("**/api/v1/video-progress/summaries", lambda route: held.append(route))
     page.on(
         "request",
@@ -777,6 +792,7 @@ def test_thumbnail_position_uses_one_batch_and_keeps_newer_confirmed_event(
         page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
     file = page.get_by_role("button", name="multitrack.mkv", exact=True)
     card = file.locator("xpath=ancestor::*[@data-item-id][1]")
+    expect(card.locator(".file-tile-preview img")).to_be_visible()
     identity = card.get_attribute("data-item-id")
     assert identity
     deadline = time.monotonic() + 5
@@ -798,9 +814,11 @@ def test_thumbnail_position_uses_one_batch_and_keeps_newer_confirmed_event(
         "meter", name="Saved playback position for multitrack.mkv", exact=True
     )
     if new_position:
-        expect(meter).to_have_attribute("value", "90")
+        expect(meter).to_have_attribute("value", str(new_position))
         expect(meter).to_have_attribute("max", "120")
-        expect(meter).to_have_attribute("aria-valuetext", "1:30 of 2:00")
+        expect(meter).to_have_attribute(
+            "aria-valuetext", "1:30 of 2:00" if new_position == 90 else "0:01 of 2:00"
+        )
     else:
         expect(meter).to_have_count(0)
     assert card.bounding_box()["height"] == pytest.approx(height)
@@ -822,9 +840,9 @@ def test_thumbnail_position_uses_one_batch_and_keeps_newer_confirmed_event(
           requestAnimationFrame(() => requestAnimationFrame(resolve)))"""
     )
     if new_position:
-        expect(meter).to_have_attribute("value", "90")
+        expect(meter).to_have_attribute("value", str(new_position))
         expect(card.locator(".file-playback-progress > span")).to_have_attribute(
-            "style", "width: 75%;"
+            "style", "width: 75%;" if new_position == 90 else "width: 1%;"
         )
         contrast = card.locator(".file-playback-progress").evaluate("""rail => {
           const luminance = color => {
@@ -840,6 +858,9 @@ def test_thumbnail_position_uses_one_batch_and_keeps_newer_confirmed_event(
           const fillStyle = getComputedStyle(rail.firstElementChild);
           const fill = fillStyle.backgroundColor;
           return {ratio:(luminance(fill)+.05)/(luminance(track)+.05),track,fill,
+                trackOnBlack:(luminance(track)+.05)/.05,
+                fillOnBlack:(luminance(fill)+.05)/.05,
+                fillOnWhite:1.05/(luminance(fill)+.05),
                 height:rail.getBoundingClientRect().height,
                 cssHeight:parseFloat(style.height),
                 left:parseFloat(style.left),right:parseFloat(style.right),
@@ -847,9 +868,12 @@ def test_thumbnail_position_uses_one_batch_and_keeps_newer_confirmed_event(
                 fillRadius:parseFloat(fillStyle.borderRadius),shadow:style.boxShadow,
                 overflow:style.overflow};
         }""")
-        assert contrast["track"] == "rgb(24, 27, 34)"
-        assert contrast["fill"] == "rgb(122, 167, 255)"
-        assert contrast["ratio"] >= 7
+        assert contrast["track"] == "rgb(241, 245, 249)"
+        assert contrast["fill"] == "rgb(37, 99, 235)"
+        assert max(contrast["ratio"], 1 / contrast["ratio"]) >= 4.5
+        assert contrast["trackOnBlack"] >= 10
+        assert contrast["fillOnBlack"] >= 3
+        assert contrast["fillOnWhite"] >= 3
         inset = 4 if layout == "List view" else 8
         assert contrast["left"] == inset
         assert contrast["right"] == inset
@@ -862,7 +886,8 @@ def test_thumbnail_position_uses_one_batch_and_keeps_newer_confirmed_event(
         assert contrast["cssHeight"] == thickness
         assert contrast["height"] == pytest.approx(thickness, abs=0.15)
         page.screenshot(
-            path=ARTIFACTS / f"thumbnail-position-{theme}-{layout.split()[0]}.png",
+            path=ARTIFACTS
+            / f"thumbnail-position-{theme}-{layout.split()[0]}-{new_position}.png",
             full_page=True,
         )
     else:

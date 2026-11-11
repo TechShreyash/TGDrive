@@ -369,7 +369,7 @@ export default function PerformanceExplanation({
                 </p>
             </details>
             <div className="performance-activity-actions">
-                <a className="secondary-button" href="/?view=transfers">
+                <a className="secondary-button" href="/?view=activity">
                     View Transfers
                 </a>
                 <a

@@ -395,7 +395,8 @@ def test_long_file_cards_and_compact_list_thumbnails(server, desktop, width, the
         identities[:] = [item["id"] for item in items]
         data.update(
             items=[
-                {**item, "name": name} for item, name in zip(items, names, strict=True)
+                {**item, "name": name, "starred": True}
+                for item, name in zip(items, names, strict=True)
             ],
             total=2,
             next_cursor=None,
@@ -432,6 +433,9 @@ def test_long_file_cards_and_compact_list_thumbnails(server, desktop, width, the
     )
     choose_view(page, "Grid view")
     expect(first.locator(".file-tile-preview img")).to_be_visible()
+    badge = first.locator(".file-status-starred")
+    expect(badge).to_be_visible()
+    assert badge.evaluate("node => getComputedStyle(node).borderTopWidth") == "1px"
     title = first.get_by_role("button", name=names[0], exact=True)
     expect(title).to_have_attribute("title", names[0])
     assert title.evaluate("node => getComputedStyle(node).webkitLineClamp") == "2"
@@ -442,8 +446,8 @@ def test_long_file_cards_and_compact_list_thumbnails(server, desktop, width, the
     )
     assert abs(preview["width"] / preview["height"] - 16 / 9) < 0.03
     if width > 720:
-        assert 180 <= card["width"] <= 200
-        assert card["height"] <= card["width"]
+        assert 180 <= card["width"] <= 240
+        assert card["height"] <= card["width"] + 24
     else:
         assert 130 <= card["width"] <= 190
     assert footer["y"] >= title.bounding_box()["y"] + title.bounding_box()["height"]
@@ -503,6 +507,14 @@ def test_root_mixed_cards_keep_compact_desktop_bounds(server, desktop, width, th
         first_folder = next(item for item in data["items"] if item["type"] == "folder")
         first_folder["name"] = folder_name
         first_folder["starred"] = True
+        first_folder["read_only"] = width == 320
+        short_folder = next(
+            item
+            for item in data["items"]
+            if item["type"] == "folder" and item is not first_folder
+        )
+        short_folder["name"] = "Short folder"
+        short_folder["starred"] = True
         route.fulfill(response=response, json=data)
 
     page.route(NODES, listing)
@@ -510,29 +522,68 @@ def test_root_mixed_cards_keep_compact_desktop_bounds(server, desktop, width, th
     choose_view(page, "Grid view")
     rows = page.locator(".file-grid .file-row")
     expect(rows).to_have_count(4)
+    folder_row = rows.filter(has=page.get_by_text(folder_name, exact=True))
+    folder_id = folder_row.get_attribute("data-item-id")
+    assert folder_id
+    if width != 1440:
+        assert page.request.post(
+            server.url + "/api/v1/shares",
+            data={"path": "/" + folder_id, "expires_in_days": 7},
+        ).ok
+        page.reload()
+        expect(folder_row.locator(".file-status-shared")).to_be_visible()
     for row in rows.all():
         box = row.bounding_box()
         folder = row.locator('.file-tile-preview[data-kind="folder"]')
         if width > 720:
-            assert 180 <= box["width"] <= 200
+            assert 180 <= box["width"] <= 240
         if folder.count():
             expect(folder).not_to_be_visible()
             assert 70 <= box["height"] <= 90
             expect(row.locator(".file-kind-icon")).to_be_visible()
+            status = row.locator(".file-item-status")
+            if status.count():
+                status_box = status.bounding_box()
+                menu_icon = row.locator("summary svg").bounding_box()
+                assert status_box["y"] + status_box["height"] <= menu_icon["y"]
             if width <= 720:
                 assert box["width"] > 260
                 name = row.locator(".file-name").bounding_box()
                 menu = row.locator("summary").bounding_box()
                 assert name["x"] + name["width"] <= menu["x"] - 4
         elif width > 720:
-            assert box["height"] <= box["width"]
+            assert box["height"] <= box["width"] + 24
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.mouse.move(0, 0)
     page.screenshot(
         path=ARTIFACTS / f"root-mixed-cards-compact-{width}-{theme}.png",
         animations="disabled",
     )
-    folder_row = rows.filter(has=page.get_by_text(folder_name, exact=True))
+    status = folder_row.locator(".file-item-status")
+    expected_status = (
+        "Read-onlyStarredShared"
+        if width == 320
+        else "Starred"
+        if width == 1440
+        else "StarredShared"
+    )
+    expect(status).to_have_text(expected_status)
+    name_box = folder_row.locator(".file-name").bounding_box()
+    status_box = status.bounding_box()
+    menu_icon = folder_row.locator("summary svg").bounding_box()
+    assert status_box["x"] >= name_box["x"] + name_box["width"]
+    assert status_box["y"] + status_box["height"] <= menu_icon["y"]
+    for badge in status.locator(".file-status-label").all():
+        style = badge.evaluate("""node => {
+          const style = getComputedStyle(node);
+          return {background:style.backgroundColor,shadow:style.boxShadow,
+            border:style.borderTopWidth};
+        }""")
+        assert style == {
+            "background": "rgba(0, 0, 0, 0)",
+            "shadow": "none",
+            "border": "0px",
+        }
     folder_row.locator("summary").click()
     expect(folder_row.locator(".action-menu")).to_be_visible()
     page.keyboard.press("Escape")
@@ -540,6 +591,89 @@ def test_root_mixed_cards_keep_compact_desktop_bounds(server, desktop, width, th
     page.get_by_role("checkbox", name="Select " + folder_name, exact=True).check()
     expect(folder_row).to_have_class("file-row selected")
     assert 70 <= folder_row.bounding_box()["height"] <= 90
+
+
+@pytest.mark.parametrize("width", [1536, 1920])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_grid_fills_available_width_without_stretching_sparse_folders(
+    server, desktop, width, theme
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 1080})
+    page.emulate_media(reduced_motion="reduce")
+    page.add_init_script(
+        f"localStorage.setItem('tgdrive.appearance', '{theme}');"
+        "localStorage.setItem('tgdrive.file-view', 'grid');"
+    )
+    items = [
+        {
+            "id": f"responsive-recent-{index}",
+            "name": f"A recent video with a long descriptive filename {index}.mkv",
+            "type": "file",
+            "path": "/",
+            "size": 1024,
+            "parent_names": ["Preview samples"],
+            "active_at": "2026-11-03T12:00:00Z",
+        }
+        for index in range(6)
+    ]
+    page.route(
+        "**/api/v1/recent?**",
+        lambda route: route.fulfill(json={"items": items, "next_cursor": None}),
+    )
+    login(page, server.url)
+    page.goto(server.url + "/?view=recent")
+    choose_view(page, "Grid view")
+    grid = page.get_by_role("list", name="Files and folders", exact=True)
+    cards = grid.locator(":scope > .file-row")
+    expect(cards).to_have_count(6)
+    tracks = grid.evaluate("""element => {
+      const style = getComputedStyle(element);
+      const columns = style.gridTemplateColumns.split(' ').map(parseFloat);
+      return {columns,gap:parseFloat(style.columnGap),
+        width:element.getBoundingClientRect().width};
+    }""")
+    assert len(tracks["columns"]) >= 6
+    assert sum(tracks["columns"]) + tracks["gap"] * (
+        len(tracks["columns"]) - 1
+    ) == pytest.approx(tracks["width"], abs=1)
+    first = cards.first.bounding_box()
+    for card in cards.all():
+        bounds = card.bounding_box()
+        assert 180 <= bounds["width"] <= 240
+        assert bounds["y"] == pytest.approx(first["y"], abs=1)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(
+        path=ARTIFACTS / f"responsive-recent-six-{width}-{theme}.png",
+        animations="disabled",
+    )
+
+    def sparse(route):
+        response = route.fetch()
+        data = response.json()
+        data.update(items=items[:2], total=2, next_cursor=None)
+        route.fulfill(response=response, json=data)
+
+    page.route(NODES, sparse)
+    page.goto(server.url)
+    expect(cards).to_have_count(2)
+    assert cards.first.bounding_box()["width"] == pytest.approx(first["width"], abs=1)
+    page.screenshot(
+        path=ARTIFACTS / f"responsive-sparse-two-{width}-{theme}.png",
+        animations="disabled",
+    )
+    held = []
+    page.route(NODES, lambda route: held.append(route))
+    with page.expect_request(NODES):
+        page.reload(wait_until="domcontentloaded")
+    skeleton = page.locator('.file-skeleton[data-layout="grid"]')
+    expect(skeleton).to_be_visible()
+    skeleton_columns = skeleton.evaluate(
+        "node => getComputedStyle(node).gridTemplateColumns.split(' ').map(parseFloat)"
+    )
+    assert skeleton_columns == pytest.approx(tracks["columns"], abs=1)
+    for route in held:
+        route.continue_()
 
 
 def test_sort_direction_and_trash_original_location_work_in_both_views(server, desktop):
