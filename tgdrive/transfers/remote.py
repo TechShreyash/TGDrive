@@ -31,6 +31,7 @@ from tgdrive.storage.capacity import (
 )
 
 if TYPE_CHECKING:
+    from tgdrive.transfers.bandwidth import FileBandwidth
     from tgdrive.transfers.remote_ranges import RangePolicy
 
 DEFAULT_MAX_BYTES = 4 * 1024 * 1024 * 1024
@@ -319,6 +320,7 @@ class RemoteClient:
         session_factory: SessionFactory | None = None,
         range_policy: RangePolicy | None = None,
         download_concurrency: int = 2,
+        bandwidth: FileBandwidth | None = None,
     ) -> None:
         if max_bytes <= 0:
             raise ValueError("max_bytes must be positive")
@@ -339,6 +341,7 @@ class RemoteClient:
             )
         )
         self.allow_private = allow_private
+        self.bandwidth = bandwidth
         self.max_bytes = max_bytes
         self.min_free_bytes = min_free_bytes
         self.backing_capacity_dir = backing_capacity_dir
@@ -869,9 +872,15 @@ class RemoteClient:
         if ticket is not None:
             await self._cancelable(ticket.pace(), cancel_event)
         size = self.chunk_size if limit is None else limit
+        if self.bandwidth is not None:
+            size = min(size, self.bandwidth.download.quantum())
         if ticket is not None and not ticket.full_speed:
             size = min(size, WARM_READ_SIZE)
         result = await self._cancelable(content.read(size), cancel_event)
+        if self.bandwidth is not None:
+            await self._cancelable(
+                self.bandwidth.download.acquire(len(result)), cancel_event
+            )
         if ticket is not None:
             ticket.received(len(result))
         return result

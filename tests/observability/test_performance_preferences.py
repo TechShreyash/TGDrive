@@ -119,9 +119,13 @@ def test_owner_api_resource_policy_and_share_capability(tmp_path, mongo_backend)
                 "timezone",
                 "auto_preload",
                 "upload_split_mib",
+                "upload_limit_bytes_per_second",
+                "download_limit_bytes_per_second",
+                "cache_ttl_seconds",
                 "cache_disk_limit_bytes",
                 "cache_memory_limit_bytes",
                 "staging_limit_bytes",
+                "stream_memory_limit_bytes",
                 "protected_free_bytes",
             }
             assert result.json()["documentation_url"].endswith("/docs/configuration.md")
@@ -476,6 +480,7 @@ async def test_owner_resource_limits_persist_apply_and_restart(tmp_path, mongo_b
             "cache_disk_limit_bytes": 10 * 1024**3,
             "cache_memory_limit_bytes": 256 * 1024**2,
             "staging_limit_bytes": 16 * 1024**3,
+            "stream_memory_limit_bytes": 256 * 1024**2,
         }
         assert before["auto_free_space_reserve"] == {
             "minimum_bytes": 1024**3,

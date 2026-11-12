@@ -15,11 +15,9 @@ def setup_counters(tmp_path, monkeypatch, *, quota="200000 100000"):
         "eth0 00000000 0100000A 0003 0 0 100 00000000\n"
     )
     network(proc, 1000, 2000)
+    monkeypatch.setattr("tgdrive.core.system_resources.os.cpu_count", lambda: 8)
     monkeypatch.setattr(
-        "tgdrive.observability.resource_metrics.os.cpu_count", lambda: 8
-    )
-    monkeypatch.setattr(
-        "tgdrive.observability.resource_metrics.os.sched_getaffinity",
+        "tgdrive.core.system_resources.os.sched_getaffinity",
         lambda _: set(range(8)),
     )
     now = [100.0]
@@ -69,6 +67,19 @@ def test_missing_cgroup_uses_host_busy_cpu_not_load_average(tmp_path, monkeypatc
     assert metrics.sample()["cpu"] == {"percent": 50, "scope": "host"}
 
 
+def test_changing_cpu_capacity_requires_a_fresh_rate_window(tmp_path, monkeypatch):
+    metrics, _proc, cgroup, now = setup_counters(tmp_path, monkeypatch)
+    metrics.sample()
+    now[0] += 3
+    (cgroup / "cpu.max").write_text("50000 100000")
+    (cgroup / "cpu.stat").write_text("usage_usec 2000000")
+    assert metrics.sample()["cpu"] == {
+        "percent": None,
+        "scope": "cgroup",
+        "capacity_cores": 0.5,
+    }
+
+
 @pytest.mark.parametrize("elapsed", [-3, 40])
 def test_gap_clock_jump_and_reset_do_not_fabricate_resource_rates(
     tmp_path, monkeypatch, elapsed
@@ -93,6 +104,27 @@ def test_unavailable_metrics_are_unknown_not_zero(tmp_path):
     assert value["cpu"]["percent"] is None
     assert not value["network"]["available"]
     assert value["network"]["received_bytes_per_second"] is None
+
+
+def test_snapshot_does_not_present_stale_rates_as_current(tmp_path, monkeypatch):
+    metrics, proc, _cgroup, now = setup_counters(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "tgdrive.observability.resource_metrics.time.time", lambda: now[0]
+    )
+    metrics.sample()
+    now[0] += 3
+    network(proc, 4000, 5000)
+    metrics.sample()
+    assert metrics.snapshot()["network"]["sent_bytes_per_second"] == 1000
+    now[0] += 16
+    snapshot = metrics.snapshot()
+    assert snapshot["sampled_at"] == now[0] - 16
+    assert snapshot["stale_after_seconds"] == 15
+    assert snapshot["network"]["sent_bytes_per_second"] is None
+    assert not snapshot["network"]["available"]
+    assert snapshot["cpu"]["percent"] is None
+    assert snapshot["history"] == metrics.value["history"]
+    assert metrics.value["network"]["sent_bytes_per_second"] == 1000
 
 
 def test_history_retains_measured_resources_without_dashboard_and_expires(
@@ -145,3 +177,39 @@ def test_history_missing_container_memory_is_unknown_and_unlimited_is_not_zero(
     sample = metrics.sample()["history"][-1]
     assert sample["memory_bytes"] == 0
     assert sample["memory_limit_bytes"] is None
+
+
+@pytest.mark.parametrize("hard_limit", ["max", "2097152"])
+def test_history_uses_group_limit_not_the_environment_budget(
+    tmp_path, monkeypatch, hard_limit
+):
+    metrics, proc, cgroup, _now = setup_counters(tmp_path, monkeypatch)
+    (proc / "meminfo").write_text("MemTotal: 1000 kB\nMemAvailable: 100 kB\n")
+    (cgroup / "memory.max").write_text(hard_limit)
+    (cgroup / "memory.current").write_text("100000")
+    sample = metrics.sample()["history"][-1]
+    assert sample["memory_bytes"] == 100000
+    assert sample["memory_limit_bytes"] == (None if hard_limit == "max" else 2097152)
+
+
+def test_legacy_cpu_counter_uses_matching_quota_not_host_busy_time(
+    tmp_path, monkeypatch
+):
+    metrics, proc, cgroup, now = setup_counters(tmp_path, monkeypatch)
+    (proc / "self").mkdir()
+    (proc / "self/cgroup").write_text("4:cpu,cpuacct:/worker")
+    root = cgroup / "cpu,cpuacct"
+    leaf = root / "worker"
+    leaf.mkdir(parents=True)
+    for directory in (root, leaf):
+        (directory / "cpu.cfs_quota_us").write_text("50000")
+        (directory / "cpu.cfs_period_us").write_text("100000")
+        (directory / "cpuacct.usage").write_text("1000000000")
+    metrics.sample()
+    now[0] += 2
+    (leaf / "cpuacct.usage").write_text("1500000000")
+    assert metrics.sample()["cpu"] == {
+        "scope": "cgroup",
+        "percent": 50,
+        "capacity_cores": 0.5,
+    }

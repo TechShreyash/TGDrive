@@ -95,10 +95,9 @@ def test_database_protection_does_not_claim_a_telegram_backup(
     expect(database).not_to_contain_text("Scheduled Automatically")
     if backup_error:
         expect(database.get_by_role("alert")).to_have_text(backup_error)
-    reset = page.locator(".start-new-drive")
-    expect(reset.get_by_role("button")).to_be_disabled()
-    expect(reset).to_contain_text("In-place reset is temporarily unavailable")
-    expect(reset.locator("input,form")).to_have_count(0)
+    expect(page.locator(".start-new-drive")).to_have_count(0)
+    for heading in ["Files in This Drive", "Temporary Storage", "Current Transfers"]:
+        expect(page.get_by_role("heading", name=heading, exact=True)).to_have_count(0)
 
 
 @pytest.mark.parametrize("download_available", [False, True])

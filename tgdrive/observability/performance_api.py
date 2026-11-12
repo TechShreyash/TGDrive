@@ -14,6 +14,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from tgdrive.core.system_resources import cpu_snapshot, memory_snapshot
 from tgdrive.settings.performance_preferences import get_performance_settings
 from tgdrive.storage.capacity import measure_capacity
 
@@ -51,16 +52,11 @@ def system_snapshot(settings):
                 memory[name] = int(value.strip().split()[0]) * 1024
     except OSError, ValueError:
         pass
-    # Container limits matter more than host-wide free memory.
-    for name, filename in (
-        ("cgroup_limit", "memory.max"),
-        ("cgroup_current", "memory.current"),
-    ):
-        try:
-            raw = (Path("/sys/fs/cgroup") / filename).read_text().strip()
-            memory[name] = int(raw) if raw != "max" else None
-        except OSError, ValueError:
-            pass
+    measured_memory = memory_snapshot()
+    memory["cgroup_limit"] = measured_memory["cgroup_limit_bytes"]
+    memory["cgroup_current"] = (
+        measured_memory["used_bytes"] if measured_memory["scope"] == "cgroup" else None
+    )
     try:
         load = list(os.getloadavg())
     except OSError, AttributeError:
@@ -83,6 +79,20 @@ def system_snapshot(settings):
         "load_average": load,
         "disk": disk,
         "staging_budget_bytes": settings.staging_budget_bytes,
+        "resource_summary": {
+            "sampled_at": time.time(),
+            "memory": measured_memory,
+            "cpu": cpu_snapshot(),
+            "storage": {
+                "data": disk["capacity"],
+                "cache": measure_capacity(
+                    settings.resolved_cache_dir,
+                    probe_directory=getattr(
+                        settings, "cache_backing_capacity_dir", None
+                    ),
+                ).as_dict(reserve_bytes=getattr(settings, "min_free_bytes", 0)),
+            },
+        },
     }
 
 
@@ -214,6 +224,8 @@ def register_performance_routes(
         drive = await asyncio.to_thread(statistics) if callable(statistics) else {}
         governor = getattr(runtime, "governor", None)
         database = await asyncio.to_thread(database_snapshot, runtime)
+        server = await asyncio.to_thread(system_snapshot, settings)
+        summary = server.pop("resource_summary")
         return response(
             {
                 "tuning": governor.snapshot() if governor is not None else None,
@@ -238,8 +250,11 @@ def register_performance_routes(
                     "files": [],
                     "pending_writes": 0,
                 },
-                "server": (await asyncio.to_thread(system_snapshot, settings))
-                | request.app.state.traffic.resources.value,
+                "server": server | request.app.state.traffic.resources.snapshot(),
+                "resource_summary": summary,
+                "bandwidth": runtime.bandwidth.snapshot()
+                if getattr(runtime, "bandwidth", None) is not None
+                else None,
                 "drive": drive,
                 "database": database,
                 "traffic": request.app.state.traffic.snapshot(),

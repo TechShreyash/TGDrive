@@ -270,13 +270,22 @@ export function formatTimestamp(
 ): string {
     if (!value) return "—";
     const date = new Date(typeof value === "number" ? value * 1000 : value);
-    return Number.isNaN(date.getTime())
-        ? "—"
-        : new Intl.DateTimeFormat(undefined, {
-              dateStyle: "medium",
-              timeStyle: "long",
-              timeZone: instanceTimezone,
-          }).format(date);
+    if (Number.isNaN(date.getTime())) return "—";
+    const offset = new Intl.DateTimeFormat("en", {
+        timeZone: instanceTimezone,
+        timeZoneName: "longOffset",
+    })
+        .formatToParts(date)
+        .find((part) => part.type === "timeZoneName")!
+        .value.replace(/^GMT/, "UTC");
+    return new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "long",
+        timeZone: instanceTimezone,
+    })
+        .formatToParts(date)
+        .map((part) => (part.type === "timeZoneName" ? offset : part.value))
+        .join("");
 }
 export function formatDate(value: string | number | null | undefined): string {
     if (!value) return "—";
@@ -366,6 +375,7 @@ export interface ManagedClient {
     premium: boolean | null;
     active_leases: number;
     error: string | null;
+    error_code?: string | null;
 }
 export interface StorageCapacity {
     filesystem: {
@@ -382,6 +392,7 @@ export interface StorageCapacity {
         free_bytes: number | null;
     };
     effective: {
+        total_bytes?: number | null;
         available: boolean;
         free_bytes: number | null;
         headroom_bytes: number | null;

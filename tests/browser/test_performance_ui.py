@@ -406,24 +406,22 @@ def test_performance_real_samples_nullable_eta_and_mobile_tables(
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=value))
     login(page, server.url + "/?view=performance")
     expect(
-        page.get_by_role("heading", name="Current activity", exact=True)
+        page.get_by_role("heading", name="Server network", exact=True)
     ).to_be_visible()
-    page.screenshot(path=ARTIFACTS / "performance-load-desktop.png")
     page.get_by_role("tab", name="Accounts", exact=True).click()
+    expect(
+        page.get_by_role("heading", name="Account capacity", exact=True)
+    ).to_be_visible()
     expect(
         page.get_by_role("img", name="Recent Telegram load", exact=False)
     ).to_be_visible()
     page.set_viewport_size({"width": 390, "height": 844})
-    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
-    page.get_by_role("tab", name="Accounts", exact=True).click()
     expect(page.get_by_text("Estimating…", exact=True)).to_be_visible()
-    page.get_by_role(
-        "heading", name="Account capacity", exact=True
-    ).scroll_into_view_if_needed()
-    page.screenshot(path=ARTIFACTS / "performance-load-mobile.png")
+    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
     assert page.locator(".performance-table-wrap").first.evaluate(
-        "el=>el.scrollWidth>el.clientWidth"
+        "n=>n.scrollWidth>n.clientWidth"
     )
+    page.screenshot(path=ARTIFACTS / "performance-load-mobile.png", full_page=True)
 
 
 def test_copy_download_link_is_explicit_public_capability_and_prepare_is_scoped(
@@ -449,9 +447,17 @@ def test_copy_download_link_is_explicit_public_capability_and_prepare_is_scoped(
         .get("timezone", "Asia/Kolkata")
     )
     expiry = page.evaluate(
-        """({value, zone})=>new Intl.DateTimeFormat(undefined,{
-      dateStyle:'medium',timeStyle:'long',timeZone:zone
-    }).format(new Date(value))""",
+        """({value, zone}) => {
+            const date = new Date(value);
+            const offset = new Intl.DateTimeFormat('en', {
+                timeZone: zone, timeZoneName: 'longOffset'
+            }).formatToParts(date).find(p=>p.type==='timeZoneName')
+              .value.replace(/^GMT/,'UTC');
+            return new Intl.DateTimeFormat(undefined, {
+                dateStyle:'medium',timeStyle:'long',timeZone:zone
+            }).formatToParts(date).map(part => part.type==='timeZoneName'
+                ? offset : part.value).join('');
+        }""",
         {"value": link["expires_at"], "zone": zone},
     )
     expect(dialog).to_contain_text("Expires " + expiry)

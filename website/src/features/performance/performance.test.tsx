@@ -40,6 +40,8 @@ export const preferences: PerformancePreferences = {
     timezone: "Asia/Kolkata",
     auto_preload: true,
     upload_split_mib: 2000,
+    upload_limit_bytes_per_second: null,
+    download_limit_bytes_per_second: null,
     cache_disk_limit_bytes: null,
     cache_memory_limit_bytes: null,
     staging_limit_bytes: null,

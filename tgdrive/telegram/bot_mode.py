@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import logging
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -72,6 +73,8 @@ def _progress(record: Any) -> tuple[str, int] | None:
     else:
         return None
     total = record.total
+    if not total:
+        return f"{label} · {_size(record.current)}\n{name}", -3
     percent = min(100, record.current * 100 // total) if total else 0
     return (
         f"{label} {percent}% · {_size(record.current)} of {_size(total)}\n{name}",
@@ -108,6 +111,7 @@ class BotMode:
         self.folder_settings = folder_settings
         self._registered = False
         self._started = False
+        self._answered_strangers: deque[int] = deque(maxlen=1024)
 
     async def start(self) -> None:
         if self._started:
@@ -120,7 +124,7 @@ class BotMode:
         logger.info("Telegram bot mode started")
 
     async def stop(self) -> None:
-        if getattr(self.client, "is_connected", False):
+        if self._started or getattr(self.client, "is_connected", False):
             await self.client.stop()
         self._started = False
         logger.info("Telegram bot mode stopped")
@@ -139,11 +143,21 @@ class BotMode:
 
     async def _help(self, _client: Client, message: Message) -> None:
         value = await self.folder_settings.snapshot()
+        encryption = (
+            "Encryption: on. Files pass through this server and are encrypted "
+            "before storage."
+            if value["encrypt"]
+            else "Encryption: off. Telegram copies files without encrypting them; "
+            "anyone with channel access can read them."
+        )
         await message.reply_text(
             "Send or forward files here to save them to TGDrive.\n\n"
             f"Folder: {value['folder_label']}\n\n"
             "/current_folder · show the folder\n"
             "/set_folder · change it on the website\n\n"
+            f"{encryption}\n\n"
+            "To cancel an encrypted import, reply to its original file with "
+            "/cancel, or open Transfers on the website.\n\n"
             "Tip: send photos as files to keep full quality.",
             reply_markup=self._menu(),
         )
@@ -167,9 +181,37 @@ class BotMode:
         )
 
     async def _cancel(self, _client: Client, message: Message) -> None:
+        reply_id = getattr(getattr(message, "native", None), "reply_to_msg_id", None)
+        text = (
+            "Reply to the original file with /cancel to stop its encrypted import. "
+            "You can also cancel in Transfers on the TGDrive website."
+        )
+        if self.transfers is not None and type(reply_id) is int and reply_id > 0:
+            identity = self._operation_id(message, reply_id)[:32]
+            try:
+                record = self.transfers.registry.get(identity)
+                if record.context.get("source_kind") != "telegram":
+                    raise KeyError(identity)
+                if record.status.value in {"completed", "cancelled"}:
+                    text = "This import has finished. Check Transfers in TGDrive."
+                else:
+                    await self.transfers.cancel_job(identity)
+                    text = (
+                        "Cancellation requested. Transfers in TGDrive shows any "
+                        "remaining cleanup; saved files are not deleted."
+                    )
+            except KeyError:
+                text = (
+                    "No encrypted import matches that file. Check Transfers in "
+                    "TGDrive; direct Telegram copies cannot be cancelled here."
+                )
+            except BackupError, SettingsProblem, TransferError, ValueError:
+                text = (
+                    "This import cannot be cancelled right now. Open Transfers "
+                    "in TGDrive to review its current state."
+                )
         await message.reply_text(
-            "Nothing to cancel here. To stop a running import, cancel it in "
-            "Transfers on the TGDrive website.",
+            text,
             reply_markup=self._menu(),
         )
 
@@ -188,12 +230,11 @@ class BotMode:
         )
 
     async def _unauthorized(self, _client: Client, message: Message) -> None:
-        # Answer each stranger once so the bot cannot be used to send spam.
-        # shortcut: per-process memory, cleared on restart; persist if abused.
-        seen = self.__dict__.setdefault("_answered_strangers", set())
+        # Remember only recent strangers so unsolicited messages cannot grow memory.
+        seen = self._answered_strangers
         if message.from_user.id in seen:
             return
-        seen.add(message.from_user.id)
+        seen.append(message.from_user.id)
         await message.reply_text(
             "This is a private TGDrive bot.\n\n"
             f"Your Telegram user ID is {message.from_user.id}. The owner can "
@@ -221,8 +262,12 @@ class BotMode:
             current = _progress(record)
             if current is None or self.clock() < next_at:
                 return
+            if current == shown:
+                return
             if shown is not None and (
                 current[0].split(" ", 1)[0] == shown[0].split(" ", 1)[0]
+                and current[1] >= 0
+                and shown[1] >= 0
                 and 0 <= current[1] - shown[1] < _EDIT_PERCENT
             ):
                 return
@@ -266,16 +311,7 @@ class BotMode:
             self.active_imports -= 1
 
     async def _import_file(self, _client: Client, message: Message) -> None:
-        source_chat = getattr(
-            getattr(message, "native", None), "chat_id", message.from_user.id
-        )
-        token = self.settings.main_bot_token_value
-        if token is None:
-            raise RuntimeError("Bot mode is not configured")
-        bot_id = token.split(":", 1)[0]
-        operation_id = hashlib.sha256(
-            f"bot:{bot_id}:{source_chat}:{message.id}".encode()
-        ).hexdigest()
+        operation_id = self._operation_id(message)
         copied: Message | None = None
         status: Message | None = None
         metadata_started = False
@@ -284,12 +320,18 @@ class BotMode:
                 check = self.before_write()
                 if inspect.isawaitable(check):
                     await check
+            encrypted = await self.folder_settings.encrypt()
+            if encrypted and self.transfers is None:
+                raise _ImportFailed(
+                    "Encrypted bot uploads are unavailable while the transfer "
+                    "service is not ready. Open TGDrive before resending."
+                )
             path, folder_name = await self.folder_settings.destination()
             if path is None:
                 raise RuntimeError("The upload destination is unavailable")
             # No reply keyboard here: inline buttons are edited in when saved.
             status = await message.reply_text(f"Saving to {folder_name}…")
-            if self.transfers is not None and await self.folder_settings.encrypt():
+            if encrypted:
                 item = await self._encrypted_import(message, path, operation_id, status)
                 await self._saved(message, status, item, path, folder_name)
                 return
@@ -347,7 +389,7 @@ class BotMode:
             elif isinstance(error, BackupError):
                 text = (
                     "Upload paused while drive protection needs attention. "
-                    "Open TGDrive → Storage & Backups, then send this file again."
+                    "Open TGDrive → Storage and Backups, then send this file again."
                 )
             elif isinstance(error, FloodWaitError):
                 text = (
@@ -372,6 +414,19 @@ class BotMode:
             await self._feedback(message, status, text)
             return
         await self._saved(message, status, item, path, folder_name)
+
+    def _operation_id(self, message: Message, message_id: int | None = None) -> str:
+        source_chat = getattr(
+            getattr(message, "native", None), "chat_id", message.from_user.id
+        )
+        token = self.settings.main_bot_token_value
+        if token is None:
+            raise RuntimeError("Bot mode is not configured")
+        bot_id = token.split(":", 1)[0]
+        incoming_id = message.id if message_id is None else message_id
+        return hashlib.sha256(
+            f"bot:{bot_id}:{source_chat}:{incoming_id}".encode()
+        ).hexdigest()
 
     async def _encrypted_import(self, message, path, operation_id, status):
         """Download the forwarded file, then upload it encrypted like a web upload."""

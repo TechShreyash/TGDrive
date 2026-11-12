@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar, cast
@@ -42,6 +43,7 @@ class NativeClient:
     def __init__(self, session: Any, api_id: int, api_hash: str, **options: Any):
         self.options = options
         self.connected = False
+        self._disconnected: asyncio.Future | None = None
         self.authorized = True
         self.sign_ins: list[dict[str, str]] = []
         if isinstance(session, str):
@@ -60,11 +62,21 @@ class NativeClient:
     def is_connected(self) -> bool:
         return self.connected
 
+    @property
+    def disconnected(self):
+        if self._disconnected is None:
+            self._disconnected = asyncio.get_running_loop().create_future()
+        return asyncio.shield(self._disconnected)
+
     async def connect(self) -> None:
+        if self._disconnected is None or self._disconnected.done():
+            self._disconnected = asyncio.get_running_loop().create_future()
         self.connected = True
 
     async def disconnect(self) -> None:
         self.connected = False
+        if self._disconnected is not None and not self._disconnected.done():
+            self._disconnected.set_result(None)
 
     async def is_user_authorized(self) -> bool:
         return self.authorized

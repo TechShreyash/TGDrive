@@ -514,7 +514,13 @@ def register_routes(
                 async for part in request.stream():
                     if len(body) + len(part) > CHUNK_SIZE:
                         raise UploadError("Upload chunk is too large", 413)
-                    body.extend(part)
+                    from tgdrive.web.file_bandwidth import paced_body
+
+                    bandwidth = getattr(get_runtime(request), "bandwidth", None)
+                    async for block in paced_body(
+                        part, bandwidth.download if bandwidth is not None else None
+                    ):
+                        body.extend(block)
             except ClientDisconnect:
                 logger.debug("Client disconnected during upload chunk id=%s", upload_id)
                 return Response(status_code=499)

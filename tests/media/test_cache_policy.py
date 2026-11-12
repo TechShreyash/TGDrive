@@ -390,7 +390,7 @@ async def test_inventory_poll_during_queued_fills_preserves_later_readiness(tmp_
 
 
 @pytest.mark.asyncio
-async def test_current_availability_refresh_shrinks_and_recovers_retention_and_scratch(
+async def test_supplied_pressure_shrinks_scratch_and_reads_recover_only_retention(
     tmp_path, monkeypatch
 ):
     available, now = [8 * BLOCK], [0.0]
@@ -419,6 +419,13 @@ async def test_current_availability_refresh_shrinks_and_recovers_retention_and_s
         now[0] = 4
         assert (await cache.snapshot())["memory"]["effective_max_bytes"] == 8 * BLOCK
         now[0] = 5
+        cache.update_stream_capacity(
+            {
+                "memory_available": 2 * BLOCK,
+                "memory_limit": 256 * BLOCK,
+                "sampled_at": 5.0,
+            }
+        )
         reduced = await cache.snapshot()
         assert reduced["memory"]["bytes"] <= 2 * BLOCK
         assert reduced["memory"]["effective_max_bytes"] == 2 * BLOCK
@@ -429,10 +436,19 @@ async def test_current_availability_refresh_shrinks_and_recovers_retention_and_s
             cache.scratch.release()
         available[0] = 8 * BLOCK
         now[0] = 10
+        cache.update_stream_capacity(
+            {
+                "memory_available": 128 * BLOCK,
+                "memory_limit": 256 * BLOCK,
+                "sampled_at": 10.0,
+            }
+        )
         recovered = await cache.snapshot()
         assert recovered["memory"]["effective_max_bytes"] == 8 * BLOCK
-        assert recovered["memory"]["max_fills"] == 8
-        assert recovered["scratch"]["max_bytes"] == 8 * BLOCK
+        assert recovered["memory"]["max_fills"] == 2
+        assert (
+            recovered["scratch"]["max_bytes"] == 2 * BLOCK
+        )  # No waiting heads: no growth.
         assert recovered["scratch"]["bytes"] == 0
     finally:
         await cache.close()
@@ -647,3 +663,18 @@ async def test_payload_cache_resolves_actual_target_probe_and_preserves_cached_b
     assert status["disk"]["capacity"]["effective"]["available"] is False
     assert status["disk"]["capacity"]["scope"] == "backing_unavailable"
     await cache.close()
+
+
+@pytest.mark.parametrize(
+    "available,expected", [(None, 1024), (0, 0), (400, 100), (8192, 1024)]
+)
+def test_cache_and_scratch_use_shared_effective_memory(
+    monkeypatch, available, expected
+):
+    from tgdrive.media.media_reader import _effective_memory
+
+    monkeypatch.setattr(
+        "tgdrive.media.media_reader.memory_snapshot",
+        lambda: {"available_bytes": available},
+    )
+    assert _effective_memory(1024) == expected

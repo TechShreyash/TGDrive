@@ -38,7 +38,11 @@ from tgdrive.core.config import Settings
 from tgdrive.media.media_scheduler import MediaScheduler
 from tgdrive.telegram.client_identity import IdentityCache, account_identity
 from tgdrive.telegram.client_pool import ClientPool
-from tgdrive.telegram.connection_errors import TelegramConnectionError
+from tgdrive.telegram.connection_errors import (
+    TelegramConnectionError,
+    connection_problem,
+)
+from tgdrive.transfers.bandwidth import payload_timeout, provider_timeout
 from tgdrive.transfers.file_window import FileWindow
 from tgdrive.transfers.tasks import _journalled
 
@@ -456,6 +460,9 @@ class Client:
         self.username: str | None = None
         self._identity_cache = IdentityCache(settings.resolved_data_dir)
         self._identity_task: asyncio.Task | None = None
+        self._connection_task: asyncio.Task | None = None
+        self.connection_error: TelegramConnectionError | None = None
+        self._authenticated_id: int | None = None
         self._identity_pool: ClientPool | None = None
         self._identity_next_refresh = 0.0
         self.identity_retry_at: float | None = None
@@ -490,9 +497,11 @@ class Client:
 
     @property
     def is_connected(self) -> bool:
-        return self.native.is_connected()
+        return self.connection_error is None and self.native.is_connected()
 
     async def start(self) -> None:
+        if self._connection_task is not None and not self._connection_task.done():
+            return
         await self.native.connect()
         try:
             if not await self.native.is_user_authorized():
@@ -505,29 +514,141 @@ class Client:
                         client_name=self.name,
                     )
                 await self.native.sign_in(bot_token=self._token)
-            # Telethon only returns InputPeerUser when input_peer=True.
-            me = cast(types.User | None, await self.native.get_me())
-            if me is None:
-                raise RuntimeError("Telegram did not confirm the authenticated account")
-            if self._token:
-                expected_id = int(self._token.split(":", 1)[0])
-                if not me.bot or me.id != expected_id:
-                    raise RuntimeError("Telegram bot session identity mismatch")
-            elif self._premium:
-                if me.bot or not me.premium:
-                    raise RuntimeError(
-                        "Configured Premium session is not a Premium user account"
-                    )
-                self.name = f"premium-user-{me.id}"
+            me = await self._check_account()
+            self._authenticated_id = me.id
             session_name = getattr(self.native.session, "filename", None)
             if session_name:
                 await asyncio.to_thread(Path(session_name).chmod, 0o600)
             if isinstance(self.native, TelegramClient):
                 await self._refresh_main_endpoint()
             self._start_identity_refresh(seed=me)
+            self.connection_error = None
+            self._connection_task = asyncio.create_task(
+                self._watch_connection(), name=f"telegram-repair-{self.name}"
+            )
         except BaseException:
             await cast(Awaitable[None], self.native.disconnect())
             raise
+
+    async def _check_account(self) -> types.User:
+        # Telethon only returns InputPeerUser when input_peer=True.
+        me = cast(types.User | None, await self.native.get_me())
+        if me is None:
+            raise TelegramConnectionError(
+                "Telegram no longer confirms this account. Open Connections "
+                "and verify its credentials; saved progress is preserved.",
+                "TELEGRAM_CREDENTIALS_REVOKED",
+                client_name=self.name,
+            )
+        if self._authenticated_id is not None and me.id != self._authenticated_id:
+            raise TelegramConnectionError(
+                "Telegram account identity mismatch. Open Connections "
+                "and verify the original account.",
+                "TELEGRAM_CREDENTIALS_REVOKED",
+                client_name=self.name,
+            )
+        if self._token:
+            expected_id = int(self._token.split(":", 1)[0])
+            if not me.bot or me.id != expected_id:
+                raise TelegramConnectionError(
+                    "Telegram bot session identity mismatch. Open Connections "
+                    "and verify its credentials.",
+                    "TELEGRAM_CREDENTIALS_REVOKED",
+                    client_name=self.name,
+                )
+        elif self._premium:
+            if me.bot or not me.premium:
+                raise RuntimeError(
+                    "Configured Premium session is not a Premium user account"
+                )
+            self.name = f"premium-user-{me.id}"
+        return me
+
+    def _repair_failure(self, error: Exception) -> bool:
+        problem = connection_problem(
+            error, "bot" if self._token else "user", client_name=self.name
+        )
+        transient = (
+            isinstance(error, (OSError, TimeoutError))
+            or (isinstance(error, RPCError) and (error.code or 0) >= 500)
+            or isinstance(error, (FloodWaitError, FloodPremiumWaitError))
+        )
+        self.connection_error = problem or TelegramConnectionError(
+            "Telegram transport is unavailable; reconnecting automatically. "
+            "Saved files and upload progress are preserved."
+            if transient
+            else "Telegram connection requires owner verification. Open Connections "
+            "and refresh; saved files and upload progress are preserved.",
+            "TELEGRAM_RECONNECTING" if transient else "TELEGRAM_CONNECTION_UNAVAILABLE",
+            client_name=self.name,
+        )
+        return problem is None and transient
+
+    @_journalled
+    async def _disconnect_transport(self) -> None:
+        # Native disconnect shields its cleanup; cancellation must join it.
+        await cast(Awaitable[None], self.native.disconnect())
+
+    async def _wait_reconnect(self, delay: float) -> None:
+        await asyncio.sleep(delay)
+
+    async def _watch_connection(self) -> None:
+        while True:
+            # This future completes only after native automatic retries finish.
+            try:
+                await self.native.disconnected
+            except Exception as error:
+                if not self._repair_failure(error):
+                    return
+            self.connection_error = TelegramConnectionError(
+                "Telegram transport is unavailable; reconnecting automatically. "
+                "Saved files and upload progress are preserved.",
+                "TELEGRAM_RECONNECTING",
+                client_name=self.name,
+            )
+            delay = 5.0
+            while True:
+                wait = delay
+                if self._identity_pool is not None:
+                    deadline = await self._identity_pool.account_retry_at(self.name)
+                    wait = max(wait, deadline - time.time())
+                await self._wait_reconnect(wait)
+                try:
+                    # Retire update tasks/exported senders from the dead connection.
+                    await self._disconnect_transport()
+                    async with asyncio.timeout(45):
+                        await self.native.connect()
+                        await self._check_account()
+                except Exception as error:
+                    retry = self._repair_failure(error)
+                    if not retry:
+                        # Never leave an unverified transport available to callers.
+                        with suppress(Exception):
+                            await self._disconnect_transport()
+                        log.warning(
+                            "Telegram repair stopped for %s (%s)",
+                            self.name,
+                            type(error).__name__,
+                        )
+                        return
+                    log.warning(
+                        "Telegram transport repair failed for %s (%s)",
+                        self.name,
+                        type(error).__name__,
+                    )
+                    delay = min(delay * 2, 30)
+                    if isinstance(error, (FloodWaitError, FloodPremiumWaitError)):
+                        delay = max(delay, error.seconds + 0.25)
+                        if self._identity_pool is not None:
+                            await self._identity_pool.defer_client(
+                                self.name, time.time() + delay
+                            )
+                else:
+                    self.connection_error = None
+                    if self._identity_pool is not None:
+                        await self._identity_pool._notify_leases()
+                    log.info("Telegram transport restored for %s", self.name)
+                    break
 
     async def _refresh_main_endpoint(self) -> None:
         """Refresh a stale same-DC address only during startup, with rollback.
@@ -598,6 +719,15 @@ class Client:
 
     def bind_identity_pool(self, pool: ClientPool) -> None:
         self._identity_pool = pool
+
+    def bind_bandwidth(self, bandwidth) -> None:
+        self._bandwidth = bandwidth
+
+    async def _admit_payload(self, count: int, *, upload: bool = False) -> None:
+        bandwidth = getattr(self, "_bandwidth", None)
+        if bandwidth is not None:
+            budget = bandwidth.upload if upload else bandwidth.download
+            await budget.acquire(count)
 
     def refresh_identity(self) -> None:
         if self.identity_refreshing or time.monotonic() < self._identity_next_refresh:
@@ -696,13 +826,18 @@ class Client:
         await asyncio.sleep(delay)
 
     async def stop(self) -> None:
+        if self._connection_task is not None:
+            self._connection_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._connection_task
+            self._connection_task = None
         if self._identity_task is not None:
             self._identity_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._identity_task
             self._identity_task = None
         self.identity_retry_at = None
-        await cast(Awaitable[None], self.native.disconnect())
+        await self._disconnect_transport()
 
     async def _defer_read(self, error: FloodWaitError | FloodPremiumWaitError) -> None:
         deadline = time.time() + max(1, error.seconds) + 0.25
@@ -841,7 +976,7 @@ class Client:
         uploaded_thumbnail = None
         if cover and nonce is None:
             try:
-                async with asyncio.timeout(4):
+                async with payload_timeout(4):
 
                     class CoverSource(io.BytesIO):
                         def verify(self, _expected):
@@ -931,7 +1066,9 @@ class Client:
             while True:
                 try:
                     async with self._media_scheduler.request():
-                        accepted = await self.native(request)
+                        await self._admit_payload(count, upload=True)
+                        async with provider_timeout():
+                            accepted = await self.native(request)
                         if not accepted:
                             raise OSError(
                                 "Telegram did not acknowledge the upload part"
@@ -1100,10 +1237,21 @@ class Client:
     async def download_media(
         self, message: Any, *, file_name: str, progress: Any = None
     ) -> Any:
+        received = 0
+
+        async def paced_progress(current, total):
+            nonlocal received
+            await self._admit_payload(max(0, current - received))
+            received = current
+            if progress is not None:
+                pending = progress(current, total)
+                if inspect.isawaitable(pending):
+                    await pending
+
         return await self.native.download_media(
             getattr(message, "native", message),
             file=file_name,
-            progress_callback=progress,
+            progress_callback=cast(Any, paced_progress),
         )
 
     async def download_thumbnail(
@@ -1202,6 +1350,7 @@ class Client:
                         scheduler.record_bytes(len(part))
                 if part is None:
                     break
+                await self._admit_payload(len(part))
                 if len(data) + len(part) > max_bytes:
                     return None
                 data.extend(part)
@@ -1292,6 +1441,7 @@ class Client:
                             if part is None:
                                 break
                             scheduler.record_bytes(len(part))
+                        await self._admit_payload(len(part))
                         data.extend(part[: _DOWNLOAD_BLOCK - len(data)])
                         if len(data) == _DOWNLOAD_BLOCK:
                             break
@@ -1378,6 +1528,8 @@ class Client:
 
     def register_bot(self, mode: Any) -> None:
         async def dispatch(event: Any) -> None:
+            if getattr(self, "connection_error", None) is not None:
+                return  # Account verification must finish before bot actions resume.
             if not event.is_private:
                 return
             message = TelegramMessage(self, event.message)

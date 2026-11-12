@@ -1,0 +1,28 @@
+.setting-help-button {
+    display: inline-grid;
+    place-items: center;
+    min-width: 32px;
+    min-height: 32px;
+    border-radius: 6px;
+    color: var(--muted);
+    vertical-align: middle;
+}
+.setting-help-button:hover {
+    background: var(--hover);
+    color: var(--ink);
+}
+.setting-help-content {
+    max-width: calc(100vw - 24px);
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.5;
+}
+.setting-help-content p {
+    margin: 0;
+}
+@media (pointer: coarse) {
+    .setting-help-button {
+        min-width: 44px;
+        min-height: 44px;
+    }
+}

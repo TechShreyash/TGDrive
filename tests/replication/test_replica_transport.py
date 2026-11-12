@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import inspect
 import stat
 import threading
 from pathlib import Path
@@ -111,7 +112,14 @@ class Native:
         return self.messages.get((channel_id, ids))
 
     async def upload_file(self, source, **kwargs):
-        self.body = source.read()
+        blocks = []
+        while True:
+            block = source.read(512 * 1024)
+            block = await block if inspect.isawaitable(block) else block
+            if not block:
+                break
+            blocks.append(block)
+        self.body = b"".join(blocks)
         self.uploads.append(kwargs)
         return types.InputFileBig(id=123, parts=1, name=kwargs["file_name"])
 
@@ -188,13 +196,14 @@ class Clock:
         await asyncio.sleep(0)
 
 
-async def started(native=None, *, primary=PRIMARY, pacer=None):
+async def started(native=None, *, primary=PRIMARY, pacer=None, bandwidth=None):
     native = native or Native()
     transport = ReplicaTransport(
         SimpleNamespace(bot_tokens=(primary,), api_id=1, min_free_bytes=0),
         TOKEN,
         client=native,
         pacer=pacer or ReplicaRequestPacer(interval=0, maximum_interval=0),
+        bandwidth=bandwidth,
     )
     await transport.start()
     return transport, native

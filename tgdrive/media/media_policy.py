@@ -7,6 +7,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 
 MIB = 1024**2
+STREAM_MEMORY_BASELINE_BYTES = 32 * MIB
+AUTO_STREAM_MEMORY_LIMIT_BYTES = 256 * MIB
 
 
 @dataclass(frozen=True, slots=True)

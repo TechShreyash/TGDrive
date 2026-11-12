@@ -6,6 +6,8 @@ import time
 from collections import deque
 from typing import TypedDict
 
+from tgdrive.media.media_scheduler import MediaFairScope, media_fair_scope
+
 logger = logging.getLogger(__name__)
 HISTORY_SECONDS = 300
 MAX_SAMPLE_GAP_SECONDS = 30
@@ -185,6 +187,10 @@ class TrafficMiddleware:
         self.counters.active += 1
         self.counters.requests += 1
         failed = False
+        fair_token = None
+        if path == "/file":
+            scope["tgdrive.media_fair_scope"] = MediaFairScope()
+            fair_token = media_fair_scope.set(scope["tgdrive.media_fair_scope"])
 
         async def read():
             message = await receive()
@@ -206,6 +212,8 @@ class TrafficMiddleware:
             failed = True
             raise
         finally:
+            if fair_token is not None:
+                media_fair_scope.reset(fair_token)
             self.counters.workload[scope.pop("tgdrive.workload")] -= 1
             self.counters.active -= 1
             self.counters.errors += int(failed)

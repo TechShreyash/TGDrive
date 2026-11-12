@@ -20,6 +20,7 @@ from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.bot_mode import BotMode
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.clients import build_bot_mode_client, build_client_pool
+from tgdrive.transfers.bandwidth import FileBandwidth
 from tgdrive.transfers.manager import TransferManager, restore_telegram_cooldowns
 from tgdrive.transfers.remote import RemoteClient, RemoteTimeouts
 from tgdrive.transfers.tasks import TransferRegistry, _journalled
@@ -51,6 +52,8 @@ class Runtime:
 
         self.mongo = for_settings(settings)
         self.pool = pool or build_client_pool(settings)
+        self.bandwidth = FileBandwidth()
+        self.pool.bandwidth = self.bandwidth
         self.pool.storage_settings = settings
         self.pool.remaining_staging_bytes = self._remaining_staging_bytes
         self.backup = MongoProtection(
@@ -60,6 +63,7 @@ class Runtime:
             remaining_staging_bytes=self._remaining_staging_bytes,
         )
         self.remote = RemoteClient(
+            bandwidth=self.bandwidth,
             download_concurrency=settings.remote_download_concurrency,
             max_bytes=settings.upload_limit,
             min_free_bytes=settings.min_free_bytes,
@@ -281,6 +285,9 @@ class Runtime:
             bot_client = build_bot_mode_client(self.settings) if lineage_ready else None
             if bot_client is not None:
                 bot_client.bind_send_gate(self.pool.pace_send, self.pool.defer_channel)
+                binder = getattr(bot_client, "bind_bandwidth", None)
+                if callable(binder):
+                    binder(self.bandwidth)
                 self.bot_mode = BotMode(
                     client=bot_client,
                     settings=self.settings,
@@ -411,6 +418,9 @@ class Runtime:
                         client.bind_send_gate(
                             self.pool.pace_send, self.pool.defer_channel
                         )
+                        binder = getattr(client, "bind_bandwidth", None)
+                        if callable(binder):
+                            binder(self.bandwidth)
                         self.bot_mode = BotMode(
                             client=client,
                             settings=self.settings,

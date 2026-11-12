@@ -32,6 +32,10 @@ def _performance_defaults(settings):
             if key in MANAGED
         }
     )
+    # Older unsaved TTL was normalized to this default in recovery identities.
+    defaults["cache_ttl_seconds"] = PerformancePreferences.model_fields[
+        "cache_ttl_seconds"
+    ].default
     return defaults
 
 

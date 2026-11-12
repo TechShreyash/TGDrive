@@ -12,6 +12,10 @@ export interface PerformancePolicy {
     timezone: string;
     auto_preload: boolean;
     upload_split_mib: number;
+    cache_ttl_seconds?: number;
+    stream_memory_limit_bytes?: number | null;
+    upload_limit_bytes_per_second: number | null;
+    download_limit_bytes_per_second: number | null;
     cache_disk_limit_bytes: number | null;
     cache_memory_limit_bytes: number | null;
     staging_limit_bytes: number | null;
@@ -25,12 +29,13 @@ export interface PerformancePreferences extends PerformancePolicy {
         cache_disk_limit_bytes: number;
         cache_memory_limit_bytes: number;
         staging_limit_bytes: number;
+        stream_memory_limit_bytes?: number;
     };
     auto_free_space_reserve?: { minimum_bytes: number; fraction: number };
 }
 export type NumericPreference = Exclude<
     keyof PerformancePolicy,
-    "timezone" | "auto_preload" | ResourceLimitKey
+    "timezone" | "auto_preload" | ResourceLimitKey | SpeedLimitKey
 >;
 export const numericPreferences: {
     key: NumericPreference;
@@ -43,6 +48,16 @@ export const numericPreferences: {
     help: string;
     advanced?: boolean;
 }[] = [
+    {
+        key: "cache_ttl_seconds",
+        label: "Disk cache retention",
+        unit: 3600,
+        min: 1 / 60,
+        max: Number.MAX_SAFE_INTEGER / 3600,
+        appDefault: 24,
+        unitLabel: "hours",
+        help: "Expires after inactivity. Default: 24 hours (1 day). Reusing a chunk refreshes expiry; space pressure may evict it sooner.",
+    },
     {
         key: "upload_split_mib",
         label: "File split size (MiB)",
@@ -57,6 +72,7 @@ export const numericPreferences: {
 export type ResourceLimitKey =
     | "cache_disk_limit_bytes"
     | "cache_memory_limit_bytes"
+    | "stream_memory_limit_bytes"
     | "staging_limit_bytes"
     | "protected_free_bytes";
 export interface ResourceLimitDraft {
@@ -70,6 +86,7 @@ export const resourceLimits: {
     unitLabel: string;
     category: "cache" | "transfers";
     zeroMode?: "disabled" | "none";
+    min?: number;
     advanced?: boolean;
 }[] = [
     {
@@ -89,6 +106,14 @@ export const resourceLimits: {
         zeroMode: "disabled",
     },
     {
+        key: "stream_memory_limit_bytes",
+        label: "Stream working memory",
+        unit: MIB,
+        unitLabel: "MiB",
+        min: 2,
+        category: "cache",
+    },
+    {
         key: "staging_limit_bytes",
         label: "Temporary upload storage",
         unit: GIB,
@@ -105,8 +130,19 @@ export const resourceLimits: {
         advanced: true,
     },
 ];
+export type SpeedLimitKey =
+    "upload_limit_bytes_per_second" | "download_limit_bytes_per_second";
+export const speedLimits: { key: SpeedLimitKey; label: string }[] = [
+    { key: "upload_limit_bytes_per_second", label: "Upload from server" },
+    { key: "download_limit_bytes_per_second", label: "Download to server" },
+];
+export interface SpeedLimitDraft {
+    mode: "unlimited" | "custom";
+    value: string;
+}
 export type PerformanceDraft = Record<NumericPreference, string> &
-    Record<ResourceLimitKey, ResourceLimitDraft> & {
+    Record<ResourceLimitKey, ResourceLimitDraft> &
+    Record<SpeedLimitKey, SpeedLimitDraft> & {
         timezone: string;
         auto_preload: boolean;
     };
@@ -117,8 +153,11 @@ export function performanceCategoryKeys(
     if (category === "regional") return ["timezone"];
     return [
         ...(category === "cache"
-            ? ["auto_preload" as const]
-            : ["upload_split_mib" as const]),
+            ? ["auto_preload" as const, "cache_ttl_seconds" as const]
+            : [
+                  "upload_split_mib" as const,
+                  ...speedLimits.map((item) => item.key),
+              ]),
         ...resourceLimits
             .filter((item) => item.category === category)
             .map((item) => item.key),
@@ -136,9 +175,13 @@ export function performanceCategoryDraft(
 }
 export function performanceDraft(saved: PerformancePolicy): PerformanceDraft {
     return Object.fromEntries([
-        ...numericPreferences.map(({ key, unit }) => [
+        ...numericPreferences.map(({ key, unit, appDefault }) => [
             key,
-            String((saved[key] ?? 0) / unit),
+            String(
+                (saved[key] ??
+                    (key === "cache_ttl_seconds" ? appDefault * unit : 0)) /
+                    unit,
+            ),
         ]),
         ...resourceLimits.map(({ key, unit, zeroMode }) => [
             key,
@@ -155,6 +198,16 @@ export function performanceDraft(saved: PerformancePolicy): PerformanceDraft {
                         : "",
             },
         ]),
+        ...speedLimits.map(({ key }) => [
+            key,
+            {
+                mode: saved[key] == null ? "unlimited" : "custom",
+                value:
+                    saved[key] == null
+                        ? ""
+                        : String((saved[key]! * 8) / 1_000_000),
+            },
+        ]),
         ["timezone", saved.timezone],
         ["auto_preload", saved.auto_preload],
     ]) as PerformanceDraft;
@@ -166,6 +219,9 @@ export function performanceChanges(
     const changes: Partial<PerformancePreferences> = {};
     const baseline = performanceDraft(saved);
     for (const { key, label, unit, min, max } of numericPreferences) {
+        // Unrelated saves retain exact stored seconds without a decimal round trip.
+        if (key === "cache_ttl_seconds" && draft[key] === baseline[key])
+            continue;
         const value = Number(draft[key]);
         if (
             !draft[key].trim() ||
@@ -175,21 +231,35 @@ export function performanceChanges(
             (unit === 1 && !Number.isInteger(value))
         )
             throw new Error(
-                label +
-                    " must be " +
-                    (unit === 1 ? "a whole number " : "a number ") +
-                    (max === undefined
-                        ? "of at least " + min
-                        : "between " + min + " and " + max) +
-                    ".",
+                key === "cache_ttl_seconds"
+                    ? "Disk cache retention must be at least 1 minute and within the supported range."
+                    : label +
+                          " must be " +
+                          (unit === 1 ? "a whole number " : "a number ") +
+                          (max === undefined
+                              ? "of at least " + min
+                              : "between " + min + " and " + max) +
+                          ".",
             );
         const converted = Math.round(value * unit);
         if (!Number.isSafeInteger(converted))
             throw new Error(label + " is too large.");
-        if (converted !== Math.round(Number(baseline[key]) * unit))
+        if (
+            converted !==
+            (key === "cache_ttl_seconds"
+                ? (saved.cache_ttl_seconds ?? 86400)
+                : Math.round(Number(baseline[key]) * unit))
+        )
             changes[key] = converted;
     }
-    for (const { key, label, unit, unitLabel, zeroMode } of resourceLimits) {
+    for (const {
+        key,
+        label,
+        unit,
+        unitLabel,
+        zeroMode,
+        min = 0,
+    } of resourceLimits) {
         const { mode, value } = draft[key];
         let converted: number | null;
         if (mode === "automatic") converted = null;
@@ -201,13 +271,48 @@ export function performanceChanges(
                 !value.trim() ||
                 !Number.isFinite(amount) ||
                 amount <= 0 ||
+                amount < min ||
                 !Number.isSafeInteger(converted) ||
                 converted <= 0
             )
                 throw new Error(
-                    label + " must be a positive limit in " + unitLabel + ".",
+                    min > 0
+                        ? label +
+                              " must be at least " +
+                              min +
+                              " " +
+                              unitLabel +
+                              "."
+                        : label +
+                              " must be a positive limit in " +
+                              unitLabel +
+                              ".",
                 );
         } else throw new Error("Choose a valid mode for " + label + ".");
+        if (converted !== (saved[key] ?? null)) changes[key] = converted;
+    }
+    for (const { key, label } of speedLimits) {
+        const { mode, value } = draft[key];
+        // Preserve the stored byte limit on unrelated saves, without a decimal round trip.
+        if (mode === baseline[key].mode && value === baseline[key].value)
+            continue;
+        let converted: number | null = null;
+        if (mode === "custom") {
+            const amount = Number(value);
+            converted = Math.round(Math.round(amount * 1_000_000) / 8);
+            if (
+                !value.trim() ||
+                !Number.isFinite(amount) ||
+                amount < 0.008192 ||
+                !Number.isSafeInteger(converted) ||
+                converted < 1024
+            )
+                throw new Error(
+                    label +
+                        " must be at least 0.008192 Mbps and within the supported range.",
+                );
+        } else if (mode !== "unlimited")
+            throw new Error("Choose a valid speed limit mode.");
         if (converted !== (saved[key] ?? null)) changes[key] = converted;
     }
     const timezone = draft.timezone.trim();
@@ -326,6 +431,24 @@ export interface AccountPerformance {
     } | null;
 }
 export interface PerformanceSnapshot {
+    bandwidth?: {
+        upload: {
+            configured_bytes_per_second: number | null;
+            effective_bytes_per_second: number | null;
+            waiting: number;
+            admitted_bytes: number;
+            wait_seconds: number;
+        };
+        download: {
+            configured_bytes_per_second: number | null;
+            effective_bytes_per_second: number | null;
+            waiting: number;
+            admitted_bytes: number;
+            wait_seconds: number;
+        };
+        native_engines: number;
+        scope: string;
+    };
     diagnosis?: PerformanceDiagnosis | null;
     tuning?: {
         running: boolean;
@@ -356,7 +479,34 @@ export interface PerformanceSnapshot {
         }[];
     };
     cache: CacheSnapshot;
+    resource_summary?: {
+        sampled_at: number;
+        memory: {
+            scope: "cgroup" | "host" | "unavailable";
+            source: "cgroup_v2" | "cgroup_v1" | "proc_meminfo" | "unavailable";
+            limit_bytes: number | null;
+            cgroup_limit_bytes?: number | null;
+            environment_total_bytes?: number | null;
+            limit_source?:
+                "cgroup_v2" | "cgroup_v1" | "proc_meminfo" | "unavailable";
+            used_bytes: number | null;
+            available_bytes: number | null;
+        };
+        cpu: {
+            scope: "cgroup" | "affinity" | "host" | "unavailable";
+            source:
+                | "cgroup_v2"
+                | "cgroup_v1"
+                | "affinity"
+                | "os_cpu_count"
+                | "unavailable";
+            capacity_cores: number | null;
+        };
+        storage: { data: StorageCapacity; cache: StorageCapacity };
+    };
     server: {
+        sampled_at?: number | null;
+        stale_after_seconds?: number;
         history?: ResourceSample[];
         at: number;
         memory: Record<string, number | null>;

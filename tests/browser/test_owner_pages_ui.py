@@ -126,7 +126,9 @@ def test_shared_links_concise_expiry_keeps_exact_timezone(server, browser):
         ).to_have_count(0)
         exact = page.evaluate(
             "value => new Intl.DateTimeFormat(undefined, {dateStyle:'medium', "
-            "timeStyle:'long', timeZone:'Asia/Kolkata'}).format(new Date(value))",
+            "timeStyle:'long', timeZone:'Asia/Kolkata'}).formatToParts(new Date(value))"
+            ".map(part => part.type === 'timeZoneName' ? 'UTC+05:30' "
+            ": part.value).join('')",
             expires,
         )
         expiry = row.locator(".share-expiry time")
@@ -174,15 +176,27 @@ def test_backup_timestamp_uses_instance_timezone_in_another_browser_zone(
     try:
         page = context.new_page()
         login(page, server.url)
+        status = page.request.get(server.url + "/api/v1/status").json()
+        recovery = status["recovery"]
+        recovery["independent_backup"] = {
+            "enabled": True,
+            "phase": "protected",
+            "protected_revision": recovery["metadata_revision"],
+            "last_success_at": recovery["last_success_at"],
+            "error": None,
+        }
+        page.route("**/api/v1/status", lambda route: route.fulfill(json=status))
         page.goto(server.url + "/?view=storage")
-        recovery = page.request.get(server.url + "/api/v1/status").json()["recovery"]
         expected = page.evaluate(
             "value => new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', "
-            "timeStyle: 'long', timeZone: 'Asia/Kolkata'}).format(new Date(value))",
+            "timeStyle: 'long', timeZone: 'Asia/Kolkata'})"
+            ".formatToParts(new Date(value))"
+            ".map(part => part.type === 'timeZoneName' ? 'UTC+05:30' "
+            ": part.value).join('')",
             recovery["last_success_at"],
         )
         expect(page.locator(".backup-confirmation-date strong")).to_have_text(expected)
-        assert "GMT+5:30" in expected
+        assert "UTC+05:30" in expected
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
         for width in (1440, 390, 320):
             page.set_viewport_size(

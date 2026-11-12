@@ -381,6 +381,7 @@ async def test_request_disconnect_waits_for_thread_and_records_committed_offset(
 async def test_asgi_chunk_disconnect_keeps_offset_and_releases_receiver_slot(
     tmp_path, monkeypatch, caplog
 ):
+    from tgdrive.transfers.bandwidth import FileBandwidth
     from tgdrive.web.api_v1 import register_routes
 
     uploads, manager = make(tmp_path, max_concurrent_transfers=1)
@@ -391,6 +392,8 @@ async def test_asgi_chunk_disconnect_keeps_offset_and_releases_receiver_slot(
     append = AsyncMock(wraps=original_append)
     monkeypatch.setattr(uploads, "append", append)
     app = FastAPI()
+    bandwidth = FileBandwidth()
+    await bandwidth.configure(None, 1024)
     authorizations = []
 
     async def authorized(request: Request):
@@ -403,7 +406,7 @@ async def test_asgi_chunk_disconnect_keeps_offset_and_releases_receiver_slot(
         is_admin=lambda _: True,
         get_store=lambda _: manager.store,
         get_manager=lambda _: manager,
-        get_runtime=lambda _: SimpleNamespace(pool=None),
+        get_runtime=lambda _: SimpleNamespace(pool=None, bandwidth=bandwidth),
     )
     path = "/api/v1/uploads/" + item["id"]
 

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import inspect
 import logging
 import math
 import mimetypes
+import secrets
 import time
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from pathlib import Path
@@ -48,6 +51,7 @@ from tgdrive.core.logging import configure_logging
 from tgdrive.core.runtime import Runtime
 from tgdrive.core.security import (
     SESSION_COOKIE,
+    InvalidSession,
     LoginLimiter,
     SessionManager,
     credential_session_key,
@@ -303,6 +307,7 @@ def create_app(
         if settings.demo_mode
         else None
     )
+    stream_fair_key = secrets.token_bytes(32)
     sessions = SessionManager(
         credential_session_key(settings.session_key, owner_credential),
         settings.session_ttl_seconds,
@@ -1099,6 +1104,25 @@ def create_app(
                     status_code=403, detail="Invalid share link"
                 ) from None
             raise
+        fair_scope = request.scope.get("tgdrive.media_fair_scope")
+        if fair_scope is not None:
+            token = request.cookies.get(SESSION_COOKIE)
+            nonce = None
+            if token:
+                with suppress(InvalidSession):
+                    nonce = sessions.verify(token).get("nonce")
+            identity = (
+                ("session", nonce)
+                if nonce is not None
+                else ("share", auth)
+                if auth is not None
+                else None
+            )
+            if identity is not None:
+                content = (identity, data["id"], data["message_id"], data["size"])
+                fair_scope.group = hmac.new(
+                    stream_fair_key, repr(content).encode(), hashlib.sha256
+                ).hexdigest()
         path = data["path"].rstrip("/") + "/" + data["id"]
         return path, data
 
@@ -1683,6 +1707,12 @@ def create_app(
         sessions=sessions,
         upload_limit=settings.upload_limit,
         max_concurrent=settings.max_concurrent_transfers,
+        bandwidth=getattr(app_runtime, "bandwidth", None),
+    )
+    from tgdrive.web.file_bandwidth import FileBandwidthMiddleware
+
+    app.add_middleware(
+        FileBandwidthMiddleware, bandwidth=getattr(app_runtime, "bandwidth", None)
     )
     from tgdrive.observability.traffic import TrafficCounters, TrafficMiddleware
 

@@ -19,10 +19,12 @@ def test_cgroup_parsing_handles_max_and_fallback(tmp_path):
     cpu.write_text("200000 100000\n")
     assert cpus(str(cpu)) == 2
     cpu.write_text("150000 100000\n")
-    assert cpus(str(cpu)) == 2
+    assert cpus(str(cpu)) == 1.5
     cpu.write_text("max 100000\n")
-    assert cpus(str(cpu)) >= 1
-    assert cpus(str(tmp_path / "missing")) >= 1
+    capacity = cpus(str(cpu))
+    assert capacity is not None and capacity > 0
+    capacity = cpus(str(tmp_path / "missing"))
+    assert capacity is not None and capacity > 0
 
 
 def test_missing_memory_metrics_preserve_cache_and_allow_disk_policy(tmp_path):
@@ -90,6 +92,27 @@ def test_measure_finds_the_media_volume_before_the_cache_exists(tmp_path, monkey
     assert sample["cache_disk_total"] == 20
 
 
+def test_reserve_uses_verified_backing_total_with_backing_free(tmp_path, monkeypatch):
+    staging, media, probe = (tmp_path / name for name in ("staging", "media", "probe"))
+    for directory in (staging, media, probe):
+        directory.mkdir()
+
+    def usage(path):
+        total = 20 * GIB if path == probe else 1000 * GIB
+        return SimpleNamespace(total=total, used=0, free=total)
+
+    monkeypatch.setattr("tgdrive.storage.capacity.shutil.disk_usage", usage)
+    sample = governor.measure(
+        staging, media, cache_probe_directory=probe, data_probe_directory=probe
+    )
+    assert sample["disk_total"] == sample["cache_disk_total"] == 20 * GIB
+    assert sample["disk_effective_free"] == 20 * GIB
+    result = decide(sample, state())
+    assert result["values"]["min_free_bytes"] == GIB
+    assert result["values"]["cache_min_free_bytes"] == GIB
+    assert result["values"]["staging_budget_bytes"] == 16 * GIB
+
+
 def test_preload_resource_cap_recovers_only_to_its_startup_ceiling():
     previous = state(preload_max_jobs=8)
     result = decide(measurements(), previous)
@@ -98,6 +121,13 @@ def test_preload_resource_cap_recovers_only_to_its_startup_ceiling():
     result = decide(measurements() | {"cpus": 4}, result)
     assert result["values"]["preload_max_jobs"] == 8
     assert result["values"]["telegram_request_limit"] == 4
+
+
+def test_fractional_cpu_capacity_does_not_round_up_preload_jobs():
+    result = decide(measurements() | {"cpus": 0.6}, state(preload_max_jobs=8))
+    assert result["values"]["preload_max_jobs"] == 2
+    result = decide(measurements() | {"cpus": None}, result)
+    assert result["values"]["preload_max_jobs"] == 8
 
 
 def test_repeated_samples_do_not_change_unrelated_concurrency():

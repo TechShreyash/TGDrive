@@ -18,6 +18,7 @@ import {
 import { formatBytes, formatTimestamp } from "../../shared/types";
 import "./ChannelBackup.css";
 import DemoModeNotice from "../../shared/DemoModeNotice";
+import SettingHelp from "../../shared/SettingHelp";
 
 export type ReplicaPhase =
     | "disabled"
@@ -529,6 +530,17 @@ export default function ChannelBackup({
                         {recoveryOnly
                             ? "Restore your drive from the backup in your Telegram channel. Keep the channel intact while TGDrive restores it."
                             : "Backups are encrypted with your ENCRYPTION_KEY and pinned in your channels. Add a second channel to protect your files if a channel is lost."}
+                        <SettingHelp label="Independent backup">
+                            <p>
+                                A second Telegram channel protects against
+                                losing access to the main channel. Keep both
+                                channels and your ENCRYPTION_KEY. Backup
+                                confirmation, archive integrity and local
+                                download availability are separate. Pausing does
+                                not delete an existing backup. Recovery needs an
+                                intact compatible archive.
+                            </p>
+                        </SettingHelp>
                     </p>
                 </div>
                 <button

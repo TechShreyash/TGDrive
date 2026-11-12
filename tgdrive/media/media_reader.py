@@ -19,9 +19,19 @@ from typing import Any
 from telethon.errors import FloodPremiumWaitError, FloodWaitError, RPCError
 
 from tgdrive.core import encryption
+from tgdrive.core.system_resources import memory_snapshot
 from tgdrive.media.media_cache import DiskMediaCache
-from tgdrive.media.media_policy import MediaCachePolicy, merge_ranges
-from tgdrive.media.media_scheduler import MediaPriorityScope
+from tgdrive.media.media_policy import (
+    AUTO_STREAM_MEMORY_LIMIT_BYTES,
+    STREAM_MEMORY_BASELINE_BYTES,
+    MediaCachePolicy,
+    merge_ranges,
+)
+from tgdrive.media.media_scheduler import (
+    MediaPriorityScope,
+    current_fair_group,
+    fair_group_ranks,
+)
 from tgdrive.storage import pacing
 from tgdrive.storage.capacity import (
     measure_capacity,
@@ -130,8 +140,11 @@ class _ScratchBudget:
     def __init__(self, maximum):
         self.limit = max(2, maximum // BLOCK)
         self.used = self.peak = self.waiters = 0
+        self.foreground_waiters = 0
         self.changed = asyncio.Event()
         self._heads = []
+        self._head_groups = {}
+        self._last_group = object()
         self._streams = set()
 
     def try_acquire(self):
@@ -141,14 +154,30 @@ class _ScratchBudget:
         self.peak = max(self.peak, self.used)
         return True
 
-    async def acquire(self):
+    async def acquire(self, *, foreground=True):
         ticket = object()
         self._heads.append(ticket)
+        self._head_groups[ticket] = (
+            current_fair_group() if foreground else None,
+            foreground,
+        )
         self.waiters += 1
+        self.foreground_waiters += int(foreground)
         try:
             while True:
                 self.changed.clear()
-                if self._heads[0] is ticket:
+                ranks = fair_group_ranks(
+                    (self._head_groups[item][0] for item in self._heads),
+                    self._last_group,
+                )
+                first = min(
+                    self._heads,
+                    key=lambda item: (
+                        not self._head_groups[item][1],
+                        ranks[self._head_groups[item][0]],
+                    ),
+                )
+                if first is ticket:
                     if self.used >= self.limit:
                         # Prefer the largest speculative window and reclaim its
                         # farthest block. Never revoke its awaited/yielded head.
@@ -161,13 +190,18 @@ class _ScratchBudget:
                             if stream.reclaim_one():
                                 break
                     if self.used < self.limit:
+                        self._last_group = self._head_groups[ticket][0]
                         self.used += 1
                         self.peak = max(self.peak, self.used)
                         return
                 await self.changed.wait()
         finally:
             self._heads.remove(ticket)
+            del self._head_groups[ticket]
+            if not self._heads:
+                self._last_group = object()
             self.waiters -= 1
+            self.foreground_waiters -= int(foreground)
             self.changed.set()
 
     def release(self):
@@ -337,23 +371,8 @@ class _PayloadCache(_BlockCache):
 
 def _effective_memory(configured):
     """Clamp retained bytes to a quarter of available host/container memory."""
-    limits = [configured]
-    try:
-        fields = dict(
-            line.split(":", 1)
-            for line in Path("/proc/meminfo").read_text().splitlines()
-        )
-        limits.append(int(fields["MemAvailable"].split()[0]) * 1024 // 4)
-    except OSError, ValueError, KeyError:
-        pass
-    try:
-        maximum = Path("/sys/fs/cgroup/memory.max").read_text().strip()
-        if maximum != "max":
-            current = int(Path("/sys/fs/cgroup/memory.current").read_text())
-            limits.append(max(0, int(maximum) - current) // 4)
-    except OSError, ValueError:
-        pass
-    return max(0, min(limits))
+    available = memory_snapshot()["available_bytes"]
+    return max(0, configured if available is None else min(configured, available // 4))
 
 
 def media_cache_for(pool, policy=None):
@@ -406,7 +425,17 @@ class MediaReadCache:
         self._last_capacity_check = self._capacity_clock()
         self.deferred_writes = policy is not None
         self.effective_memory_bytes = _effective_memory(self.policy.memory_max_bytes)
-        self.scratch = _ScratchBudget(_effective_memory(self.policy.scratch_max_bytes))
+        self.scratch = _ScratchBudget(
+            _effective_memory(
+                min(STREAM_MEMORY_BASELINE_BYTES, self.policy.scratch_max_bytes)
+            )
+        )
+        self._stream_last_pressure = self._capacity_clock()
+        self._stream_sample = None
+        self._stream_last_growth = None
+        self._stream_sample_monotonic = None
+        self._stream_sampled_at = None
+        self._stream_reason = "baseline"
         self._active_streams = 0
         self.memory = _PayloadCache(
             max_bytes=max(1, self.effective_memory_bytes),
@@ -467,11 +496,76 @@ class MediaReadCache:
             return
         self._last_capacity_check = now
         self.effective_memory_bytes = _effective_memory(self.policy.memory_max_bytes)
-        maximum = _effective_memory(self.policy.scratch_max_bytes)
-        self.scratch.resize(maximum)
-        self.fill_slots.resize(maximum)
+        maximum = min(self.scratch.limit * BLOCK, self.policy.scratch_max_bytes)
+        if maximum < self.scratch.limit * BLOCK:
+            self._stream_reason = "owner_ceiling"
+        self._resize_stream_capacity(maximum, self._stream_reason)
         self.memory.max_entries = max(256, self.effective_memory_bytes // BLOCK + 32)
         self._adjust_memory()
+
+    def _resize_stream_capacity(self, target, reason):
+        shrinking = target < self.scratch.limit * BLOCK
+        self.scratch.resize(target)
+        self.fill_slots.resize(target)
+        self._stream_reason = reason
+        if shrinking:
+            for stream in sorted(
+                self.scratch._streams,
+                key=lambda item: item.speculative_count,
+                reverse=True,
+            ):
+                while self.scratch.used > self.scratch.limit and stream.reclaim_one():
+                    pass
+
+    def update_stream_capacity(self, measurements):
+        """Consume one governor sample; this does not allocate payload memory."""
+        if measurements is self._stream_sample:
+            return
+        self._stream_sample = measurements
+        now = self._capacity_clock()
+        self._stream_sample_monotonic = now
+        self._stream_sampled_at = measurements.get("sampled_at")
+        available, limit = (
+            measurements.get("memory_available"),
+            measurements.get("memory_limit"),
+        )
+        current = self.scratch.limit * BLOCK
+        ceiling = max(2 * BLOCK, self.policy.scratch_max_bytes)
+        baseline = min(ceiling, STREAM_MEMORY_BASELINE_BYTES)
+        waiting = (
+            self.scratch.foreground_waiters > 0
+            and self.scratch.used >= self.scratch.limit
+            and not any(stream.speculative_count for stream in self.scratch._streams)
+        )
+        if waiting:
+            self._stream_last_pressure = now
+        target = min(current, ceiling)
+        reason = "owner_ceiling" if current > ceiling else self._stream_reason
+        if available is None:
+            target, reason = min(target, baseline), "memory_unknown"
+        elif available < max(STREAM_MEMORY_BASELINE_BYTES, (limit or 0) // 10):
+            target = min(target, max(2 * BLOCK, available // (12 * BLOCK) * BLOCK))
+            reason = "memory_pressure"
+        elif (
+            current <= ceiling
+            and waiting
+            and (
+                self._stream_last_growth is None or now - self._stream_last_growth >= 5
+            )
+        ):
+            # Existing fills already own frames; charge transient copies only for
+            # new capacity, without refunding bytes already held into headroom.
+            target = min(
+                ceiling,
+                current + STREAM_MEMORY_BASELINE_BYTES,
+                current + available // (12 * BLOCK) * BLOCK,
+            )
+            reason = "foreground_wait"
+        elif now - self._stream_last_pressure >= 30 and target > baseline:
+            target, reason = baseline, "idle_baseline"
+        if target > current:
+            self._stream_last_growth = now
+        self._resize_stream_capacity(target, reason)
 
     def _load_index(self):
         if self.directory is None or self.disk is None:
@@ -1132,6 +1226,22 @@ class MediaReadCache:
                 "peak_bytes": self.scratch.peak * BLOCK,
                 "waiting_heads": self.scratch.waiters,
                 "active_streams": self._active_streams,
+                "baseline_bytes": min(
+                    max(2 * BLOCK, self.policy.scratch_max_bytes),
+                    STREAM_MEMORY_BASELINE_BYTES,
+                ),
+                "owner_limit_bytes": getattr(
+                    self.storage_settings, "stream_memory_limit_bytes", None
+                ),
+                "automatic_limit_bytes": AUTO_STREAM_MEMORY_LIMIT_BYTES,
+                "reason": self._stream_reason,
+                "sampled_at": self._stream_sampled_at,
+                "sample_age_seconds": max(
+                    0, self._capacity_clock() - self._stream_sample_monotonic
+                )
+                if self._stream_sample_monotonic is not None
+                else None,
+                "fill_reserved_bytes": self.fill_slots.used * BLOCK,
             },
         }
 
@@ -1388,7 +1498,7 @@ async def stream_pooled_media(
                     # them forever. A retryable 503 or aborted range lets the
                     # client resume once memory frees up.
                     async with asyncio.timeout(HEAD_WAIT_SECONDS):
-                        await scratch.acquire()
+                        await scratch.acquire(foreground=not background)
                 except TimeoutError:
                     from tgdrive.telegram.client_pool import MediaQueueFull
 

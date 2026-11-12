@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -59,10 +59,38 @@ media_priority: ContextVar[MediaPriority | MediaPriorityScope] = ContextVar(
 
 
 @dataclass(slots=True)
+class MediaFairScope:
+    group: str | None = None
+
+
+media_fair_scope: ContextVar[MediaFairScope | None] = ContextVar(
+    "media_fair_scope", default=None
+)
+
+
+def current_fair_group() -> str | None:
+    scope = media_fair_scope.get()
+    return (
+        scope.group
+        if scope is not None and effective_priority(media_priority.get()) != "preload"
+        else None
+    )
+
+
+def fair_group_ranks(groups, last):
+    order = list(dict.fromkeys(groups))
+    if last in order:
+        start = order.index(last) + 1
+        order = order[start:] + order[:start]
+    return {group: index for index, group in enumerate(order)}
+
+
+@dataclass(slots=True)
 class _Request:
     number: int
     priority: MediaPriority | MediaPriorityScope
     queued_at: float
+    fair_group: str | None
 
 
 class MediaScheduler:
@@ -81,6 +109,8 @@ class MediaScheduler:
         self._sequence = 0
         self._condition = asyncio.Condition()
         self._waiting: list[_Request] = []
+        self._active_groups = Counter()
+        self._last_group = object()
         self._next_request = 0.0
         self._cooldown = 0.0
         self._durations: deque[float] = deque(maxlen=128)
@@ -119,7 +149,9 @@ class MediaScheduler:
         queued_at = time.monotonic()
         async with self._condition:
             self._sequence += 1
-            ticket = _Request(self._sequence, media_priority.get(), queued_at)
+            ticket = _Request(
+                self._sequence, media_priority.get(), queued_at, current_fair_group()
+            )
             self._waiting.append(ticket)
 
             def promote_waiter():
@@ -134,13 +166,7 @@ class MediaScheduler:
             try:
                 while True:
                     now = time.monotonic()
-                    first = min(
-                        self._waiting,
-                        key=lambda item: (
-                            effective_priority(item.priority) == "preload",
-                            item.number,
-                        ),
-                    )
+                    first = self._ordered_waiting()[0]
                     deadline = max(self._cooldown, self._next_request)
                     if (
                         first is ticket
@@ -149,6 +175,8 @@ class MediaScheduler:
                     ):
                         self._waiting.remove(ticket)
                         self.active += 1
+                        self._active_groups[ticket.fair_group] += 1
+                        self._last_group = ticket.fair_group
                         self._next_request = now + 1 / self.effective_rate
                         self._condition.notify_all()
                         break
@@ -178,6 +206,11 @@ class MediaScheduler:
         finally:
             async with self._condition:
                 self.active -= 1
+                self._active_groups[ticket.fair_group] -= 1
+                if not self._active_groups[ticket.fair_group]:
+                    del self._active_groups[ticket.fair_group]
+                if not self._active_groups and not self._waiting:
+                    self._last_group = object()
                 if succeeded:
                     self.completed += 1
                     self._successes += 1
@@ -190,16 +223,24 @@ class MediaScheduler:
                     self.failed += 1
                 self._condition.notify_all()
 
-    def snapshot(self) -> dict:
-        now = time.monotonic()
-        mean = sum(self._durations) / len(self._durations) if self._durations else None
-        waiting = sorted(
+    def _ordered_waiting(self):
+        ranks = fair_group_ranks(
+            (item.fair_group for item in self._waiting), self._last_group
+        )
+        return sorted(
             self._waiting,
             key=lambda item: (
                 effective_priority(item.priority) == "preload",
+                self._active_groups[item.fair_group],
+                ranks[item.fair_group],
                 item.number,
             ),
         )
+
+    def snapshot(self) -> dict:
+        now = time.monotonic()
+        mean = sum(self._durations) / len(self._durations) if self._durations else None
+        waiting = self._ordered_waiting()
         queue = []
         for position, ticket in enumerate(waiting, 1):
             estimated = None

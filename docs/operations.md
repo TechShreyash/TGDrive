@@ -105,6 +105,11 @@ recovery screen.
 
 </details>
 
+If a running instance has lost database ownership, restoring network access
+does not reclaim its lease or resume writes. Stop competing instances, restore
+MongoDB access and restart the same deployment once. Telegram transport repair
+does not remove this ownership fence.
+
 ## If someone changed the Telegram channel
 
 Keep storage bots as administrators, the channel private and auto-delete off. Repair tokens, membership or permissions in Telegram, then use **Connections → Refresh** and retry; replaced credentials apply when you save.
@@ -215,12 +220,25 @@ the **same account**; TGDrive verifies its identity.
 
 ### Revoked tokens, removed sessions and lost channel access
 
-| Problem | Repair |
+After its three native Telegram connection retries finish, TGDrive automatically
+retries transient transport failures with a normal 5–30 second backoff. Account cooldowns and
+provider FloodWaits can extend the wait beyond 30 seconds. Each connect and
+same-account verification attempt has a 45-second timeout; native connection
+cleanup has no hard deadline, so these are not total recovery-time bounds.
+
+Repair reuses the existing session and verifies the original account before
+resuming bot actions. It does not sign in again, replace credentials, clear
+account cooldowns/quarantine or retry failed upload jobs automatically. Check
+**Connections** and **Transfers** after connectivity returns; preserve staged
+bytes and retry the existing job when needed.
+
+| Problem / account status code | Repair |
 | --- | --- |
-| Revoked bot token | Replace with a valid token for the same bot, then retry. |
-| Expired/removed Premium session | Reconnect the same account through **Connections**, then retry. |
+| Revoked bot token (`TELEGRAM_CREDENTIALS_REVOKED`) | Replace with a valid token for the same bot, then retry. |
+| Expired/removed Premium session (`TELEGRAM_CREDENTIALS_REVOKED`) | Reconnect the same account through **Connections**, then retry. Changed identity also requires verification of the original account. |
 | Missing channel permissions | Restore membership/admin rights, Refresh and retry. A still-connected client can resume after a successful check. |
-| Network/Telegram wait | Follow reconnection, retry and cooldown status. |
+| Network/Telegram wait (`TELEGRAM_RECONNECTING`) | Automatic transport retry is in progress. Restore connectivity and follow retry/cooldown status. |
+| Other verification failure (`TELEGRAM_CONNECTION_UNAVAILABLE`) | Automatic repair stopped. Open Connections and verify or refresh the account. |
 
 <details>
 <summary>Why an upload may need its original account</summary>

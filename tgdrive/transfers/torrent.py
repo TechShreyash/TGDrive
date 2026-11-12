@@ -374,11 +374,14 @@ def _tracker_urls(metadata: dict) -> list[str]:
 
 
 class _Aria2:
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, *, bandwidth=None):
         self.directory = directory
         self.secret = secrets.token_urlsafe(32)
         self.process = None
         self.session = None
+        self.bandwidth = bandwidth
+        self._bandwidth_context = None
+        self._stopped_for_bandwidth = False
 
     async def __aenter__(self):
         executable = shutil.which("aria2c")
@@ -437,6 +440,10 @@ class _Aria2:
                         raise TorrentError("The torrent downloader could not start.")
                     try:
                         await self.call("getVersion")
+                        if self.bandwidth is not None:
+                            context = self.bandwidth.native(self)
+                            await context.__aenter__()
+                            self._bandwidth_context = context
                         return self
                     except TorrentTransportError:
                         await asyncio.sleep(0.1)
@@ -446,6 +453,24 @@ class _Aria2:
 
     @_journalled
     async def __aexit__(self, *_args):
+        await self.stop_for_bandwidth()
+        context, self._bandwidth_context = self._bandwidth_context, None
+        if context is not None:
+            await context.__aexit__(None, None, None)
+
+    async def set_bandwidth(self, upload, download):
+        expected = {
+            "max-overall-upload-limit": str(upload or 0),
+            "max-overall-download-limit": str(download or 0),
+        }
+        await self.call("changeGlobalOption", expected)
+        actual = await self.call("getGlobalOption")
+        if any(actual.get(key) != value for key, value in expected.items()):
+            raise TorrentTransportError("Torrent speed limit could not be verified.")
+
+    @_journalled
+    async def stop_for_bandwidth(self):
+        self._stopped_for_bandwidth = True
         if self.process is not None and self.process.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 self.process.terminate()
@@ -460,6 +485,10 @@ class _Aria2:
             await self.session.close()
 
     async def call(self, method, *params):
+        if self._stopped_for_bandwidth:
+            raise TorrentTransportError(
+                "The torrent engine stopped; retry the resumable import."
+            )
         if self.session is None:
             raise TorrentError("The torrent service is not running.")
         payload = await _worker(
@@ -691,7 +720,9 @@ async def _download(source, output_dir, remote, progress, admit, check_capacity)
         prefix=".torrent-", dir=output_dir.parent
     ) as temporary:
         metadata_dir = Path(temporary)
-        async with _Aria2(metadata_dir) as engine:
+        async with _Aria2(
+            metadata_dir, bandwidth=getattr(remote, "bandwidth", None)
+        ) as engine:
             if cached.exists():
                 metadata_path, trackers = cached, []
             elif source.lower().startswith("magnet:"):

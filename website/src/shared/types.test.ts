@@ -4,9 +4,49 @@ import {
     formatByteProgress,
     formatBytes,
     formatDateTimeInput,
+    formatTimestamp,
     getTimezone,
     setTimezone,
 } from "./types";
+
+describe("timestamp UTC offsets", () => {
+    afterEach(() => setTimezone("UTC"));
+    it.each([
+        ["UTC", "2026-01-15T12:00:00Z", "UTC", "2026-01-15T12:00"],
+        [
+            "Asia/Kolkata",
+            "2026-01-15T12:00:00Z",
+            "UTC+05:30",
+            "2026-01-15T17:30",
+        ],
+        [
+            "Asia/Kathmandu",
+            "2026-01-15T12:00:00Z",
+            "UTC+05:45",
+            "2026-01-15T17:45",
+        ],
+        [
+            "America/New_York",
+            "2026-01-15T12:00:00Z",
+            "UTC-05:00",
+            "2026-01-15T07:00",
+        ],
+        [
+            "America/New_York",
+            "2026-07-15T12:00:00Z",
+            "UTC-04:00",
+            "2026-07-15T08:00",
+        ],
+    ])(
+        "labels %s without changing its local time",
+        (zone, instant, offset, local) => {
+            setTimezone(zone);
+            expect(formatTimestamp(instant)).toContain(offset);
+            expect(formatTimestamp(instant)).not.toContain("GMT");
+            expect(formatDateTimeInput(instant)).toBe(local);
+        },
+    );
+});
 
 describe("byte formatting", () => {
     it("preserves units, precision and invalid values without rebuilding formatters", () => {

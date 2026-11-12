@@ -16,7 +16,9 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from tgdrive.media.media_scheduler import (
     MediaPriority,
     MediaPriorityScope,
+    current_fair_group,
     effective_priority,
+    fair_group_ranks,
 )
 from tgdrive.telegram.connection_errors import (
     TelegramConnectionError,
@@ -27,6 +29,7 @@ from tgdrive.telegram.connection_errors import (
 if TYPE_CHECKING:
     from tgdrive.core.config import Settings
     from tgdrive.media.preloading import PreloadManager
+    from tgdrive.transfers.bandwidth import FileBandwidth
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +190,7 @@ class ClientPool:
     """
 
     _preload_manager: PreloadManager
+    bandwidth: FileBandwidth | None = None
 
     def __init__(
         self,
@@ -215,6 +219,7 @@ class ClientPool:
         self._origin_waiters: list[dict[str, Any]] = []
         self._origin_active: dict[object, dict[str, Any]] = {}
         self._origin_sequence = 0
+        self._origin_last_group = object()
         self._origin_durations: deque[float] = deque(maxlen=128)
         self._load_history: deque[dict[str, Any]] = deque(maxlen=120)
         self._last_load_sample = 0.0
@@ -669,6 +674,7 @@ class ClientPool:
                         download=download,
                         queued_at=time.monotonic(),
                         request_id=request_id or f"media-{self._origin_sequence}",
+                        fair_group=current_fair_group(),
                     )
                 )
                 if isinstance(priority, MediaPriorityScope):
@@ -748,7 +754,10 @@ class ClientPool:
                             raise removed_sender(client_name)
                         for unavailable in matching:
                             problem = connection_problem(
-                                unavailable.error,
+                                unavailable.error
+                                or getattr(
+                                    unavailable.client, "connection_error", None
+                                ),
                                 unavailable.kind,
                                 client_name=unavailable.name,
                             )
@@ -766,42 +775,53 @@ class ClientPool:
                     now = time.time()
 
                     def earlier_origin_for(candidate: _ClientSlot, now=now) -> bool:
-                        own_rank = effective_priority(priority) == "preload"
-                        for queued in sorted(
-                            self._origin_waiters,
-                            key=lambda waiter: waiter["priority"] == "preload",
-                        ):
-                            if queued["ticket"] is ticket:
-                                return False
-                            if (queued["priority"] == "preload") > own_rank:
-                                continue
+                        ready = []
+                        for queued in self._origin_waiters:
                             if queued["kind"] not in (None, candidate.kind) or (
                                 queued["name"] is not None
                                 and queued["name"] != candidate.name
                             ):
                                 continue
-                            # A full upload lane must not strand a free read lane.
+                            # Preserve ready compatible lanes and account cooldowns.
                             if queued["download"]:
-                                if (
+                                compatible = (
                                     candidate.download_active < self._media_per_bot
                                     and candidate.cooldown_until <= now
-                                ):
-                                    return True
-                            elif (
-                                candidate.media_active
-                                < (
-                                    self._uploads_per_bot
-                                    if candidate.kind == "bot"
-                                    else 1
                                 )
-                                and max(
-                                    candidate.cooldown_until,
-                                    self._channel_cooldown_until,
+                            else:
+                                compatible = (
+                                    candidate.media_active
+                                    < (
+                                        self._uploads_per_bot
+                                        if candidate.kind == "bot"
+                                        else 1
+                                    )
+                                    and max(
+                                        candidate.cooldown_until,
+                                        self._channel_cooldown_until,
+                                    )
+                                    <= now
                                 )
-                                <= now
-                            ):
-                                return True
-                        return False
+                            if compatible:
+                                ready.append(queued)
+                        if not ready:
+                            return False
+                        ranks = fair_group_ranks(
+                            (row["fair_group"] for row in ready),
+                            self._origin_last_group,
+                        )
+                        active = Counter(
+                            row["fair_group"] for row in self._origin_active.values()
+                        )
+                        first = min(
+                            ready,
+                            key=lambda row: (
+                                row["priority"] == "preload",
+                                active[row["fair_group"]],
+                                ranks[row["fair_group"]],
+                            ),
+                        )
+                        return first["ticket"] is not ticket
 
                     eligible = [
                         slot
@@ -861,12 +881,14 @@ class ClientPool:
                             )
                             self._origin_active[ticket] = dict(
                                 request_id=own["request_id"],
+                                fair_group=own["fair_group"],
                                 name=slot.name,
                                 priority=effective_priority(priority),
                                 operation="download" if download else "upload",
                                 started_at=time.monotonic(),
                             )
-                            if download:
+                            self._origin_last_group = own["fair_group"]
+                            if download and own["fair_group"] is None:
                                 # Rotate read-ahead behind other waiting requests.
                                 self._origin_waiters.sort(
                                     key=lambda row: (
@@ -927,6 +949,8 @@ class ClientPool:
                 slot.media_active -= 1
             if media or download:
                 self._origin_active.pop(ticket, None)
+                if not self._origin_active and not self._origin_waiters:
+                    self._origin_last_group = object()
                 self._origin_durations.append(time.monotonic() - started)
             await asyncio.shield(self._notify_leases())
 
@@ -943,6 +967,20 @@ class ClientPool:
                 if slot.started and self._slot_is_healthy(slot)
             )
 
+    def _ordered_origin_waiters(self):
+        ranks = fair_group_ranks(
+            (row["fair_group"] for row in self._origin_waiters), self._origin_last_group
+        )
+        active = Counter(row["fair_group"] for row in self._origin_active.values())
+        return sorted(
+            self._origin_waiters,
+            key=lambda row: (
+                row["priority"] == "preload",
+                active[row["fair_group"]],
+                ranks[row["fair_group"]],
+            ),
+        )
+
     def performance_snapshot(self) -> dict[str, Any]:
         """Event-loop-local, bounded observations; queue ETAs are estimates."""
         now = time.monotonic()
@@ -951,9 +989,7 @@ class ClientPool:
             if self._origin_durations
             else None
         )
-        queue = sorted(
-            self._origin_waiters, key=lambda row: row["priority"] == "preload"
-        )
+        queue = self._ordered_origin_waiters()
         accounts = []
         for slot in self._slots:
             scheduler = getattr(slot.client, "_media_scheduler", None)
@@ -1055,9 +1091,7 @@ class ClientPool:
         now = time.monotonic()
         requested = set(request_ids)
         active = Counter(row["request_id"] for row in self._origin_active.values())
-        queue = sorted(
-            self._origin_waiters, key=lambda row: row["priority"] == "preload"
-        )
+        queue = self._ordered_origin_waiters()
         matches = {}
         counts = Counter()
         for index, row in enumerate(queue):
@@ -1241,7 +1275,10 @@ class ClientPool:
                     error=str(problem)
                     if (
                         problem := connection_problem(
-                            slot.error, slot.kind, client_name=slot.name
+                            slot.error
+                            or getattr(slot.client, "connection_error", None),
+                            slot.kind,
+                            client_name=slot.name,
                         )
                     )
                     else None,
@@ -1301,6 +1338,9 @@ class ClientPool:
             identity_binder = getattr(slot.client, "bind_identity_pool", None)
             if callable(identity_binder):
                 identity_binder(self)
+            bandwidth_binder = getattr(slot.client, "bind_bandwidth", None)
+            if callable(bandwidth_binder):
+                bandwidth_binder(self.bandwidth)
             await _maybe_await(starter())
             slot.started = True
             slot.healthy = True

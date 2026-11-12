@@ -25,583 +25,6 @@ from tests.browser.test_browser_e2e import (  # noqa: E402
 )
 
 
-@pytest.mark.parametrize("theme", ["light", "dark"])
-def test_neutral_theme_surfaces_and_monitor_layout(server, desktop, theme):
-    _, page = desktop
-    page.add_init_script(f"localStorage.setItem('tgdrive.appearance', '{theme}')")
-    page.goto(server.url)
-    expect(page.locator("#login-dialog")).to_be_visible()
-
-    contrast_readings = {}
-
-    def check_surface(selector, *, neutral=True):
-        colors = page.locator(selector).first.evaluate("""node => {
-          const style = getComputedStyle(node);
-          let parent = node;
-          while (parent.parentElement &&
-            getComputedStyle(parent).backgroundColor === 'rgba(0, 0, 0, 0)')
-            parent = parent.parentElement;
-          return {ink: style.color,
-            background: getComputedStyle(parent).backgroundColor};
-        }""")
-        ink, background = (
-            [int(value) for value in re.findall(r"\d+", colors[key])[:3]]
-            for key in ("ink", "background")
-        )
-        if neutral:
-            assert max(background) - min(background) <= 12, colors
-
-        def luminance(channels):
-            linear = [
-                value / 255 / 12.92
-                if value / 255 <= 0.04045
-                else ((value / 255 + 0.055) / 1.055) ** 2.4
-                for value in channels
-            ]
-            return sum(
-                a * b for a, b in zip(linear, (0.2126, 0.7152, 0.0722), strict=True)
-            )
-
-        bright, dark = sorted((luminance(ink), luminance(background)), reverse=True)
-        ratio = (bright + 0.05) / (dark + 0.05)
-        assert ratio >= 4.5, colors
-        contrast_readings[f"{page.url}:{selector}"] = {**colors, "ratio": ratio}
-
-    check_surface("body")
-    check_surface("#login-dialog .primary-button", neutral=False)
-    check_surface("#login-dialog > p")
-    page.screenshot(
-        path=ARTIFACTS / f"neutral-login-{theme}.png", animations="disabled"
-    )
-    login(page)
-    for view, heading in (
-        ("files", "My Files"),
-        ("preloads", "Preloads"),
-        ("settings", "Cache and preloading"),
-        ("performance", "Performance"),
-    ):
-        page.goto(server.url + f"/?view={view}")
-        expect(page.get_by_role("heading", name=heading, exact=True)).to_be_visible()
-        check_surface(".workspace")
-        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-        page.screenshot(
-            path=ARTIFACTS / f"neutral-{view}-{theme}.png", animations="disabled"
-        )
-    activity = page.get_by_role("region", name="Current activity", exact=True)
-    assert activity.bounding_box()["height"] < 360
-    expect(
-        page.get_by_role("region", name="Automatic tuning", exact=True)
-    ).not_to_be_visible()
-    expect(
-        page.get_by_role("combobox", name="Time range", exact=True)
-    ).not_to_be_visible()
-    page.set_viewport_size({"width": 390, "height": 844})
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    assert activity.bounding_box()["height"] < 440
-    resources = page.get_by_role("region", name="Server resources", exact=True)
-    expect(resources).to_be_visible()
-    for width in (390, 320):
-        page.set_viewport_size({"width": width, "height": 844})
-        actions = [
-            activity.get_by_role("link", name="View Transfers", exact=True),
-            activity.get_by_role("link", name="Upload storage limits", exact=True),
-            resources.get_by_role("link", name="Cache limits", exact=True),
-            resources.get_by_role("button", name="View resource history", exact=True),
-        ]
-        for link in actions:
-            assert link.bounding_box()["height"] >= 44
-        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    page.set_viewport_size({"width": 390, "height": 844})
-    page.get_by_role("tab", name="Resources", exact=True).click()
-    expect(
-        page.get_by_role("region", name="Server network", exact=True)
-    ).to_be_visible()
-    expect(page.get_by_role("combobox", name="Time range", exact=True)).to_be_visible()
-    page.screenshot(
-        path=ARTIFACTS / f"neutral-performance-mobile-{theme}.png",
-        full_page=True,
-        animations="disabled",
-    )
-    (ARTIFACTS / f"neutral-contrast-{theme}.json").write_text(
-        json.dumps(contrast_readings, indent=2)
-    )
-
-
-@pytest.mark.parametrize("width", [1440, 390, 320])
-@pytest.mark.parametrize("known", [True, False])
-def test_overview_exposes_real_resources_and_idle_rates(server, desktop, width, known):
-    _, page = desktop
-    page.emulate_media(reduced_motion="reduce")
-    login(page, server.url)
-    snapshot = page.request.get(server.url + "/api/v1/performance").json()
-    mib = 1024**2
-    snapshot["traffic"].update(download_bytes_per_second=0, upload_bytes_per_second=0)
-    snapshot["telegram"].update(active=0, queued=0)
-    snapshot["diagnosis"] = {
-        "sampled_at": snapshot["traffic"]["at"],
-        "window_seconds": 30,
-        "observed_seconds": 12,
-        "stale_after_seconds": 15,
-        "state": "idle",
-        "workload": dict.fromkeys(
-            [
-                "playback_requests",
-                "download_requests",
-                "unknown_file_requests",
-                "upload_requests",
-            ],
-            0,
-        ),
-        "constraints": [],
-    }
-    snapshot["server"]["cpu"] = {"percent": 25 if known else None, "scope": "host"}
-    snapshot["server"]["memory"].update(
-        cgroup_current=512 * mib if known else 0,
-        cgroup_limit=1024 * mib if known else None,
-    )
-    snapshot["cache"]["disk"].update(
-        available=known, bytes=128 * mib if known else 0, max_bytes=1024 * mib
-    )
-    snapshot["cache"]["memory"].update(
-        bytes=32 * mib if known else 0, effective_max_bytes=64 * mib if known else 0
-    )
-    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
-    page.set_viewport_size({"width": width, "height": 900})
-    page.goto(server.url + "/?view=performance")
-    activity = page.get_by_role("region", name="Current activity", exact=True)
-    resources = page.get_by_role("region", name="Server resources", exact=True)
-    expect(activity).to_contain_text("Nothing is transferring right now")
-    expect(activity.locator(".performance-file-rates dd")).to_have_text(
-        ["0 B/s", "0 B/s"]
-    )
-    expect(resources.get_by_role("progressbar")).to_have_count(4 if known else 0)
-    activity_box = activity.bounding_box()
-    resources_box = resources.bounding_box()
-    if width == 1440:
-        assert resources_box["x"] > activity_box["x"] + activity_box["width"]
-        assert abs(resources_box["y"] - activity_box["y"]) < 2
-    else:
-        assert resources_box["y"] >= activity_box["y"] + activity_box["height"]
-    expect(
-        activity.locator(".performance-activity-actions").get_by_role("link")
-    ).to_have_count(2)
-    if known:
-        expect(
-            resources.get_by_role("progressbar", name="CPU usage", exact=True)
-        ).to_have_attribute("value", "25")
-        expect(resources).to_contain_text("512 MiB / 1 GiB")
-    else:
-        expect(resources).to_contain_text("0 B in use")
-        expect(resources).to_contain_text("No container limit reported")
-        expect(resources).to_contain_text("Disabled")
-        expect(resources).to_contain_text("Unavailable")
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    page.screenshot(
-        path=ARTIFACTS / f"performance-overview-{width}-{known}.png", full_page=True
-    )
-    resources.get_by_role("button", name="View resource history", exact=True).click()
-    expect(page.get_by_role("tab", name="Resources", exact=True)).to_have_attribute(
-        "aria-selected", "true"
-    )
-
-
-@pytest.mark.parametrize("state", ["unconfigured", "available", "zero", "unavailable"])
-def test_storage_measurements_distinguish_guest_backing_and_headroom(
-    server, desktop, state
-):
-    _, page = desktop
-    login(page, server.url)
-    snapshot = page.request.get(server.url + "/api/v1/performance").json()
-    gib = 1024**3
-    snapshot["database"] = {
-        "used_bytes": 0,
-        "index_bytes": 0,
-        "objects": 0,
-        "volume_total_bytes": 0,
-    }
-    available = state in ("available", "zero")
-    snapshot["server"]["disk"].update(
-        available=True,
-        total_bytes=1000 * gib,
-        used_bytes=200 * gib,
-        free_bytes=800 * gib,
-        capacity={
-            "filesystem": {
-                "available": True,
-                "total_bytes": 1000 * gib,
-                "used_bytes": 200 * gib,
-                "free_bytes": 800 * gib,
-            },
-            "backing": {
-                "configured": state != "unconfigured",
-                "available": available,
-                "total_bytes": 100 * gib if available else None,
-                "used_bytes": 60 * gib if available else None,
-                "free_bytes": (40 * gib if state == "available" else 0)
-                if available
-                else None,
-            },
-            "effective": {
-                "available": available,
-                "free_bytes": (40 * gib if state == "available" else 0)
-                if available
-                else None,
-                "headroom_bytes": (20 * gib if state == "available" else 0)
-                if available
-                else None,
-            },
-            "scope": "filesystem_only"
-            if state == "unconfigured"
-            else "backing_filesystem"
-            if available
-            else "backing_unavailable",
-        },
-    )
-    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
-    page.goto(server.url + "/?view=performance")
-    page.get_by_role("tab", name="Resources", exact=True).click()
-    expect(
-        page.get_by_role("progressbar", name="Data filesystem", exact=True)
-    ).to_have_attribute("max", str(1000 * gib))
-    database = page.locator(".performance-usage").filter(
-        has=page.get_by_text("MongoDB", exact=True)
-    )
-    expect(database.locator("strong")).to_have_text("0 B")
-    expect(database.get_by_role("progressbar")).to_have_count(0)
-    readings = page.get_by_role("group", name="Storage capacity measurements")
-    if state == "unconfigured":
-        expect(readings).not_to_be_attached()
-        page.get_by_text("Resource measurement details", exact=True).click()
-        expect(
-            page.get_by_text("Backing storage is not separately measured", exact=False)
-        ).to_be_visible()
-    else:
-        expect(readings.get_by_role("definition")).to_have_text(
-            ["40 GiB", "20 GiB"]
-            if state == "available"
-            else ["0 B", "0 B"]
-            if state == "zero"
-            else ["Unavailable", "Unavailable"]
-        )
-        if state == "unavailable":
-            expect(readings.get_by_role("status")).to_contain_text(
-                "New writes are unavailable"
-            )
-        else:
-            expect(readings.get_by_role("status")).not_to_be_attached()
-    management = page.request.get(server.url + "/api/v1/settings").json()
-    management["stats"].update(
-        free_disk_bytes=800 * gib,
-        disk_capacity=snapshot["server"]["disk"]["capacity"],
-    )
-    page.route("**/api/v1/settings", lambda route: route.fulfill(json=management))
-    page.goto(server.url + "/?view=storage")
-    staging = page.get_by_role("region", name="Temporary Storage", exact=True)
-    expect(staging).to_contain_text("800 GiB reported staging-filesystem free")
-    if state == "unconfigured":
-        expect(staging).not_to_contain_text("Backing filesystem free:")
-    else:
-        backing, after_reserve = (
-            ("40 GiB", "20 GiB")
-            if state == "available"
-            else ("0 B", "0 B")
-            if state == "zero"
-            else ("Unavailable", "Unavailable")
-        )
-        expect(staging).to_contain_text("Backing filesystem free: " + backing)
-        expect(staging).to_contain_text("Free after reserve: " + after_reserve)
-        if state == "unavailable":
-            expect(staging.get_by_role("status")).to_contain_text(
-                "New writes are unavailable"
-            )
-
-
-@pytest.mark.parametrize("width", [1440, 1920, 390, 320])
-@pytest.mark.parametrize("theme", ["light", "dark"])
-def test_performance_measurements_keep_labels_with_their_values(
-    server, desktop, width, theme
-):
-    _, page = desktop
-    page.set_viewport_size({"width": width, "height": 1080})
-    page.emulate_media(reduced_motion="reduce")
-    page.add_init_script(f"localStorage.setItem('tgdrive.appearance', '{theme}')")
-    login(page, server.url)
-    snapshot = page.request.get(server.url + "/api/v1/performance").json()
-    now = time.time()
-    snapshot["traffic"]["at"] = now
-    snapshot["diagnosis"] = {
-        "sampled_at": now,
-        "window_seconds": 30,
-        "observed_seconds": 27,
-        "stale_after_seconds": 60,
-        "state": "idle",
-        "workload": {
-            "playback_requests": 0,
-            "download_requests": 0,
-            "unknown_file_requests": 0,
-            "upload_requests": 0,
-        },
-        "telegram_inbound_bytes_per_second": 0,
-        "http_delivered_bytes_per_second": 0,
-        "cache_hits": None,
-        "cache_misses": 0,
-        "constraints": [],
-    }
-    template = snapshot["telegram"]["accounts"][0]
-    names = ["storage-bot-8066775295", "storage-bot-8015449640"]
-    snapshot["telegram"]["accounts"] = [
-        {
-            **template,
-            "name": name,
-            "uploads": 1 if index == 0 else 0,
-            "downloads": 0,
-            "combined_limit": 3,
-            "cooldown_seconds": 0,
-            "requests": {
-                "active": 4,
-                "queued": 0,
-                "configured_limit": 8,
-                "effective_limit": 8,
-                "configured_parts_per_second": 48,
-                "effective_parts_per_second": 48,
-                "floods": 0,
-                "failed": 0,
-                "completed": 1,
-                "bytes": 1024,
-                "upload_bytes": 1024,
-                "download_bytes": 0,
-            }
-            if index == 0
-            else None,
-        }
-        for index, name in enumerate(names)
-    ]
-    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
-    page.goto(server.url + "/?view=performance")
-    activity = page.get_by_role("region", name="Current activity", exact=True)
-    activity.get_by_text("Measurements and scope", exact=True).click()
-    facts = activity.locator(":scope > details > .performance-facts")
-    expect(facts.locator(":scope > div")).to_have_count(8)
-    expect(facts.get_by_role("definition")).to_have_text(
-        ["0", "0", "0", "0", "0 B/s", "0 B/s", "Unavailable", "0"]
-    )
-    assert facts.bounding_box()["width"] <= 481
-    for row in facts.locator(":scope > div").all():
-        label = row.locator("dt").bounding_box()
-        value = row.locator("dd").bounding_box()
-        assert value["x"] >= label["x"] + label["width"] + 10
-        assert abs(value["y"] - label["y"]) <= 8
-        assert row.evaluate("node => getComputedStyle(node).borderBottomWidth") == "1px"
-    page.screenshot(
-        path=ARTIFACTS / f"performance-measurement-rows-{width}-{theme}.png",
-        full_page=True,
-        animations="disabled",
-    )
-    page.get_by_role("tab", name="Accounts", exact=True).click()
-    accounts = page.get_by_role("region", name="Account capacity", exact=True)
-    panel = page.get_by_role("tabpanel", name="Accounts", exact=True)
-    assert accounts.bounding_box()["width"] == pytest.approx(
-        panel.bounding_box()["width"], abs=2
-    )
-    queue = page.get_by_role("region", name="Waiting for Telegram", exact=True)
-    assert queue.bounding_box()["y"] >= (
-        accounts.bounding_box()["y"] + accounts.bounding_box()["height"]
-    )
-    meter = accounts.get_by_role("meter", name="Media operations for " + names[0])
-    expect(meter).to_have_attribute("value", "1")
-    expect(meter).to_have_attribute("max", "3")
-    requests = accounts.get_by_role("meter", name="Part requests for " + names[0])
-    expect(requests).to_have_attribute("value", "4")
-    expect(requests).to_have_attribute("max", "8")
-    missing = accounts.locator("tbody tr").nth(1)
-    expect(missing).to_contain_text("No request sample")
-    expect(
-        missing.get_by_role("meter", name="Part requests for " + names[1])
-    ).to_have_count(0)
-    if width > 720:
-        for name in names:
-            assert (
-                accounts.get_by_role(
-                    "rowheader", name=name, exact=False
-                ).bounding_box()["width"]
-                >= 190
-            )
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    page.screenshot(
-        path=ARTIFACTS / f"performance-fullwidth-accounts-{width}-{theme}.png",
-        full_page=True,
-        animations="disabled",
-    )
-    page.get_by_role("tab", name="Overview", exact=True).click()
-    activity.get_by_role("link", name="View Transfers", exact=True).click()
-    expect(page).to_have_url(server.url + "/?view=activity")
-    expect(page.get_by_role("heading", name="Transfers", exact=True)).to_be_visible()
-
-
-def test_performance_explanation_without_backend_support(server, desktop):
-    _, page = desktop
-    login(page, server.url)
-    snapshot = page.request.get(server.url + "/api/v1/performance").json()
-    snapshot.pop("diagnosis", None)
-    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
-    page.goto(server.url + "/?view=performance")
-    explanation = page.get_by_role("region", name="Current activity", exact=True)
-    expect(explanation).to_contain_text("Current information is unavailable")
-    expect(page.get_by_role("link", name="View Transfers", exact=True)).to_be_visible()
-    summary = explanation.locator("summary")
-    summary.focus()
-    page.keyboard.press("Enter")
-    expect(
-        explanation.get_by_text("Idle resources can be appropriate", exact=False)
-    ).to_be_visible()
-    expect(explanation).to_contain_text("Low throughput alone cannot locate")
-    page.screenshot(
-        path=ARTIFACTS / "performance-explanation-desktop.png",
-        full_page=True,
-        animations="disabled",
-    )
-    page.set_viewport_size({"width": 390, "height": 844})
-    assert explanation.evaluate("node => node.scrollWidth <= node.clientWidth")
-    assert explanation.evaluate(
-        "node => node.getBoundingClientRect().right <= innerWidth"
-    )
-    explanation.screenshot(
-        path=ARTIFACTS / "performance-explanation-unavailable.png",
-        animations="disabled",
-    )
-
-
-@pytest.mark.parametrize("width", [1440, 390])
-def test_performance_diagnosis_evidence_states_and_expiry(server, desktop, width):
-    _, page = desktop
-    login(page, server.url)
-    snapshot = page.request.get(server.url + "/api/v1/performance").json()
-    snapshot["traffic"]["at"] = 1003
-    diagnosis = {
-        "sampled_at": 1000,
-        "window_seconds": 30,
-        "observed_seconds": 12,
-        "stale_after_seconds": 15,
-        "state": "idle",
-        "workload": {
-            "playback_requests": 0,
-            "download_requests": 0,
-            "unknown_file_requests": 0,
-            "upload_requests": 0,
-        },
-        "telegram_inbound_bytes_per_second": None,
-        "http_delivered_bytes_per_second": 1024,
-        "cache_hits": None,
-        "cache_misses": 0,
-        "constraints": [],
-    }
-    snapshot["diagnosis"] = diagnosis
-    failing = False
-
-    def reading(route):
-        if failing:
-            route.fulfill(status=503, json={"detail": "Synthetic sampling unavailable"})
-        else:
-            route.fulfill(json=snapshot)
-
-    page.route("**/api/v1/performance", reading)
-    page.set_viewport_size({"width": width, "height": 900})
-    page.clock.install()
-    page.goto(server.url + "/?view=performance")
-    explanation = page.get_by_role("region", name="Current activity", exact=True)
-    expect(explanation).to_contain_text("Nothing is transferring right now")
-    diagnosis["state"] = "observing"
-    diagnosis["workload"].update(playback_requests=1, download_requests=2)
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(explanation).to_contain_text("Checking recent activity")
-    diagnosis["state"] = "active"
-    diagnosis["constraints"] = [
-        {
-            "code": "telegram_queue",
-            "certainty": "observed",
-            "evidence": [
-                {
-                    "name": "configured_operations_per_account",
-                    "value": 3,
-                    "unit": "operations",
-                },
-            ],
-        },
-        {
-            "code": "telegram_cooldown",
-            "certainty": "observed",
-            "evidence": [
-                {"name": "longest_cooldown_seconds", "value": 4, "unit": "seconds"},
-            ],
-        },
-        {
-            "code": "scratch_wait",
-            "certainty": "observed",
-            "evidence": [
-                {"name": "reserved_bytes", "value": 1024, "unit": "bytes"},
-            ],
-        },
-    ]
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(explanation.locator(".performance-wait > summary")).to_have_count(3)
-    measurements = explanation.locator("summary").filter(
-        has_text="Measurements and scope"
-    )
-    measurements.click()
-    expect(explanation).to_contain_text("12 s observed")
-    expect(explanation).to_contain_text("30 s window")
-    page.screenshot(
-        path=ARTIFACTS / f"performance-overview-waits-default-{width}.png",
-        full_page=True,
-        animations="disabled",
-    )
-    evidence = explanation.locator(".performance-wait > summary")
-    evidence.first.focus()
-    page.keyboard.press("Enter")
-    expect(explanation.get_by_text("3 operations", exact=True)).to_be_visible()
-    expect(explanation.get_by_text("1 KiB/s", exact=True)).to_be_visible()
-    expect(explanation).to_contain_text(
-        "Telegram inbound - reporting accountsUnavailable"
-    )
-    assert explanation.evaluate("node => node.scrollWidth <= node.clientWidth")
-    page.screenshot(
-        path=ARTIFACTS / f"performance-diagnosis-{width}.png",
-        full_page=True,
-        animations="disabled",
-    )
-    # A failed refresh must not keep the retained sample's evidence current.
-    failing = True
-    page.clock.fast_forward(16000)
-    expect(explanation).to_contain_text("Current information is unavailable")
-    expect(explanation.get_by_text("1 KiB/s", exact=True)).to_have_count(0)
-    expect(explanation.locator(".performance-wait > summary")).to_have_count(0)
-    failing = False
-    snapshot["traffic"]["at"] = diagnosis["sampled_at"] = 2000
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(explanation.locator(".performance-wait > summary")).to_have_count(3)
-    diagnosis["state"] = "unavailable"
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(explanation).to_contain_text("Current information is unavailable")
-
-
-def test_missing_request_history_does_not_imply_zero_errors(server, desktop):
-    _, page = desktop
-    login(page, server.url)
-    snapshot = page.request.get(server.url + "/api/v1/performance").json()
-    snapshot.pop("traffic", None)
-    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
-    page.goto(server.url + "/?view=performance")
-    page.get_by_role("tab", name="Accounts", exact=True).click()
-    status = page.get_by_role("region", name="Account and request status", exact=True)
-    expect(status).to_contain_text("recent request error history unavailable")
-    expect(status).not_to_contain_text("no recent failed requests")
-    expect(status).not_to_contain_text("Healthy")
-    page.get_by_role("tab", name="Resources", exact=True).click()
-    expect(
-        page.get_by_role("heading", name="Server network", exact=True)
-    ).to_be_visible()
-
-
 def test_cache_entry_names_purposes_search_and_scoped_eviction(server, desktop):
     _, page = desktop
     login(page, server.url)
@@ -946,174 +369,9 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
     page.screenshot(path=ARTIFACTS / "preloads-empty-unavailable-320-dark.png")
 
 
-def test_performance_views_keyboard_navigation_and_settings_groups(server, desktop):
+def test_cache_settings_groups_and_scoped_save(server, desktop):
     _, page = desktop
     login(page, server.url)
-    snapshot = page.request.get(server.url + "/api/v1/performance").json()
-    page.goto(server.url + "/?view=performance")
-    expect(page.get_by_role("tab", name="Overview", exact=True)).to_be_visible()
-    expect(
-        page.get_by_role("img", name="Measured HTTP send and receive throughput")
-    ).not_to_be_visible()
-    page.screenshot(path=ARTIFACTS / "owner-performance-idle.png", full_page=True)
-    now = time.time()
-    snapshot["traffic"].update(
-        download_bytes_per_second=3 * 1024**2,
-        upload_bytes_per_second=1024**2,
-        history=[
-            {
-                "at": now - 6,
-                "download_bytes": 0,
-                "upload_bytes": 0,
-                "requests": 1,
-                "active": 2,
-                "errors": 0,
-            },
-            {
-                "at": now - 3,
-                "download_bytes": 6 * 1024**2,
-                "upload_bytes": 3 * 1024**2,
-                "requests": 2,
-                "active": 2,
-                "errors": 0,
-            },
-            {
-                "at": now,
-                "download_bytes": 15 * 1024**2,
-                "upload_bytes": 6 * 1024**2,
-                "requests": 3,
-                "active": 2,
-                "errors": 0,
-            },
-        ],
-    )
-    snapshot["telegram"].update(
-        active=2,
-        queued=1,
-        history=[
-            {"at": now - 3, "active": 1, "queued": 0},
-            {"at": now, "active": 2, "queued": 1},
-        ],
-        accounts=[
-            {
-                "name": "Storage bot 1",
-                "kind": "bot",
-                "uploads": 1,
-                "downloads": 1,
-                "combined_limit": 3,
-                "cooldown_seconds": 0,
-                "requests": {
-                    "active": 2,
-                    "queued": 1,
-                    "effective_limit": 8,
-                    "effective_parts_per_second": 24,
-                    "configured_parts_per_second": 24,
-                    "floods": 0,
-                },
-            }
-        ],
-        queue=[
-            {
-                "position": 1,
-                "operation": "download",
-                "priority": "demand",
-                "waiting_seconds": 3,
-                "estimated_wait_seconds": 5,
-            }
-        ],
-    )
-    snapshot["traffic"]["at"] = now
-    snapshot["diagnosis"] = {
-        "sampled_at": now,
-        "window_seconds": 30,
-        "observed_seconds": 12,
-        "stale_after_seconds": 15,
-        "state": "active",
-        "workload": {
-            "playback_requests": 1,
-            "download_requests": 0,
-            "unknown_file_requests": 0,
-            "upload_requests": 1,
-        },
-        "telegram_inbound_bytes_per_second": None,
-        "http_delivered_bytes_per_second": None,
-        "cache_hits": None,
-        "cache_misses": None,
-        "constraints": [],
-    }
-    snapshot["tuning"] = {
-        "running": True,
-        "values": {"cache_memory_bytes": 256 * 1024**2},
-        "reasons": {"cache_memory_bytes": "Sized from free memory"},
-    }
-    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
-    page.goto(server.url + "/?view=performance")
-    overview = page.get_by_role("tab", name="Overview", exact=True)
-    expect(overview).to_have_attribute("aria-selected", "true")
-    expect(page.get_by_role("tabpanel", name="Overview")).to_be_visible()
-    expect(
-        page.get_by_role("region", name="Automatic tuning", exact=True)
-    ).not_to_be_visible()
-    expect(page.get_by_role("link", name="View Transfers", exact=True)).to_be_visible()
-    expect(page.get_by_text("3 MiB/s", exact=True)).to_be_visible()
-    expect(page.get_by_text("1 MiB/s", exact=True)).to_be_visible()
-    expect(
-        page.get_by_role("region", name="Container RAM", exact=True)
-    ).not_to_be_visible()
-    expect(
-        page.get_by_role("heading", name="Storage and cache", exact=True)
-    ).not_to_be_visible()
-    overview.focus()
-    page.keyboard.press("ArrowRight")
-    expect(page.get_by_role("tab", name="Accounts", exact=True)).to_be_focused()
-    expect(page.get_by_role("heading", name="Account capacity")).to_be_visible()
-    expect(page.get_by_role("heading", name="Waiting for Telegram")).to_be_visible()
-    expect(page.get_by_role("cell", name="About 5s", exact=True)).to_be_visible()
-    page.screenshot(path=ARTIFACTS / "owner-performance-accounts.png", full_page=True)
-    page.get_by_role("tab", name="Accounts", exact=True).focus()
-    page.keyboard.press("End")
-    page.keyboard.press("Enter")
-    expect(
-        page.get_by_role("heading", name="Storage and cache", exact=True)
-    ).to_be_visible()
-    expect(
-        page.get_by_role("progressbar", name="Data filesystem", exact=True)
-    ).to_be_visible()
-    assert (
-        page.get_by_role("heading", name="Storage and cache")
-        .locator("xpath=ancestor::details")
-        .count()
-        == 0
-    )
-    tuning = page.get_by_role("region", name="Automatic tuning", exact=True)
-    expect(tuning.get_by_text("Memory cache", exact=True)).not_to_be_visible()
-    tuning.locator("summary").focus()
-    page.keyboard.press("Enter")
-    expect(tuning.get_by_text("Memory cache", exact=True)).to_be_visible()
-    expect(tuning.get_by_role("definition")).to_have_text("256 MiB")
-    expect(tuning).to_contain_text("Sized from free memory")
-    page.screenshot(path=ARTIFACTS / "owner-performance-resources.png", full_page=True)
-    page.get_by_role("tab", name="Overview", exact=True).click()
-    page.screenshot(
-        path=ARTIFACTS / "owner-performance-desktop.png",
-        full_page=True,
-        animations="disabled",
-    )
-    page.set_viewport_size({"width": 390, "height": 844})
-    set_appearance(page, "dark")
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    page.screenshot(
-        path=ARTIFACTS / "owner-performance-mobile-dark.png",
-        full_page=True,
-        animations="disabled",
-    )
-    for tab in ["Accounts", "Resources"]:
-        page.get_by_role("tab", name=tab, exact=True).click()
-        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-        page.screenshot(
-            path=ARTIFACTS / f"owner-performance-{tab.lower()}-mobile.png",
-            full_page=True,
-        )
     page.goto(server.url + "/?view=settings&section=cache")
     expect(
         page.get_by_role("heading", name="Cache and preloading", exact=True)
@@ -1148,7 +406,7 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     ).to_be_disabled()
     preload = page.get_by_role("switch", name=re.compile(r"^Preload during playback"))
     expect(preload).to_be_checked()
-    page.get_by_text("Preload during playback", exact=True).click()
+    preload.locator("xpath=ancestor::label").click()
     expect(page.get_by_text("Unsaved changes", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Save Performance Settings")).to_be_enabled()
     with page.expect_response(
@@ -1171,196 +429,754 @@ def test_performance_views_keyboard_navigation_and_settings_groups(server, deskt
     )
 
 
-def test_network_includes_url_downloads_and_resources_use_container_limits(
+def measured_snapshot(page, server):
+    snapshot = page.request.get(server.url + "/api/v1/performance").json()
+    now = time.time()
+    snapshot["server"].update(
+        at=now,
+        sampled_at=now,
+        stale_after_seconds=15,
+        cpu={"percent": 12.5, "scope": "host"},
+        network={
+            "available": True,
+            "interface": "eth0",
+            "sent_bytes_per_second": 2_000_000,
+            "received_bytes_per_second": 1_000_000,
+        },
+        history=[
+            {
+                "at": now - 15 + index * 3,
+                "sent_bytes_per_second": None
+                if index == 3
+                else (index + 1) * 2_000_000 / 6,
+                "received_bytes_per_second": None
+                if index == 3
+                else (index + 1) * 1_000_000 / 6,
+                "network_interface": "eth0",
+            }
+            for index in range(6)
+        ],
+    )
+    capacity = {
+        "filesystem": {
+            "available": True,
+            "total_bytes": 100 * 1024**3,
+            "free_bytes": 80 * 1024**3,
+            "used_bytes": 20 * 1024**3,
+        },
+        "backing": {
+            "configured": True,
+            "available": True,
+            "total_bytes": 50 * 1024**3,
+            "free_bytes": 30 * 1024**3,
+            "used_bytes": 20 * 1024**3,
+        },
+        "effective": {
+            "available": True,
+            "total_bytes": 50 * 1024**3,
+            "free_bytes": 30 * 1024**3,
+            "headroom_bytes": 25 * 1024**3,
+        },
+        "scope": "configured_backing_probe",
+    }
+    snapshot["server"]["disk"]["capacity"] = capacity
+    snapshot["tuning"] = {
+        "running": True,
+        "interval_seconds": 5,
+        "values": {"cache_memory_bytes": 256 * 1024**2},
+        "reasons": {"cache_memory_bytes": "Resource-based ceiling"},
+        "measurements": {},
+    }
+    snapshot["resource_summary"] = {
+        "sampled_at": now,
+        "cpu": {"scope": "cgroup", "source": "cgroup_v2", "capacity_cores": 1.5},
+        "memory": {
+            "scope": "cgroup",
+            "source": "cgroup_v2",
+            "used_bytes": 256 * 1024**2,
+            "limit_bytes": 1024**3,
+            "cgroup_limit_bytes": 1024**3,
+            "environment_total_bytes": 8 * 1024**3,
+            "limit_source": "cgroup_v2",
+            "available_bytes": 512 * 1024**2,
+        },
+        "storage": {"data": capacity, "cache": capacity},
+    }
+    snapshot["traffic"].update(
+        at=now, download_bytes_per_second=0, upload_bytes_per_second=0
+    )
+    snapshot["telegram"]["accounts"] = [
+        {
+            "name": "storage-bot-with-a-long-name-8066775295",
+            "kind": "bot",
+            "uploads": 1,
+            "downloads": 0,
+            "combined_limit": 3,
+            "cooldown_seconds": 0,
+            "requests": {
+                "active": 4,
+                "queued": 0,
+                "upload_bytes": 347 * 1024**2,
+                "download_bytes": 0,
+                "effective_limit": 8,
+                "configured_limit": 8,
+                "effective_parts_per_second": 48,
+                "configured_parts_per_second": 48,
+                "floods": 0,
+                "failed": 0,
+                "completed": 1,
+                "bytes": 347 * 1024**2,
+            },
+        }
+    ]
+    snapshot["diagnosis"] = {
+        "sampled_at": now,
+        "state": "active",
+        "stale_after_seconds": 15,
+        "window_seconds": 30,
+        "observed_seconds": 12,
+        "workload": {
+            "playback_requests": 0,
+            "download_requests": 0,
+            "unknown_file_requests": 0,
+            "upload_requests": 0,
+        },
+        "telegram_inbound_bytes_per_second": None,
+        "cache_hits": None,
+        "cache_misses": None,
+        "constraints": [
+            {
+                "code": "telegram_cooldown",
+                "certainty": "observed",
+                "evidence": [{"name": "cooldown", "value": 3, "unit": "seconds"}],
+            }
+        ],
+    }
+    return snapshot
+
+
+@pytest.mark.parametrize(
+    "width,theme", [(1920, "light"), (1440, "dark"), (390, "light"), (320, "dark")]
+)
+def test_two_performance_views_keep_layout_and_measured_activity(
+    server, desktop, width, theme
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 960 if width > 600 else 844})
+    page.add_init_script(f"localStorage.setItem('tgdrive.appearance','{theme}')")
+    page.emulate_media(reduced_motion="reduce")
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    overview = page.get_by_role("tabpanel", name="Performance", exact=True)
+    expect(page.get_by_role("tab", name="Performance", exact=True)).to_have_attribute(
+        "aria-selected", "true"
+    )
+    expect(overview.locator(".network-readings dd")).to_have_text(["16 Mbps", "8 Mbps"])
+    expect(page.get_by_role("tab")).to_have_text(["Performance", "Accounts"])
+    expect(overview.locator(".performance-network-chart")).to_have_count(1)
+    expect(overview.locator(".network-trend")).to_have_count(0)
+    expect(overview.get_by_role("heading", name="Current activity")).to_be_visible()
+    expect(overview.get_by_role("region", name="What is waiting")).to_be_visible()
+    upload_color = overview.locator("polyline.performance-plot-active").first.evaluate(
+        "n=>getComputedStyle(n).stroke"
+    )
+    download_color = overview.locator(
+        "polyline.performance-plot-queued"
+    ).first.evaluate("n=>getComputedStyle(n).stroke")
+    workspace = page.locator(".workspace")
+    page.evaluate("document.fonts.ready")
+    workspace.evaluate("n=>n.scrollTo({top:0,behavior:'instant'})")
+    expect(workspace).to_have_js_property("scrollTop", 0)
+    page.screenshot(
+        path=ARTIFACTS / f"two-tab-performance-{width}-{theme}.png",
+        animations="disabled",
+    )
+    transfers_link = overview.get_by_role("link", name="Open Transfers", exact=True)
+    transfers_link.focus()
+    expect(transfers_link).to_be_focused()
+    if width <= 720:
+        footer = page.get_by_role("navigation", name="Sections", exact=True)
+        assert (
+            transfers_link.bounding_box()["y"] + transfers_link.bounding_box()["height"]
+            <= footer.bounding_box()["y"]
+        )
+
+    page.get_by_role("tab", name="Accounts", exact=True).click()
+    accounts = page.get_by_role("tabpanel", name="Accounts", exact=True)
+    expect(
+        accounts.get_by_role("cell", name="347 MiB uploaded 0 B downloaded", exact=True)
+    ).to_be_visible()
+    expect(
+        accounts.get_by_role("columnheader", name="Media operations", exact=True)
+    ).to_be_visible()
+    expect(
+        accounts.get_by_role("heading", name="Waiting for Telegram", exact=True)
+    ).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
+    workspace.evaluate("n=>n.scrollTo({top:0,behavior:'instant'})")
+    page.screenshot(
+        path=ARTIFACTS / f"final-accounts-{width}-{theme}.png", animations="disabled"
+    )
+    page.get_by_role("tab", name="Performance", exact=True).click()
+    resources = page.get_by_role("tabpanel", name="Performance", exact=True)
+    expect(
+        resources.get_by_role("heading", name="Charts and history", exact=True)
+    ).to_be_visible()
+    network_card = resources.locator(".performance-network-chart")
+    cpu_card = resources.locator(".performance-resource-charts > section").first
+    assert (
+        cpu_card.bounding_box()["y"]
+        - (network_card.bounding_box()["y"] + network_card.bounding_box()["height"])
+        >= 16
+    )
+    expect(network_card).to_contain_text("Upload from server")
+    expect(network_card).to_contain_text("Download to server")
+    expect(network_card.locator("polyline.performance-plot-active").first).to_have_css(
+        "stroke", upload_color
+    )
+    expect(network_card.locator("polyline.performance-plot-queued").first).to_have_css(
+        "stroke", download_color
+    )
+    dash = network_card.locator("polyline.performance-plot-queued").first.evaluate(
+        "n=>getComputedStyle(n).strokeDasharray.split(/[ ,]+/).map(parseFloat)"
+    )
+    assert dash == [5, 4]
+    legend = network_card.locator(".performance-chart-legend .chart-series-secondary")
+    assert (
+        legend.evaluate("n=>getComputedStyle(n,'::before').borderTopStyle") == "dashed"
+    )
+
+    readout = network_card.locator(".performance-chart-readout")
+    assert (
+        readout.locator(".chart-series-primary").evaluate(
+            "n=>getComputedStyle(n,'::before').backgroundColor"
+        )
+        == upload_color
+    )
+    secondary_marker = readout.locator(".chart-series-secondary")
+    assert (
+        secondary_marker.evaluate("n=>getComputedStyle(n,'::before').borderTopColor")
+        == download_color
+    )
+    assert (
+        secondary_marker.evaluate("n=>getComputedStyle(n,'::before').borderTopStyle")
+        == "dashed"
+    )
+
+    expect(network_card.locator(".performance-chart-axis")).not_to_contain_text("MiB/s")
+
+    expect(resources.get_by_text("TGDrive process", exact=True)).to_be_visible()
+    expect(resources.get_by_text("1.5 CPU equivalents", exact=True)).to_be_visible()
+    expect(resources.get_by_text("Memory cache", exact=True)).to_be_visible()
+    expect(
+        resources.get_by_role("heading", name="All-time totals", exact=True)
+    ).to_be_visible()
+    tuning = resources.get_by_role("region", name="Automatic tuning", exact=True)
+    totals = resources.locator(".performance-all-time")
+    assert (
+        totals.bounding_box()["y"]
+        - (tuning.bounding_box()["y"] + tuning.bounding_box()["height"])
+        >= 20
+    )
+    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
+    workspace.evaluate("n=>n.scrollTo({top:0,behavior:'instant'})")
+    page.screenshot(
+        path=ARTIFACTS / f"two-tab-resources-{width}-{theme}.png", animations="disabled"
+    )
+
+
+@pytest.mark.parametrize("state", ["missing", "stale", "zero"])
+def test_performance_missing_and_stale_samples_never_become_zero(
+    server, desktop, state
+):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    if state == "missing":
+        snapshot.pop("resource_summary")
+        snapshot.pop("diagnosis")
+        snapshot["server"].pop("sampled_at")
+    elif state == "stale":
+        snapshot["server"]["sampled_at"] -= 60
+        snapshot["diagnosis"]["sampled_at"] -= 60
+    else:
+        snapshot["server"]["network"].update(
+            sent_bytes_per_second=0, received_bytes_per_second=0
+        )
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    expected = (
+        ["0 Mbps", "0 Mbps"] if state == "zero" else ["Unavailable", "Unavailable"]
+    )
+    expect(page.locator(".network-readings dd")).to_have_text(expected)
+    if state != "zero":
+        expect(page.get_by_role("region", name="What is waiting")).to_contain_text(
+            "Current wait evidence is unavailable"
+        )
+    if state == "missing":
+        page.get_by_role("tab", name="Performance", exact=True).click()
+        expect(
+            page.get_by_role("tabpanel", name="Performance", exact=True)
+        ).to_contain_text("Unavailable")
+
+
+def test_performance_failed_refresh_preserves_context_and_recovers(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    fail = False
+
+    def respond(route):
+        if fail:
+            route.fulfill(
+                status=503, json={"detail": "Snapshot temporarily unavailable"}
+            )
+        else:
+            route.fulfill(json=snapshot)
+
+    page.route("**/api/v1/performance", respond)
+    page.goto(server.url + "/?view=performance")
+    expect(page.locator(".network-readings dd")).to_have_text(["16 Mbps", "8 Mbps"])
+    fail = True
+    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    expect(page.locator("#performance").get_by_role("alert")).to_contain_text(
+        "Showing the last loaded snapshot"
+    )
+    expect(page.locator(".network-readings dd")).to_have_text(
+        ["Unavailable", "Unavailable"]
+    )
+    page.get_by_role("tab", name="Accounts", exact=True).click()
+    expect(page.get_by_role("tabpanel", name="Accounts", exact=True)).to_contain_text(
+        "347 MiB"
+    )
+    page.get_by_role("tab", name="Performance", exact=True).click()
+    fail = False
+    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    expect(page.locator(".network-readings dd")).to_have_text(["16 Mbps", "8 Mbps"])
+    expect(page.locator("#performance").get_by_role("alert")).not_to_be_visible()
+
+
+def test_performance_manual_refresh_wins_over_an_older_poll(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    old = json.loads(json.dumps(snapshot))
+    old["server"]["network"]["sent_bytes_per_second"] = 99_000_000
+    held = []
+    calls = 0
+
+    def respond(route):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            held.append(route)
+        else:
+            route.fulfill(json=snapshot)
+
+    page.clock.install()
+    page.route("**/api/v1/performance", respond)
+    page.goto(server.url + "/?view=performance")
+    expect(page.locator(".network-readings dd").first).to_have_text("16 Mbps")
+    with page.expect_request(
+        lambda request: request.url.endswith("/api/v1/performance")
+    ):
+        page.clock.fast_forward(3100)
+    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    expect(page.get_by_role("button", name="Refresh Performance")).to_be_enabled()
+    assert len(held) == 1
+    held[0].fulfill(json=old)
+    expect(page.locator(".network-readings dd").first).to_have_text("16 Mbps")
+
+
+def test_performance_help_supports_keyboard_escape_and_focus_return(server, desktop):
+    _, page = desktop
+    login(page, server.url + "/?view=performance")
+    help_button = page.get_by_role("button", name="About Server network", exact=True)
+    expect(help_button).to_be_visible()
+    help_button.focus()
+    page.keyboard.press("Enter")
+    content = page.get_by_role(
+        "dialog", name="About Server network", exact=True
+    ).filter(has_text="interface counters")
+    expect(content).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(content).not_to_be_visible()
+    expect(help_button).to_be_focused()
+    page.set_viewport_size({"width": 390, "height": 844})
+    help_button.click()
+    expect(content).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_transfer_speed_controls_preserve_conflicts_and_category_save(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    saved = page.request.get(server.url + "/api/v1/settings/performance").json()
+    saved.update(
+        upload_limit_bytes_per_second=None, download_limit_bytes_per_second=1_234_567
+    )
+    requests = []
+    conflict = True
+
+    def settings(route):
+        nonlocal saved
+        if route.request.method == "PATCH":
+            requests.append(route.request.post_data_json)
+            assert route.request.headers["if-match"] == saved["revision"]
+            if conflict:
+                route.fulfill(
+                    status=409,
+                    json={"detail": "Settings changed elsewhere", "code": "CONFLICT"},
+                )
+            else:
+                saved = {
+                    **saved,
+                    **route.request.post_data_json,
+                    "revision": '"saved-speed"',
+                }
+                route.fulfill(json=saved)
+        else:
+            route.fulfill(json=saved)
+
+    page.route("**/api/v1/settings/performance", settings)
+    page.goto(server.url + "/?view=settings&section=transfers")
+    upload = page.get_by_role(
+        "combobox", name="Upload from server limit mode", exact=True
+    )
+    upload.select_option("custom")
+    page.get_by_role(
+        "textbox", name="Upload from server limit (Mbps)", exact=True
+    ).fill("80")
+    save = page.get_by_role("button", name="Save Performance Settings", exact=True)
+    save.click()
+    expect(page.get_by_role("alert")).to_contain_text("Settings changed elsewhere")
+    expect(save).to_be_disabled()
+    conflict = False
+    page.get_by_role("button", name="Reload Latest Settings", exact=True).click()
+    expect(upload).to_have_value("unlimited")
+    upload.select_option("custom")
+    page.get_by_role(
+        "textbox", name="Upload from server limit (Mbps)", exact=True
+    ).fill("80")
+    save.click()
+    expect(save).to_be_disabled()
+    assert requests == [{"upload_limit_bytes_per_second": 10_000_000}] * 2
+    expect(
+        page.get_by_role("combobox", name="Download to server limit mode")
+    ).to_have_value("custom")
+    page.reload()
+    expect(upload).to_have_value("custom")
+    expect(
+        page.get_by_role("textbox", name="Upload from server limit (Mbps)")
+    ).to_have_value(re.compile(r"^80(?:\.0+)? Mbps$"))
+
+
+def test_intentional_speed_wait_is_separate_from_network_failure(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    direction = {
+        "configured_bytes_per_second": 1024,
+        "effective_bytes_per_second": 512,
+        "waiting": 2,
+        "admitted_bytes": 123,
+        "wait_seconds": 30,
+    }
+    snapshot["bandwidth"] = {
+        "upload": direction,
+        "download": {**direction, "waiting": 0},
+        "native_engines": 1,
+        "scope": "managed_file_payload",
+    }
+    snapshot["diagnosis"]["constraints"] = []
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    waiting = page.get_by_role("region", name="What is waiting", exact=True)
+    expect(waiting).to_contain_text(
+        "waiting for its configured speed limit (<0.01 Mbps)"
+    )
+    expect(waiting).to_contain_text("intentional throttling")
+    expect(page.locator(".network-readings dd").first).to_have_text("16 Mbps")
+    page.get_by_role("link", name="Transfer settings", exact=True).click()
+    expect(page).to_have_url(re.compile(r"\?view=settings&section=transfers$"))
+    expect(
+        page.get_by_role("heading", name="Uploads and Telegram", exact=True)
+    ).to_be_visible()
+
+
+def test_resource_long_unknown_value_is_contained_at_320(server, desktop):
+    _, page = desktop
+    page.set_viewport_size({"width": 320, "height": 844})
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    snapshot["resource_summary"]["storage"]["data"]["backing"].update(
+        configured=False, available=False
+    )
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    page.get_by_role("tab", name="Performance", exact=True).click()
+    value = page.get_by_text("Not separately measured", exact=True)
+    expect(value).to_be_visible()
+    boxes = value.evaluate("""n=>{
+        const box=x=>{
+            const r=x.getBoundingClientRect();
+            return {left:r.left,right:r.right,top:r.top,bottom:r.bottom};
+        };
+        return {label:box(n.previousElementSibling),
+                value:box(n),row:box(n.parentElement)};
+    }""")
+    assert boxes["label"]["bottom"] <= boxes["value"]["top"] + 1
+    assert boxes["value"]["left"] >= boxes["row"]["left"] - 1
+    assert boxes["value"]["right"] <= boxes["row"]["right"] + 1
+    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_isolated_network_samples_are_visible_without_bridging_gaps(
+    server, desktop, theme
+):
+    _, page = desktop
+    page.add_init_script(f"localStorage.setItem('tgdrive.appearance','{theme}')")
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    now = snapshot["server"]["at"]
+    snapshot["server"]["history"] = [
+        {
+            "at": now - 6,
+            "sent_bytes_per_second": 1_000_000,
+            "received_bytes_per_second": 500_000,
+            "network_interface": "eth0",
+        },
+        {
+            "at": now - 3,
+            "sent_bytes_per_second": None,
+            "received_bytes_per_second": None,
+            "network_interface": "eth0",
+        },
+        {
+            "at": now,
+            "sent_bytes_per_second": 2_000_000,
+            "received_bytes_per_second": 1_000_000,
+            "network_interface": "eth0",
+        },
+    ]
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    chart = page.locator(".performance-network-chart .performance-chart-plot > svg")
+    points = chart.locator(
+        "circle.performance-chart-point, circle.performance-chart-point-secondary"
+    )
+    expect(points).to_have_count(4)
+    for line in chart.locator("polyline").all():
+        assert " " not in line.get_attribute("points")
+    for point in points.all():
+        reading = point.evaluate(
+            "n=>({r:n.r.baseVal.value,fill:getComputedStyle(n).fill,opacity:getComputedStyle(n).opacity,box:n.getBoundingClientRect().width})"
+        )
+        assert reading["r"] >= 2 and reading["box"] > 0 and reading["opacity"] == "1"
+        assert reading["fill"] != "none"
+    page.screenshot(
+        path=ARTIFACTS / f"final-isolated-points-{theme}.png", animations="disabled"
+    )
+
+
+@pytest.mark.parametrize("backing_known", [True, False], ids=["verified", "unknown"])
+def test_primary_storage_uses_verified_envelope_not_virtual_filesystem(
+    server, desktop, backing_known
+):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    snapshot["server"]["disk"].update(
+        available=True,
+        total_bytes=1024 * 1024**3,
+        used_bytes=178 * 1024**3,
+        free_bytes=846 * 1024**3,
+    )
+    capacity = snapshot["resource_summary"]["storage"]["data"]
+    capacity["backing"].update(
+        configured=backing_known,
+        available=backing_known,
+        total_bytes=200 * 1024**3,
+        free_bytes=100 * 1024**3,
+    )
+    capacity["effective"].update(
+        available=True,
+        free_bytes=100 * 1024**3,
+        headroom_bytes=45 * 1024**3,
+    )
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    primary = page.locator('[data-storage="effective"]')
+    expect(primary).to_contain_text("Backing storage free")
+    expect(primary.locator("strong")).to_have_text(
+        "100 GiB" if backing_known else "Unavailable"
+    )
+    expect(primary).not_to_contain_text("846")
+    expect(primary.locator("progress")).to_have_count(0)
+    if backing_known:
+        expect(primary).to_contain_text("45 GiB available after reserve")
+    details = page.locator("details").filter(
+        has=page.locator("summary", has_text="Filesystem measurement details")
+    )
+    expect(details).not_to_have_attribute("open", "")
+    details.locator("summary").click()
+    expect(details).to_contain_text("846 GiB")
+
+
+def test_live_speed_headlines_are_compact_without_rounding_to_false_zero(
     server, desktop
 ):
     _, page = desktop
     login(page, server.url)
-    snapshot = page.request.get(server.url + "/api/v1/performance").json()
-    snapshot["server"]["network"] = {
-        "available": True,
-        "interface": "eth0",
-        "started_at": time.time() - 120,
-        "received_bytes": 1024**3,
-        "sent_bytes": 2 * 1024**2,
-        "received_bytes_per_second": 12 * 1024**2,
-        "sent_bytes_per_second": 0,
-        "scope": "Default-route interface in the application's network namespace",
-    }
-    snapshot["server"]["cpu"] = {"percent": 25, "scope": "cgroup", "capacity_cores": 4}
-    snapshot["server"]["memory"] = {
-        "MemTotal": 16 * 1024**3,
-        "MemAvailable": 10 * 1024**3,
-        "cgroup_current": 2 * 1024**3,
-        "cgroup_limit": 8 * 1024**3,
-    }
-    snapshot["traffic"].update(
-        download_bytes=0,
-        upload_bytes=0,
-        download_bytes_per_second=0,
-        upload_bytes_per_second=0,
-        history=[],
+    snapshot = measured_snapshot(page, server)
+    snapshot["server"]["network"].update(
+        sent_bytes_per_second=11_702.375,
+        received_bytes_per_second=1_024,
     )
-    now = time.time()
-    snapshot["server"]["history"] = [
-        {
-            "at": now - (6 - index) * 3,
-            "cpu_percent": percent,
-            "cpu_scope": "cgroup",
-            "memory_bytes": int(memory * 1024**3) if memory is not None else None,
-            "memory_limit_bytes": 8 * 1024**3,
-            "received_bytes_per_second": incoming * 1024**2
-            if incoming is not None
-            else None,
-            "sent_bytes_per_second": outgoing * 1024**2
-            if outgoing is not None
-            else None,
-            "network_interface": "eth0",
-        }
-        for index, (percent, memory, incoming, outgoing) in enumerate(
-            [
-                (10, 1, 2, 1),
-                (15, 1.3, 4, 2),
-                (20, 1.7, 5, 3),
-                (None, None, None, None),
-                (30, 1.8, 8, 1),
-                (40, 2.3, 10, 2),
-                (25, 2, 12, 0),
-            ]
-        )
-    ]
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
-    page.get_by_role("tab", name="Resources", exact=True).click()
-    network = page.get_by_role("region", name="Server network", exact=True)
-    expect(network).to_contain_text("12 MiB/s")
-    expect(network).to_contain_text(
-        "All traffic on the reported network interface; not Telegram alone"
+    expect(page.locator(".network-readings dd")).to_have_text(
+        ["0.09 Mbps", "<0.01 Mbps"]
     )
+
+
+@pytest.mark.parametrize("scope", ["host", "unavailable"])
+def test_memory_scope_does_not_invent_a_container_limit(server, desktop, scope):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    snapshot["resource_summary"]["memory"].update(
+        scope=scope,
+        limit_bytes=8 * 1024**3 if scope == "host" else None,
+        used_bytes=2 * 1024**3 if scope == "host" else None,
+        available_bytes=3 * 1024**3 if scope == "host" else None,
+    )
+    snapshot["server"]["memory"].update(cgroup_current=None, cgroup_limit=None)
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    memory = page.locator('[data-metric="memory_bytes"]')
+    expect(memory.get_by_role("heading")).to_have_text(
+        "Visible system RAM" if scope == "host" else "Server memory"
+    )
+    memory.get_by_text("Measurement scope", exact=True).click()
+    if scope == "host":
+        expect(memory).to_contain_text("not a container hard limit")
+    else:
+        expect(memory).to_contain_text("No finite visible container limit established")
+    expect(memory).not_to_contain_text("Current container limit")
+
+
+def test_effective_memory_budget_is_not_a_container_hard_limit(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    snapshot["resource_summary"]["memory"].update(
+        scope="cgroup",
+        used_bytes=256 * 1024**2,
+        limit_bytes=8 * 1024**3,
+        cgroup_limit_bytes=None,
+        environment_total_bytes=8 * 1024**3,
+        limit_source="proc_meminfo",
+        available_bytes=3 * 1024**3,
+    )
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    memory = page.locator('[data-metric="memory_bytes"]')
+    expect(memory.locator('[title="Current reading"]')).not_to_contain_text("8 GiB")
+    memory.get_by_text("Measurement scope", exact=True).click()
+    expect(memory).to_contain_text("No finite visible container limit established")
+    budget = page.locator(".performance-facts > div").filter(
+        has=page.get_by_text("Automatic resource-sizing ceiling", exact=True)
+    )
+    expect(budget).to_contain_text("8 GiB")
+    expect(budget).to_contain_text("not a container hard limit")
+    expect(page.get_by_role("heading", name="Files in This Drive")).to_be_visible()
+    expect(page.get_by_role("heading", name="Temporary Storage")).to_be_visible()
+    expect(page.get_by_role("link", name="Open Transfers", exact=True)).to_have_count(1)
+
+
+def test_drive_statistics_move_to_performance_and_share_manual_refresh(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    management = page.request.get(server.url + "/api/v1/settings").json()
+    management["stats"].update(
+        files=17,
+        folders=3,
+        trashed_files=2,
+        active_jobs=1,
+        queued_jobs=2,
+        failed_jobs=3,
+        staging_reserved_bytes=1024**2,
+        staging_budget_bytes=8 * 1024**2,
+    )
+    page.route("**/api/v1/settings", lambda route: route.fulfill(json=management))
+    page.goto(server.url + "/?view=storage")
     expect(
-        page.get_by_role("img", name="Server network over time", exact=True)
+        page.get_by_role("heading", name="Cloud Database", exact=True)
     ).to_be_visible()
-    expect(network.locator("polyline.performance-plot-active")).to_have_count(2)
-    plot = network.locator(".performance-chart-plot")
-    network.get_by_role("img").scroll_into_view_if_needed()
-    bounds = network.get_by_role("img").bounding_box()
-    positions = []
-    for fraction in (0.2, 0.65, 0.98):
-        pointer_x = bounds["x"] + bounds["width"] * fraction
-        page.mouse.move(pointer_x, bounds["y"] + bounds["height"] * 0.45)
-        tooltip = network.locator(".performance-chart-tooltip")
-        expect(tooltip).to_be_visible()
-        tip = tooltip.bounding_box()
-        frame = plot.bounding_box()
-        assert tip["x"] >= frame["x"]
-        assert tip["x"] + tip["width"] <= frame["x"] + frame["width"] + 1
-        positions.append(tip["x"])
-    # Narrow charts flip the tooltip to the pointer's left to stay contained.
-    assert max(positions) - min(positions) > 10
-    expect(network.locator("svg title")).to_have_count(0)
-
-    expect(page.get_by_role("region", name="Container RAM", exact=True)).to_be_visible()
-    page.get_by_role("tab", name="Overview", exact=True).click()
-    expect(page.locator(".performance-file-rates dd")).to_have_text(["0 B/s", "0 B/s"])
-
-    def record_overview_style(label):
-        activity = page.get_by_role("region", name="Current activity", exact=True)
-        expect(activity).to_have_css("opacity", "1")
-        (ARTIFACTS / f"performance-overview-style-{label}.json").write_text(
-            activity.evaluate("""node => JSON.stringify({
-              opacity: getComputedStyle(node).opacity,
-              panelOpacity: getComputedStyle(node.closest('[role=tabpanel]')).opacity,
-              headingColor: getComputedStyle(node.querySelector('h3')).color,
-              summaryColor: getComputedStyle(node.querySelector('[role=status]')).color,
-              animationName: getComputedStyle(node).animationName,
-              theme: document.documentElement.dataset.theme,
-              drawerExpanded: document.querySelector('#navigation-toggle')
-                ?.getAttribute('aria-expanded'),
-              drawerBounds: document.querySelector('#drive-navigation')
-                ?.getBoundingClientRect()
-            }, null, 2)""")
-        )
-
-    page.set_viewport_size({"width": 1440, "height": 1100})
-    page.get_by_role(
-        "heading", name="Performance", exact=True
-    ).scroll_into_view_if_needed()
-    page.mouse.move(0, 0)
-    record_overview_style("desktop")
-    page.screenshot(
-        path=ARTIFACTS / "performance-overview-default-desktop.png",
-        full_page=True,
-        animations="disabled",
-    )
-    page.set_viewport_size({"width": 390, "height": 844})
-    set_appearance(page, "dark")
-    toggle = page.get_by_role("button", name="Toggle Navigation", exact=True)
-    if toggle.get_attribute("aria-expanded") == "true":
-        toggle.click()
-    expect(toggle).to_have_attribute("aria-expanded", "false")
-    page.wait_for_function(
-        "() => document.querySelector('#drive-navigation')"
-        ".getBoundingClientRect().right <= 1"
-    )
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    record_overview_style("mobile-dark")
-    page.screenshot(
-        path=ARTIFACTS / "performance-overview-default-mobile-dark.png",
-        full_page=True,
-        animations="disabled",
-    )
-    page.set_viewport_size({"width": 1440, "height": 1100})
-    set_appearance(page, "light")
-    page.get_by_role("tab", name="Resources", exact=True).click()
-    cpu = page.get_by_role("region", name="Container CPU", exact=True)
-    expect(cpu.locator(".performance-chart-axis")).to_contain_text("100.0%")
-    slider = cpu.get_by_role("slider", name="Inspect Container CPU samples", exact=True)
-    slider.focus()
-    slider.press("Home")
-    slider.press("ArrowRight")
-    slider.press("ArrowRight")
-    slider.press("ArrowRight")
-    expect(slider).to_have_attribute("aria-valuetext", re.compile("no reading"))
-    expect(cpu.locator(".performance-chart-readout")).to_contain_text("No reading")
-    cpu.get_by_role("button", name="Live", exact=True).click()
-    expect(cpu.locator(".performance-chart-readout")).to_contain_text("25.0%")
-    ram = page.get_by_role("region", name="Container RAM", exact=True)
-    expect(ram.locator(".performance-chart-heading")).to_contain_text("2 GiB / 8 GiB")
-    expect(ram.locator(".performance-chart-axis")).to_contain_text("8 GiB")
-    page.set_viewport_size({"width": 1440, "height": 1100})
-    page.get_by_role(
-        "heading", name="Performance", exact=True
-    ).scroll_into_view_if_needed()
-    page.screenshot(
-        path=ARTIFACTS / "owner-performance-network-container.png", full_page=False
-    )
-    snapshot["server"]["memory"]["cgroup_limit"] = None
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(ram.locator(".performance-chart-heading")).to_contain_text(
-        "limit unavailable"
-    )
-    expect(ram).to_contain_text("No container memory limit reported.")
-    page.set_viewport_size({"width": 390, "height": 844})
-    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    page.get_by_role(
-        "heading", name="Performance", exact=True
-    ).scroll_into_view_if_needed()
-    page.screenshot(
-        path=ARTIFACTS / "owner-performance-network-mobile.png", full_page=False
-    )
-    cpu.get_by_role(
-        "heading", name="Container CPU", exact=True
-    ).scroll_into_view_if_needed()
-    page.screenshot(
-        path=ARTIFACTS / "owner-performance-resource-graphs-mobile.png", full_page=False
-    )
-    snapshot["server"]["history"] = []
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    for label in [
+        "Files in This Drive",
+        "Temporary Storage",
+        "Current Transfers",
+        "Start a new drive",
+    ]:
+        expect(page.get_by_role("heading", name=label, exact=True)).to_have_count(0)
+    expect(page.locator(".start-new-drive")).to_have_count(0)
+    page.goto(server.url + "/?view=performance")
+    files = page.get_by_role("region", name="Files in This Drive", exact=True)
+    expect(files).to_contain_text("17")
     expect(
-        page.get_by_role("img", name="Server network over time", exact=True)
-    ).to_have_count(0)
-    page.get_by_role("tab", name="Overview", exact=True).click()
-    expect(network).not_to_be_visible()
-    page.get_by_role("tab", name="Resources", exact=True).click()
-    expect(network.locator(".performance-chart-heading")).to_contain_text("12 MiB/s")
-    expect(network.locator(".performance-chart-collecting")).to_be_visible()
+        page.get_by_role("region", name="Temporary Storage", exact=True)
+    ).to_be_visible()
+    expect(page.get_by_label("Current Transfers", exact=True)).to_contain_text(
+        "Transfer manager:"
+    )
+    expect(files).to_contain_text("Drive figures updated")
+    expect(page.get_by_role("link", name="Open Transfers", exact=True)).to_have_count(1)
+    trash = files.get_by_role("link", name="Open Trash", exact=True)
+    expect(trash).to_have_attribute("href", "/?path=%2Ftrash")
+    trash.click()
+    expect(page.get_by_role("heading", name="Trash", exact=True)).to_be_visible()
+    page.go_back()
+    expect(files).to_be_visible()
+    management["stats"]["files"] = 23
+    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    expect(files).to_contain_text("23")
+
+
+def test_fast_performance_poll_does_not_repeat_catalog_statistics(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    management = page.request.get(server.url + "/api/v1/settings").json()
+    settings_calls = []
+
+    def settings(route):
+        settings_calls.append(route.request.url)
+        route.fulfill(json=management)
+
+    page.clock.install()
+    page.route("**/api/v1/settings", settings)
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    expect(page.get_by_role("region", name="Files in This Drive")).to_contain_text(
+        "Drive figures updated"
+    )
+    assert len(settings_calls) == 1
+    for _ in range(3):
+        with page.expect_request(
+            lambda request: request.url.endswith("/api/v1/performance")
+        ):
+            page.clock.fast_forward(3100)
+    assert len(settings_calls) == 1
+    page.evaluate("window.dispatchEvent(new Event('tgdrive:files-changed'))")
+    expect(page.get_by_role("region", name="Files in This Drive")).to_contain_text(
+        "Files changed; refresh"
+    )
+    assert len(settings_calls) == 1
+    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    expect(page.get_by_role("button", name="Refresh Performance")).to_be_enabled()
+    assert len(settings_calls) == 2

@@ -212,11 +212,13 @@ class UploadGuardMiddleware:
         sessions: SessionManager,
         upload_limit: int,
         max_concurrent: int,
+        bandwidth=None,
     ) -> None:
         self.app = app
         self.sessions = sessions
         self.body_limit = upload_limit + 2 * 1024**2
         self.slots = asyncio.Semaphore(max_concurrent)
+        self.bandwidth = bandwidth
 
     @staticmethod
     async def _reject(
@@ -294,7 +296,14 @@ class UploadGuardMiddleware:
 
         async with self.slots:
             try:
-                await self.app(scope, bounded_receive, guarded_send)
+                from tgdrive.web.file_bandwidth import PacedReceive
+
+                reader = (
+                    PacedReceive(bounded_receive, self.bandwidth.download)
+                    if self.bandwidth is not None
+                    else bounded_receive
+                )
+                await self.app(scope, reader, guarded_send)
             except MultiPartException:
                 if too_large and not response_started and not rejected:
                     await self._reject(

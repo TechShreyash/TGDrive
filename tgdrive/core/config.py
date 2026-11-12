@@ -185,10 +185,19 @@ class Settings(BaseSettings):
     telegram_media_per_bot: int = Field(default=3, alias="TELEGRAM_MEDIA_PER_BOT", ge=1)
     telegram_max_queue: int = Field(default=256, alias="TELEGRAM_MAX_QUEUE", ge=1)
     upload_split_mib: int = Field(default=2000, alias="UPLOAD_SPLIT_MIB", ge=0, le=2000)
+    upload_limit_bytes_per_second: int | None = Field(
+        default=None, ge=1024, le=2**53 - 1, strict=True
+    )
+    download_limit_bytes_per_second: int | None = Field(
+        default=None, ge=1024, le=2**53 - 1, strict=True
+    )
     # Saved owner ceilings are separate from governor-mutated effective budgets.
     cache_disk_limit_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
     cache_memory_limit_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
     staging_limit_bytes: int | None = Field(default=None, gt=0, le=2**53 - 1)
+    stream_memory_limit_bytes: int | None = Field(
+        default=None, ge=2 * 1024**2, le=2**53 - 1
+    )
     protected_free_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
     cache_memory_bytes: int = Field(
         default=256 * 1024**2, alias="CACHE_MEMORY_BYTES", ge=0
@@ -197,7 +206,9 @@ class Settings(BaseSettings):
     cache_min_free_bytes: int = Field(
         default=1024**3, alias="CACHE_MIN_FREE_BYTES", ge=0
     )
-    cache_ttl_seconds: int = Field(default=86400, alias="CACHE_TTL_SECONDS", ge=60)
+    cache_ttl_seconds: int = Field(
+        default=86400, alias="CACHE_TTL_SECONDS", ge=60, le=2**53 - 1
+    )
     auto_preload: bool = Field(default=True, alias="AUTO_PRELOAD")
     preload_max_jobs: int = Field(default=2, alias="PRELOAD_MAX_JOBS", ge=1)
     timezone: str = Field(default="Asia/Kolkata", alias="TIMEZONE")

@@ -9,7 +9,7 @@ defaults, or save lower ceilings to leave more room for other applications.
 
 | I want to… | Where |
 | --- | --- |
-| See what TGDrive chose and why | **Performance → Resources → Applied limits and reasons** ([how it works](performance.md#automatic-tuning)) |
+| See what TGDrive chose and why | **Performance tab → Automatic tuning** ([how it works](performance.md#automatic-tuning)) |
 | Limit resource use on a shared host | [Cache ceilings](#cache-settings) · [Transfer limits](#transfer-limits) · [Docker limits](#cap-tgdrive-with-docker-limits) |
 | Turn playback preloading on or off | [Cache settings](#cache-settings) |
 | Split files into smaller Telegram documents | [Transfer limits](#transfer-limits) |
@@ -35,10 +35,17 @@ If another session changes settings first, reload before saving.
 | Preload during playback | On | Prepare upcoming original audio/video bytes. Off still allows requested-range read-ahead and manual **Preload file**. |
 | Retained media RAM ceiling | Auto: 256 MiB | Lower it to leave more RAM for other work; zero disables this payload-retention tier. |
 | Media disk-cache ceiling | Auto: 10 GiB | Limit retained media bytes on disk; zero disables this payload-retention tier. |
+| Disk cache retention | 24 hours | Expire disposable disk chunks after inactivity; reading a chunk refreshes its expiry. Minimum: 1 minute. |
+| Stream working memory | Automatic: 256 MiB ceiling | Temporary shared read buffers, separate from retained RAM cache. Custom ceilings start at 2 MiB; there is no Disabled mode. |
 
-Choose **Save changes** after editing a ceiling. TGDrive adapts within that
+Choose **Save changes** after editing cache settings. TGDrive adapts within that
 ceiling rather than reserving the full amount in advance. Clearing or expiring
-cache leaves Telegram originals and MongoDB records intact.
+cache leaves Telegram originals and MongoDB records intact. Choose Minutes,
+Hours or Days for disk retention; capacity or free-space pressure can evict
+chunks sooner. This setting does not change RAM retention or protected backup
+archives. Stream buffers start around 32 MiB or lower and can grow when
+foreground reads wait and measured headroom permits. Their ceiling does not
+reserve RAM or cap total process memory.
 See [preloading](usage.md#preload-a-file-for-smoother-playback-and-downloads).
 
 **Regenerate all thumbnails** refreshes existing file covers in the background
@@ -59,6 +66,13 @@ Save before starting more work. A lower staging ceiling preserves unchanged
 or shrinking claims for already admitted work. New or growing claims must fit
 the new ceiling, other reservations and actual free space. Startup values set uploads per bot, URL downloads and Telegram request
 ceilings. **Bot uploads** (folder and encryption) also live on this page. [Staging policy](performance.md#automatic-tuning).
+
+**File transfer speeds** has two independent controls: **Upload from server**
+for outgoing file payloads and **Download to server** for incoming file payloads.
+Each starts **Unlimited**. To leave network headroom, select **Custom limit**,
+enter decimal **Mbps** and save. Measure speed where TGDrive runs and start
+around 80% of each measured direction, then adjust during normal work. This
+starting point does not guarantee lower latency. [Coverage and tradeoffs](performance.md#file-transfer-speed-limits).
 
 ## Cap TGDrive with Docker limits
 
@@ -91,15 +105,15 @@ applications leave space available.
 Earlier managed resource variables seed startup; saved owner ceilings bound
 the live governor budgets. Save applies reductions immediately; growth can wait
 for the normal five-second governor pass. Configured concurrency ceilings remain,
-apart from the preload CPU cap. Pacing, queue size and cache retention keep
-their startup values. See
+apart from the preload CPU cap. Pacing and queue size keep their startup values.
+Disk retention and the stream-memory ceiling are saved on the Cache page. See
 [which settings are managed](reference.md#performance-and-cache-settings).
 
 </details>
 
 ## Timezone
 
-The default is **Asia/Kolkata (IST)**. Use a valid timezone name such as
+The default is **Asia/Kolkata (UTC+05:30)**. Use a valid timezone name such as
 `Europe/London` or `UTC`, then choose **Save changes**. A live **Current time** preview shows the entered
 timezone before you save. This controls displayed
 dates and share expiry across the installation; stored timestamps remain UTC.

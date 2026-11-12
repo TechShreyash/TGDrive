@@ -292,3 +292,41 @@ describe("manual connection verification status", () => {
         ).toBe("Verified · runtime disconnected");
     });
 });
+
+describe("runtime connection repair status", () => {
+    const client = {
+        enabled: true,
+        connected: false,
+        healthy: false,
+        connection_check: "passed" as const,
+    };
+    it.each([
+        ["TELEGRAM_RECONNECTING", "Reconnecting automatically"],
+        ["TELEGRAM_CREDENTIALS_REVOKED", "Credentials need attention"],
+        ["TELEGRAM_CONNECTION_UNAVAILABLE", "Connection needs attention"],
+        ["UNKNOWN_ERROR", "Verified · runtime disconnected"],
+        [null, "Verified · runtime disconnected"],
+    ])(
+        "uses the current runtime error %s after a past verification",
+        (code, label) => {
+            expect(clientConnectionLabel({ ...client, error_code: code })).toBe(
+                label,
+            );
+        },
+    );
+    it("preserves disabled and manual verification states", () => {
+        const repairing = { ...client, error_code: "TELEGRAM_RECONNECTING" };
+        expect(clientConnectionLabel({ ...repairing, enabled: false })).toBe(
+            "Disabled in saved configuration",
+        );
+        expect(
+            clientConnectionLabel({
+                ...repairing,
+                connection_check: "checking",
+            }),
+        ).toBe("Checking connection…");
+        expect(
+            clientConnectionLabel({ ...repairing, connection_check: "failed" }),
+        ).toBe("Check failed");
+    });
+});

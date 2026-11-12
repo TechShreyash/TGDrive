@@ -159,25 +159,33 @@ variables seed startup. Saved owner ceilings bound the
 budgets, free-space reserves and the file ceiling. Configured
 concurrency ceilings remain; preloads also stay within 4 jobs per CPU and 8 total. Per-account Telegram
 cooldown/recovery is separate and survives resource-only updates.
-Pacing (`TELEGRAM_PARTS_PER_SECOND`), queue size (`TELEGRAM_MAX_QUEUE`) and cache
-retention (`CACHE_TTL_SECONDS`) keep their startup values.
+Pacing (`TELEGRAM_PARTS_PER_SECOND`) and queue size (`TELEGRAM_MAX_QUEUE`) keep
+their startup values. `CACHE_TTL_SECONDS` seeds disk retention; the saved
+`cache_ttl_seconds` preference can change it live.
 The managed variable names are `CACHE_MEMORY_BYTES`,
-`CACHE_DISK_BYTES`, `CACHE_MIN_FREE_BYTES`, `CACHE_TTL_SECONDS`, `PRELOAD_MAX_JOBS`,
+`CACHE_DISK_BYTES`, `CACHE_MIN_FREE_BYTES`, `PRELOAD_MAX_JOBS`,
 `TELEGRAM_UPLOAD_PIPELINE`, `TELEGRAM_REQUEST_LIMIT`, `TELEGRAM_PARTS_PER_SECOND`,
 `TELEGRAM_MEDIA_PER_BOT`, `TELEGRAM_MAX_QUEUE`, `TELEGRAM_UPLOADS_PER_BOT`,
 `REMOTE_DOWNLOAD_CONCURRENCY`, `MAX_FILE_SIZE`, `STAGING_BUDGET_BYTES`,
 `MIN_FREE_BYTES`.
 `PATCH /api/v1/settings/performance` rejects those managed names with `422`.
-It also accepts the four nullable owner byte ceilings below, saved in MongoDB.
+It also accepts the five nullable owner byte ceilings below, saved in MongoDB.
 `null` selects Auto. Values must be strict integers up to `2^53 - 1`; cache
-ceilings and reserve allow zero, while staging must be positive.
+ceilings and reserve allow zero, staging must be positive, and stream working
+memory must be at least 2 MiB.
 
 | JSON key | Auto | Scope |
 | --- | --- | --- |
 | `cache_memory_limit_bytes` | 256 MiB | Retained media payload in RAM; zero disables this retention tier |
 | `cache_disk_limit_bytes` | 10 GiB | Retained media payload on disk; zero disables this retention tier |
 | `staging_limit_bytes` | 16 GiB | Temporary staging and the logical-file ceiling |
+| `stream_memory_limit_bytes` | 256 MiB | Adaptive temporary stream buffers; separate from retained RAM and total process memory |
 | `protected_free_bytes` | Larger of 1 GiB and 5% of each relevant filesystem | Extra TGDrive free-space floor; zero removes that floor |
+
+`cache_ttl_seconds` is a saved strict integer from **60** to **2^53 − 1**,
+default **86400** (24 hours). It measures inactivity of disposable disk chunks;
+reads refresh expiry and space pressure can evict sooner. It does not change
+RAM retention, originals or protected recovery archives.
 
 GET returns authoritative `auto_resource_limits` and `auto_free_space_reserve`.
 Saves retain revision/ETag conflict checks (`409`) and rollback on apply failure.
@@ -187,18 +195,32 @@ or growing claims. Limits reserve no physical space and actual free-space checks
 remain. Cover/poster caches and protected recovery files are separate; these
 values do not cap process RSS.
 
+`upload_limit_bytes_per_second` and `download_limit_bytes_per_second` are also
+saved owner preferences: strict nullable integers from **1024** to **2^53 − 1**
+bytes/second. `null` means Unlimited; zero is invalid. Upload means server payload
+egress and download means server payload ingress. The UI uses decimal Mbps:
+`round(Mbps × 1,000,000 / 8)` gives stored bytes/second. Native aria2 allowances
+share these totals; protocol overhead and hidden retransmissions are outside
+this logical-payload admission contract. [Coverage](performance.md#file-transfer-speed-limits).
+
 Other owner choices are saved in MongoDB:
 
 | Variable | Default | Meaning and bounds |
 | --- | --- | --- |
 | `AUTO_PRELOAD` | true | Enable extra bounded warming after delivered original audio/video playback bytes. Explicit downloads and unclassified range clients stay within requested ranges. Disabling it leaves adaptive response read-ahead and manual **Preload file** available. |
 | `UPLOAD_SPLIT_MIB` | 2000 | TGDrive's default and maximum document size for every account, including Premium. Explicit 1–2000 values choose a smaller part size; 0 also uses 2000 MiB. Persisted plans keep their original boundaries. |
-| `TIMEZONE` | Asia/Kolkata | Installation-wide display timezone for owner and public dates/share expiry. Use a valid IANA name; the default is IST. |
+| `TIMEZONE` | Asia/Kolkata | Installation-wide display timezone for owner and public dates/share expiry. Use a valid IANA name; the default is Asia/Kolkata (UTC+05:30). |
 
 RAM includes the asynchronous disk-write backlog. Active responses have a separate
-32 MiB transient payload budget, reduced by available memory with a 2 MiB floor;
-transport/server buffers are outside these budgets. `cache.scratch` reports current,
-effective and configured bytes, peak reservations, waiting heads and active streams.
+adaptive transient payload budget with a 32 MiB baseline, or less under a lower
+ceiling or memory pressure, and a 2 MiB floor. Foreground waits and measured
+headroom can permit growth within the saved ceiling; unknown memory does not
+permit growth. Transport/server buffers are outside these budgets.
+`cache.scratch` reports held bytes, effective and configured ceilings, peak
+reservations, waiting heads and active streams, plus baseline, owner/automatic
+ceilings, sizing reason and sample freshness. `fill_reserved_bytes` overlaps
+stream reservations: do not add it to `bytes` as process memory. Held
+reservations may temporarily exceed a lowered ceiling while they drain safely.
 RAM and disk may duplicate blocks, so their sum is not whole-file capacity.
 
 Preload admission counts complete aligned Telegram blocks, multipart boundaries,
@@ -404,8 +426,9 @@ A probe must not be a symlink. Missing, unreadable, nonempty or conflicting
 configured probes are unavailable; TGDrive does not silently fall back to guest
 capacity. Without a probe, backing capacity remains unknown.
 
-Measurements use the smaller free-space reading of the destination and its
-configured backing filesystem. Each writer also applies its reserve and captured
+Effective total and free bytes use the smaller reported capacity of the
+destination and its configured backing filesystem. Auto reserve sizing uses
+that effective total, not a larger guest-only total. Each writer also applies its reserve and captured
 outstanding staging claims as appropriate. Data/cache paths select their matching
 probe; equal roots need consistent probe configuration. Reporting exposes no
 probe path. **Free after reserve** excludes outstanding claims. These measured

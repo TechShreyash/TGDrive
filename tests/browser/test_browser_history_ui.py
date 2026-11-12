@@ -96,7 +96,7 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
 
     page.route("**/api/v1/performance/history?*", recorded)
     page.goto(server.url + "/?view=performance")
-    page.get_by_role("tab", name="Resources", exact=True).click()
+    page.get_by_role("tab", name="Performance", exact=True).click()
     interval = page.get_by_role("combobox", name="Time range", exact=True)
     expect(interval).to_have_value("live")
     cpu = page.get_by_role("region", name="Container CPU", exact=True)
@@ -116,11 +116,13 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
     expect(cpu.locator(".performance-chart-now")).to_have_count(0)
     network = page.get_by_role("region", name="Server network", exact=True)
     expect(network.locator(".performance-chart-legend")).to_contain_text(
-        "Received by server"
+        "Download to server"
     )
     expect(network.locator(".performance-chart-legend")).to_contain_text(
-        "Sent by server"
+        "Upload from server"
     )
+    expect(network.locator(".performance-chart-readout")).to_contain_text("16.78 Mbps")
+    expect(network.locator(".performance-chart-readout")).to_contain_text("8.39 Mbps")
     totals = page.locator(".performance-all-time")
     expect(page.get_by_role("heading", name="All-time totals")).to_be_visible()
     totals.locator("summary").click()
@@ -152,7 +154,7 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
     )
     assert len(requests) > before
     page.reload()
-    page.get_by_role("tab", name="Resources", exact=True).click()
+    page.get_by_role("tab", name="Performance", exact=True).click()
     expect(interval).to_have_value("hour")
     expect(slider).to_have_attribute("max", "59")
     assert requests[-1][1] - requests[-1][0] == 3600
@@ -163,14 +165,14 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
         expect(interval).not_to_be_visible()
         expect(page.get_by_text(description, exact=True)).to_be_visible()
         expect(page.locator(".performance-history-availability")).not_to_be_visible()
-    page.get_by_role("tab", name="Resources", exact=True).click()
+    page.get_by_role("tab", name="Performance", exact=True).click()
     expect(interval).to_be_visible()
     expect(interval).to_have_value("hour")
     expect(cpu).to_be_visible()
-    page.get_by_role("tab", name="Overview", exact=True).click()
+    page.get_by_role("tab", name="Accounts", exact=True).click()
     expect(interval).not_to_be_visible()
     expect(page.locator(".performance-history-availability")).not_to_be_visible()
-    page.get_by_role("tab", name="Resources", exact=True).click()
+    page.get_by_role("tab", name="Performance", exact=True).click()
     expect(interval).to_be_visible()
     expect(interval).to_have_value("hour")
     page.set_viewport_size({"width": 390, "height": 844})
@@ -205,7 +207,7 @@ def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range
 
     page.route("**/api/v1/performance/history?*", recorded)
     page.goto(server.url + "/?view=performance")
-    page.get_by_role("tab", name="Resources", exact=True).click()
+    page.get_by_role("tab", name="Performance", exact=True).click()
     interval = page.get_by_role("combobox", name="Time range", exact=True)
     interval.select_option("day")
     expect(page.get_by_text("Loading selected history…", exact=False)).to_be_visible()
@@ -257,7 +259,7 @@ def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range
 def test_recorded_history_page_uses_real_private_history_endpoint(server, desktop):
     _, page = desktop
     login(page, server.url + "/?view=performance")
-    page.get_by_role("tab", name="Resources", exact=True).click()
+    page.get_by_role("tab", name="Performance", exact=True).click()
     page.get_by_role("combobox", name="Time range", exact=True).select_option("hour")
     expect(page.locator(".performance-history-availability")).to_contain_text(
         "Recorded interval averages"

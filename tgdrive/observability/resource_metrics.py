@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import os
 import time
 from collections import deque
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
+from tgdrive.core.system_resources import (
+    cgroup_directories,
+    cgroup_v1_directories,
+    cpu_snapshot,
+    memory_snapshot,
+)
 from tgdrive.observability.traffic import HISTORY_SECONDS, MAX_SAMPLE_GAP_SECONDS
 
 
@@ -56,20 +61,45 @@ class ResourceMetrics:
         self._received = self._sent = 0
         self.history: deque[ResourceHistorySample] = deque(maxlen=120)
         self.value = {"cpu": {"percent": None}, "network": {"available": False}}
+        self.sampled_at: float | None = None
+
+    def snapshot(self) -> dict:
+        stale = self.sampled_at is None or not 0 <= time.time() - self.sampled_at <= 15
+        cpu, network = dict(self.value["cpu"]), dict(self.value["network"])
+        if stale:
+            cpu["percent"] = None
+            network.update(
+                available=False,
+                received_bytes_per_second=None,
+                sent_bytes_per_second=None,
+            )
+        return {
+            **self.value,
+            "cpu": cpu,
+            "network": network,
+            "sampled_at": self.sampled_at,
+            "stale_after_seconds": 15,
+        }
 
     def _cpu_counter(
         self,
     ) -> tuple[Literal["cgroup", "host"], float, float] | None:
         try:
-            capacity = float(os.cpu_count() or 1)
-            if hasattr(os, "sched_getaffinity"):
-                capacity = min(capacity, len(os.sched_getaffinity(0)))
-            quota, period = (self.cgroup / "cpu.max").read_text().split()
-            if quota != "max":
-                capacity = min(capacity, int(quota) / int(period))
+            capacity = cpu_snapshot(cgroup=self.cgroup, proc=self.proc)[
+                "capacity_cores"
+            ]
+            if capacity is None:
+                raise ValueError("CPU capacity unavailable")
+            legacy = cgroup_v1_directories(self.cgroup, self.proc, "cpuacct")
+            if legacy is not None:
+                if not legacy:
+                    return None
+                with (legacy[0] / "cpuacct.usage").open() as source:
+                    usage = int(source.read(65536))
+                return "cgroup", usage / 1_000_000_000, capacity
+            leaf = cgroup_directories(self.cgroup, self.proc)[0]
             stats = dict(
-                line.split()
-                for line in (self.cgroup / "cpu.stat").read_text().splitlines()
+                line.split() for line in (leaf / "cpu.stat").read_text().splitlines()
             )
             return "cgroup", int(stats["usage_usec"]) / 1_000_000, capacity
         except OSError, ValueError, KeyError, ZeroDivisionError:
@@ -141,7 +171,11 @@ class ResourceMetrics:
         if cpu is not None and self._cpu_previous is not None:
             previous_at, previous = self._cpu_previous
             elapsed = now - previous_at
-            if cpu[0] == previous[0] and 0 < elapsed <= MAX_SAMPLE_GAP_SECONDS:
+            if (
+                cpu[0] == previous[0]
+                and (cpu[0] != "cgroup" or cpu[2] == previous[2])
+                and 0 < elapsed <= MAX_SAMPLE_GAP_SECONDS
+            ):
                 denominator = (
                     elapsed * cpu[2] if cpu[0] == "cgroup" else cpu[2] - previous[2]
                 )
@@ -181,17 +215,9 @@ class ResourceMetrics:
         self.value = {"cpu": cpu_value, "network": network_value}
         # Keep measured history even when nobody has the dashboard open. Reading
         # the cgroup files here avoids polling the whole system/disk each tick.
-        memory: dict[str, int | None] = {}
-        for key, filename in (
-            ("memory_bytes", "memory.current"),
-            ("memory_limit_bytes", "memory.max"),
-        ):
-            try:
-                raw = (self.cgroup / filename).read_text().strip()
-                memory[key] = int(raw) if raw != "max" else None
-            except OSError, ValueError:
-                memory[key] = None
+        memory = memory_snapshot(cgroup=self.cgroup, proc=self.proc)
         at = time.time()
+        self.sampled_at = at
         if (
             self.history
             and not 0 <= at - self.history[-1]["at"] <= MAX_SAMPLE_GAP_SECONDS
@@ -204,8 +230,12 @@ class ResourceMetrics:
                 "at": at,
                 "cpu_percent": percent,
                 "cpu_scope": cpu_value["scope"],
-                "memory_bytes": memory["memory_bytes"],
-                "memory_limit_bytes": memory["memory_limit_bytes"],
+                "memory_bytes": memory["used_bytes"],
+                "memory_limit_bytes": (
+                    memory["cgroup_limit_bytes"]
+                    if memory["scope"] == "cgroup"
+                    else memory["environment_total_bytes"]
+                ),
                 "received_bytes_per_second": incoming,
                 "sent_bytes_per_second": outgoing,
                 "network_interface": network[0] if network else None,

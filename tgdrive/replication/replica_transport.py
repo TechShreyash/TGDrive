@@ -32,6 +32,7 @@ from tgdrive.storage.capacity import (
     probe_for_directory,
     require_headroom,
 )
+from tgdrive.transfers.bandwidth import BudgetedReader, FileBandwidth, payload_timeout
 from tgdrive.transfers.tasks import _journalled
 
 BACKUP_NAME = "tgdrive-backup.tgdb"
@@ -218,7 +219,15 @@ class ReplicaTransport:
     A native client may be injected for offline transport-contract tests.
     """
 
-    def __init__(self, settings, bot_token: str, *, client=None, pacer=None) -> None:
+    def __init__(
+        self,
+        settings,
+        bot_token: str,
+        *,
+        client=None,
+        pacer=None,
+        bandwidth: FileBandwidth | None = None,
+    ) -> None:
         self._settings = settings
         self._token = bot_token.strip() if isinstance(bot_token, str) else ""
         self._client: TelegramClient | None = client
@@ -227,6 +236,7 @@ class ReplicaTransport:
         self._pacer = pacer or ReplicaRequestPacer()
         self._peers = {}
         self._session_file: Path | None = None
+        self._bandwidth = bandwidth
 
     def _persistent_session(self, identity: int) -> Path:
         """Keep backup authorization separate from primary bots and rotated tokens."""
@@ -307,7 +317,7 @@ class ReplicaTransport:
     @asynccontextmanager
     async def _guard(self, seconds: int = 90):
         try:
-            async with asyncio.timeout(seconds):
+            async with payload_timeout(seconds):
                 yield
         except ReplicaTransportError:
             raise
@@ -753,6 +763,8 @@ class ReplicaTransport:
                         "The recovery archive exceeded its declared size.",
                         "REPLICA_VERIFY_FAILED",
                     )
+                if self._bandwidth is not None:
+                    await self._bandwidth.download.acquire(len(block))
                 digest.update(block)
                 if target is not None:
 
@@ -827,7 +839,9 @@ class ReplicaTransport:
                 uploaded = await self._request(
                     "upload_recovery_bundle",
                     client.upload_file,
-                    source,
+                    BudgetedReader(source, self._bandwidth.upload)
+                    if self._bandwidth is not None
+                    else source,
                     file_name=filename,
                     file_size=size,
                     part_size_kb=512,

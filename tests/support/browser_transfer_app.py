@@ -767,6 +767,11 @@ class FixtureReplica:
     def key(self):
         return "c" * 64
 
+    def _remaining_staging_bytes(self):
+        from tgdrive.transfers.staging import staging_usage
+
+        return staging_usage(self.owner.transfers)[1]
+
     def recovery_kit(self):
         return {
             "format": "tgdrive-replica-key-v1",
@@ -929,7 +934,15 @@ class FixtureReplica:
         )
         return self.status()
 
-    def activate(self):
+    def activate(self, *, outstanding_bytes=0):
+        from tgdrive.storage.capacity import measure_capacity, require_headroom
+
+        require_headroom(
+            measure_capacity(self.directory),
+            0,
+            reserve_bytes=settings.min_free_bytes,
+            outstanding_bytes=outstanding_bytes,
+        )
         if not self.state.get("recovery_candidate", {}).get("complete"):
             raise ValueError("Complete recovery first.")
         self.events.append({"action": "activate"})

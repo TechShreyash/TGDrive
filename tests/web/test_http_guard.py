@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 import starlette.formparsers as formparsers
+from starlette.datastructures import UploadFile
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -99,6 +100,36 @@ def make_guard(app: Any, limit: int = 16) -> tuple[Any, list[tuple[bytes, bytes]
     )
     cookie = f"{SESSION_COOKIE}={sessions.create()}".encode()
     return guard, [(b"cookie", cookie)]
+
+
+@pytest.mark.asyncio
+async def test_paced_multipart_parser_preserves_a_boundary_crossing_slices():
+    from tgdrive.transfers.bandwidth import FileBandwidth
+
+    bandwidth = FileBandwidth()
+    await bandwidth.configure(None, 1024)
+    payload = b"example file bytes"
+    encoded = (
+        b'--test\r\nContent-Disposition: form-data; name="file"; '
+        b'filename="sample.bin"\r\nContent-Type: application/octet-stream\r\n\r\n'
+        + payload
+        + b"\r\n--test--\r\n"
+    )
+
+    async def app(scope, receive, send):
+        async with Request(scope, receive).form() as form:
+            uploaded = form["file"]
+            assert isinstance(uploaded, UploadFile)
+            assert await uploaded.read() == payload
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    guard, headers = make_guard(app, limit=1024)
+    guard.bandwidth = bandwidth
+    headers.append((b"content-type", b"multipart/form-data; boundary=test"))
+    messages, reads = await invoke(guard, headers=headers, chunks=[encoded])
+    assert messages[0]["status"] == 200
+    assert reads == 1
+    assert bandwidth.download.admitted_bytes == len(encoded)
 
 
 @pytest.mark.asyncio

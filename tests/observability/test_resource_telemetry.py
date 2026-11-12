@@ -113,8 +113,45 @@ def test_system_snapshot_distinguishes_current_and_peak_memory(tmp_path, monkeyp
 
     monkeypatch.setattr(Path, "read_text", read)
     current = system_snapshot(
-        SimpleNamespace(resolved_data_dir=tmp_path, staging_budget_bytes=1024)
+        SimpleNamespace(
+            resolved_data_dir=tmp_path,
+            resolved_cache_dir=tmp_path,
+            staging_budget_bytes=1024,
+        )
     )
     assert current["process_rss_bytes"] == 12345 * 1024
     assert current["process_peak_rss_bytes"] > 0
     assert current["cpu_count"] is None or current["cpu_count"] > 0
+
+
+@pytest.mark.parametrize("hard_limit", [None, 2097152])
+def test_raw_snapshot_retains_group_provenance_not_effective_budget(
+    tmp_path, monkeypatch, hard_limit
+):
+    from types import SimpleNamespace
+
+    from tgdrive.observability.performance_api import system_snapshot
+
+    measured = dict(
+        scope="cgroup",
+        source="cgroup_v2",
+        limit_bytes=1024000,
+        used_bytes=100000,
+        available_bytes=102400,
+        cgroup_limit_bytes=hard_limit,
+        environment_total_bytes=1024000,
+        limit_source="proc_meminfo",
+    )
+    monkeypatch.setattr(
+        "tgdrive.observability.performance_api.memory_snapshot", lambda: measured
+    )
+    value = system_snapshot(
+        SimpleNamespace(
+            resolved_data_dir=tmp_path,
+            resolved_cache_dir=tmp_path,
+            staging_budget_bytes=1024,
+        )
+    )
+    assert value["memory"]["cgroup_limit"] == hard_limit
+    assert value["memory"]["cgroup_current"] == 100000
+    assert value["resource_summary"]["memory"] is measured

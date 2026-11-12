@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -72,6 +73,7 @@ class FakeLifecycleClient(FakeBotClient):
 
 class FakeMessage:
     document: SimpleNamespace
+    native: SimpleNamespace
 
     def __init__(
         self,
@@ -108,7 +110,7 @@ def _async_recorder():
 
 def root_mode(**kwargs):
     mode = BotMode(**kwargs)
-    mode.folder_settings.value = BotUploadPreferences(folder_path="/")
+    mode.folder_settings.value = BotUploadPreferences(folder_path="/", encrypt=False)
     mode.folder_settings._loaded = True
     return mode
 
@@ -171,6 +173,7 @@ async def test_bot_mode_lifecycle_is_idempotent(tmp_path: Path) -> None:
     assert client.starts == 1
     assert len(client.handlers) == 1
 
+    client.is_connected = False
     await mode.stop()
     await mode.stop()
     assert client.stops == 1
@@ -337,7 +340,7 @@ async def test_copy_failures_give_specific_recovery_instructions(bot, failure):
     errors = {
         "flood": (FloodWaitError(request=None, capture=15), "Wait 15 seconds"),
         "protected": (ChatForwardsRestrictedError(request=None), "new attachment"),
-        "backup": (BackupError("synthetic backup failure"), "Storage & Backups"),
+        "backup": (BackupError("synthetic backup failure"), "Storage and Backups"),
     }
     error, expected = errors[failure]
     message = FakeMessage(1)
@@ -638,3 +641,117 @@ async def test_strangers_get_one_private_bot_notice(tmp_path):
         assert second.replies == []
     finally:
         mode.close()
+
+
+@pytest.mark.asyncio
+async def test_bot_encryption_unavailable_never_falls_back_to_plaintext(bot):
+    bot.folder_settings.value = BotUploadPreferences(folder_path="/", encrypt=True)
+    message = FakeMessage(1)
+    message.document = SimpleNamespace(file_name="private.txt", file_size=3)
+    message.copy = AsyncMock(
+        return_value=SimpleNamespace(id=333, document=message.document)
+    )
+
+    await bot._file(bot.client, message)
+
+    message.copy.assert_not_awaited()
+    assert "encrypted" in message.replies[-1][0].lower()
+    assert not bot.store.list_directory("/")
+    assert bot.active_imports == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["running", "completed", "other", "missing"])
+async def test_bot_cancel_reply_targets_only_its_matching_import(bot, state):
+    record = SimpleNamespace(
+        context={"source_kind": "web" if state == "other" else "telegram"},
+        status=SimpleNamespace(value=state),
+    )
+
+    def get(_identity):
+        if state == "missing":
+            raise KeyError(_identity)
+        return record
+
+    cancel = AsyncMock(
+        return_value=SimpleNamespace(status=SimpleNamespace(value="cancelling"))
+    )
+    bot.transfers = SimpleNamespace(
+        registry=SimpleNamespace(get=get), cancel_job=cancel
+    )
+    message = FakeMessage(1, text="/cancel")
+    message.native = SimpleNamespace(chat_id=1, reply_to_msg_id=77)
+
+    await bot._cancel(bot.client, message)
+
+    if state == "running":
+        identity = hashlib.sha256(b"bot:123456:1:77").hexdigest()[:32]
+        cancel.assert_awaited_once_with(identity)
+        assert "Cancellation requested" in message.replies[-1][0]
+    else:
+        cancel.assert_not_awaited()
+        assert "Transfers" in message.replies[-1][0]
+    assert not bot.client.deleted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encrypted", [False, True])
+async def test_bot_help_explains_mode_and_reply_cancellation(bot, encrypted):
+    bot.folder_settings.value = BotUploadPreferences(folder_path="/", encrypt=encrypted)
+    message = FakeMessage(1)
+    await bot._help(bot.client, message)
+    text = message.replies[-1][0]
+    assert f"Encryption: {'on' if encrypted else 'off'}" in text
+    assert "/cancel" in text and "reply" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_bot_unknown_size_and_wait_changes_keep_progress_truthful(bot):
+    now = 0.0
+    bot.clock = lambda: now
+    status = ProgressStatus()
+    report = bot._reporter(status)
+    record = SimpleNamespace(
+        phase="downloading", current=512, total=0, context={"name": "unknown.bin"}
+    )
+    await report(record)
+    assert "512 B" in status.edits[-1][0] and "of 0" not in status.edits[-1][0]
+    now = 5
+    record.current = 1024
+    await report(record)
+    assert "1.0 KB" in status.edits[-1][0]
+    now = 10
+    record.phase = "queued"
+    await report(record)
+    now = 15
+    record.phase = "waiting_for_telegram"
+    await report(record)
+    assert "retrying automatically" in status.edits[-1][0]
+    assert len(status.edits) == 4
+
+
+@pytest.mark.asyncio
+async def test_bot_cancel_cannot_select_another_private_chats_import(bot):
+    identity = hashlib.sha256(b"bot:123456:1:77").hexdigest()[:32]
+    record = SimpleNamespace(context={"source_kind": "telegram"})
+    cancel = AsyncMock()
+    bot.transfers = SimpleNamespace(
+        registry=SimpleNamespace(get={identity: record}.__getitem__), cancel_job=cancel
+    )
+    message = FakeMessage(2, text="/cancel")
+    message.native = SimpleNamespace(chat_id=2, reply_to_msg_id=77)
+
+    await bot._cancel(bot.client, message)
+
+    cancel.assert_not_awaited()
+    assert "No encrypted import matches" in message.replies[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_bot_stranger_notices_keep_bounded_recent_memory(bot):
+    for identity in range(1100):
+        await bot._unauthorized(bot.client, FakeMessage(identity))
+    assert len(bot._answered_strangers) <= 1024
+    repeated = FakeMessage(1099)
+    await bot._unauthorized(bot.client, repeated)
+    assert repeated.replies == []

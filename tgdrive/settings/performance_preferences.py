@@ -20,11 +20,14 @@ class PerformancePreferences(BaseModel):
     cache_disk_limit_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
     cache_memory_limit_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
     staging_limit_bytes: int | None = Field(default=None, gt=0, le=2**53 - 1)
+    stream_memory_limit_bytes: int | None = Field(
+        default=None, ge=2 * 1024**2, le=2**53 - 1
+    )
     protected_free_bytes: int | None = Field(default=None, ge=0, le=2**53 - 1)
     cache_memory_bytes: int = Field(default=256 * 1024**2, ge=0)
     cache_disk_bytes: int = Field(default=10 * 1024**3, ge=0)
     cache_min_free_bytes: int = Field(default=1024**3, ge=0)
-    cache_ttl_seconds: int = Field(default=86400, ge=60)
+    cache_ttl_seconds: int = Field(default=86400, ge=60, le=2**53 - 1)
     auto_preload: bool = True
     preload_max_jobs: int = Field(default=2, ge=1)
     remote_download_concurrency: int = Field(default=2, ge=1)
@@ -34,6 +37,12 @@ class PerformancePreferences(BaseModel):
     telegram_media_per_bot: int = Field(default=3, ge=1)
     telegram_max_queue: int = Field(default=256, ge=1)
     upload_split_mib: int = Field(default=2000, ge=0, le=2000)
+    upload_limit_bytes_per_second: int | None = Field(
+        default=None, ge=1024, le=2**53 - 1
+    )
+    download_limit_bytes_per_second: int | None = Field(
+        default=None, ge=1024, le=2**53 - 1
+    )
     max_file_size: int = Field(default=16 * 1024**3, ge=1)
     staging_budget_bytes: int = Field(default=16 * 1024**3, ge=1)
     min_free_bytes: int = Field(default=1024**3, ge=0)
@@ -50,7 +59,10 @@ class PerformancePreferences(BaseModel):
         return value
 
     def cache_policy(self):
-        from tgdrive.media.media_policy import MediaCachePolicy
+        from tgdrive.media.media_policy import (
+            AUTO_STREAM_MEMORY_LIMIT_BYTES,
+            MediaCachePolicy,
+        )
 
         return MediaCachePolicy(
             disk_max_bytes=self.cache_disk_bytes,
@@ -59,6 +71,9 @@ class PerformancePreferences(BaseModel):
             ttl_seconds=self.cache_ttl_seconds,
             max_background_jobs=self.preload_max_jobs,
             auto_preload=self.auto_preload,
+            scratch_max_bytes=self.stream_memory_limit_bytes
+            if self.stream_memory_limit_bytes is not None
+            else AUTO_STREAM_MEMORY_LIMIT_BYTES,
         )
 
 
@@ -130,6 +145,12 @@ class PerformanceSettings:
         }
         for key, item in values.items():
             setattr(self.settings, key, item)
+        bandwidth = getattr(self.runtime, "bandwidth", None)
+        if bandwidth is not None:
+            await bandwidth.configure(
+                value.upload_limit_bytes_per_second,
+                value.download_limit_bytes_per_second,
+            )
         manager = getattr(self.runtime, "transfers", None)
         remote = getattr(manager, "remote", None) or getattr(
             self.runtime, "remote", None
@@ -195,6 +216,7 @@ class PerformanceSettings:
                 "cache_disk_bytes",
                 "cache_min_free_bytes",
                 "cache_ttl_seconds",
+                "stream_memory_limit_bytes",
                 "preload_max_jobs",
                 "auto_preload",
             }
@@ -236,6 +258,7 @@ class PerformanceSettings:
             AUTO_RESOURCE_LIMITS,
             MANAGED,
         )
+        from tgdrive.media.media_policy import AUTO_STREAM_MEMORY_LIMIT_BYTES
 
         return {
             key: value
@@ -243,7 +266,10 @@ class PerformanceSettings:
             if key not in MANAGED
         } | {
             "revision": self.etag(),
-            "auto_resource_limits": dict(AUTO_RESOURCE_LIMITS),
+            "auto_resource_limits": dict(AUTO_RESOURCE_LIMITS)
+            | {
+                "stream_memory_limit_bytes": AUTO_STREAM_MEMORY_LIMIT_BYTES,
+            },
             "auto_free_space_reserve": dict(AUTO_FREE_SPACE_RESERVE),
             "defaults": {
                 key: value

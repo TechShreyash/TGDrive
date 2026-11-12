@@ -30,6 +30,7 @@ import { ErrorNotice, Spinner } from "../../shared/components";
 import { useManualRefresh } from "../../shared/useManualRefresh";
 import {
     numericPreferences,
+    speedLimits,
     resourceLimits,
     performanceApi,
     performanceChanges,
@@ -43,6 +44,9 @@ import {
 import "./Performance.css";
 import DemoModeNotice from "../../shared/DemoModeNotice";
 import ThumbnailSettings from "./ThumbnailSettings";
+import SettingHelp from "../../shared/SettingHelp";
+
+const RETENTION_UNITS = { minutes: 60, hours: 3600, days: 86400 } as const;
 
 export default function PerformanceSettings({
     onSaved,
@@ -64,6 +68,8 @@ export default function PerformanceSettings({
     const [error, setError] = useState("");
     const [notice, setNotice] = useState("");
     const [conflict, setConflict] = useState(false);
+    const [retentionUnit, setRetentionUnit] =
+        useState<keyof typeof RETENTION_UNITS>("hours");
     const latestLoad = useRef(0);
     const steppers = useRef<
         Partial<Record<string, NumberInputHandlers | undefined>>
@@ -153,7 +159,11 @@ export default function PerformanceSettings({
                     Object.assign(next, { [key]: refreshed[key] });
             setDraft(next);
             setNotice(
-                "Performance settings saved for this section. New work uses these limits.",
+                category === "cache"
+                    ? "Cache settings saved."
+                    : category === "transfers"
+                      ? "Transfer settings saved. Speed limits apply to ongoing transfers; existing files keep their split plan."
+                      : "Timezone saved for this installation.",
             );
             setConflict(false);
             onSaved?.(value);
@@ -173,6 +183,9 @@ export default function PerformanceSettings({
                 <label htmlFor={"perf-" + definition.key}>
                     {definition.label}
                 </label>
+                <SettingHelp label={definition.label}>
+                    <p>{definition.help}</p>
+                </SettingHelp>
                 <p id={"perf-help-" + definition.key}>{definition.help} </p>
             </div>
             <div className="configuration-value number-control">
@@ -275,6 +288,17 @@ export default function PerformanceSettings({
                     <label htmlFor={"limit-mode-" + definition.key}>
                         {definition.label}
                     </label>
+                    <SettingHelp label={definition.label}>
+                        <p>
+                            {definition.key === "stream_memory_limit_bytes"
+                                ? "A ceiling for temporary shared stream buffers, separate from retained RAM cache and total process memory. Automatic sizing starts around 32 MiB or lower and grows only with observed foreground waits and verified headroom. Unknown memory does not cause growth. Owned reservations drain safely after a lower ceiling."
+                                : definition.key === "protected_free_bytes"
+                                  ? "Space left free on the reported media-cache and upload volumes. It is separate from outstanding upload reservations. In Docker or a VM, the visible volume may differ from the physical host."
+                                  : definition.key === "staging_limit_bytes"
+                                    ? "Uploads, imports and archives reserve this temporary disk space. Lowering the limit preserves existing reservations; new work must fit."
+                                    : "Disposable media copies retained for future reads. Automatic selects a resource-based ceiling; custom sets your ceiling; disabled stops retention in this tier. Originals remain in Telegram. Memory cache is part of server RAM."}
+                        </p>
+                    </SettingHelp>
                     <p id={"limit-help-" + definition.key}>
                         {value.mode === "automatic"
                             ? automaticLabel
@@ -333,7 +357,7 @@ export default function PerformanceSettings({
                                 definition.unitLabel +
                                 ")"
                             }
-                            min={0}
+                            min={definition.min ?? 0}
                             allowNegative={false}
                             step={definition.unitLabel === "MiB" ? 1 : 0.25}
                             suffix={" " + definition.unitLabel}
@@ -371,7 +395,7 @@ export default function PerformanceSettings({
                             {
                                 cache: "Automatic tuning stays within your media cache limits.",
                                 transfers:
-                                    "Control temporary upload storage and Telegram file splitting.",
+                                    "Control aggregate file speeds, temporary storage and Telegram file splitting.",
                                 regional:
                                     "Choose the timezone used for dates and share expiry across this installation.",
                             }[category]
@@ -415,9 +439,101 @@ export default function PerformanceSettings({
                                 .filter(
                                     (item) =>
                                         item.category === "cache" &&
-                                        !item.advanced,
+                                        !item.advanced &&
+                                        item.key !==
+                                            "stream_memory_limit_bytes",
                                 )
                                 .map(limitField)}
+                            <div className="performance-field">
+                                <div>
+                                    <label htmlFor="disk-cache-retention">
+                                        Disk cache retention
+                                    </label>
+                                    <SettingHelp label="Disk cache retention">
+                                        <p>
+                                            Disposable media chunks expire after
+                                            inactivity. Reading a chunk
+                                            refreshes its expiry. Space pressure
+                                            may evict it sooner. Originals in
+                                            Telegram and backup archives are
+                                            unaffected. This does not configure
+                                            RAM retention or total application
+                                            memory. Minimum: 1 minute; default:
+                                            24 hours (1 day).
+                                        </p>
+                                    </SettingHelp>
+                                    <p id="disk-cache-retention-help">
+                                        Expires after inactivity. Space pressure
+                                        may evict sooner.
+                                    </p>
+                                </div>
+                                <div className="configuration-value resource-limit-controls">
+                                    <NumberInput
+                                        id="disk-cache-retention"
+                                        aria-label="Disk cache retention"
+                                        aria-describedby="disk-cache-retention-help"
+                                        min={
+                                            60 / RETENTION_UNITS[retentionUnit]
+                                        }
+                                        max={
+                                            Number.MAX_SAFE_INTEGER /
+                                            RETENTION_UNITS[retentionUnit]
+                                        }
+                                        step={1}
+                                        allowNegative={false}
+                                        required
+                                        disabled={demoMode || busy}
+                                        value={
+                                            draft.cache_ttl_seconds.trim()
+                                                ? String(
+                                                      (Number(
+                                                          draft.cache_ttl_seconds,
+                                                      ) *
+                                                          3600) /
+                                                          RETENTION_UNITS[
+                                                              retentionUnit
+                                                          ],
+                                                  )
+                                                : ""
+                                        }
+                                        onChange={(value) => {
+                                            setDraft({
+                                                ...draft,
+                                                cache_ttl_seconds:
+                                                    value === ""
+                                                        ? ""
+                                                        : String(
+                                                              (Number(value) *
+                                                                  RETENTION_UNITS[
+                                                                      retentionUnit
+                                                                  ]) /
+                                                                  3600,
+                                                          ),
+                                            });
+                                            setNotice("");
+                                        }}
+                                    />
+                                    <NativeSelect
+                                        aria-label="Disk cache retention unit"
+                                        value={retentionUnit}
+                                        disabled={demoMode || busy}
+                                        data={[
+                                            {
+                                                value: "minutes",
+                                                label: "Minutes",
+                                            },
+                                            { value: "hours", label: "Hours" },
+                                            { value: "days", label: "Days" },
+                                        ]}
+                                        onChange={(event) =>
+                                            setRetentionUnit(
+                                                event.currentTarget
+                                                    .value as keyof typeof RETENTION_UNITS,
+                                            )
+                                        }
+                                    />
+                                </div>
+                            </div>
                             <details className="performance-detail-note">
                                 <summary>Advanced storage protection</summary>
                                 {resourceLimits
@@ -435,53 +551,194 @@ export default function PerformanceSettings({
                             </details>
                         </Fieldset>
                     )}
-                    {category === "transfers" && (
-                        <Fieldset
-                            className="performance-setting-group"
-                            legend="Temporary upload storage"
-                        >
-                            {resourceLimits
-                                .filter((item) => item.category === "transfers")
-                                .map(limitField)}
-                            <p className="settings-help">
-                                Uploads, imports and archive work share this
-                                budget. Existing jobs keep their reservations.
-                                New work needs space within this limit.
-                            </p>
-                        </Fieldset>
+                    {category === "cache" && (
+                        <div className="performance-secondary-settings">
+                            <Fieldset
+                                className="performance-setting-group"
+                                legend="Stream working memory"
+                            >
+                                <p className="settings-help">
+                                    Temporary shared read buffers, separate from
+                                    retained media cache.
+                                </p>
+                                {resourceLimits
+                                    .filter(
+                                        (item) =>
+                                            item.key ===
+                                            "stream_memory_limit_bytes",
+                                    )
+                                    .map(limitField)}
+                            </Fieldset>{" "}
+                            <Fieldset
+                                className="performance-setting-group"
+                                data-hue="green"
+                                legend={
+                                    <span className="configuration-group-title">
+                                        <PlayCircle
+                                            size={18}
+                                            aria-hidden="true"
+                                        />
+                                        Automatic preloading
+                                    </span>
+                                }
+                            >
+                                <p className="settings-help">
+                                    Keep useful media ready while active
+                                    playback and downloads take priority.
+                                </p>
+                                <Switch
+                                    className="configuration-auto-preload"
+                                    label="Preload during playback"
+                                    description="Adapts extra server caching to media playback. Downloads fetch their requested ranges. Requested chunks and adaptive read-ahead still work when off; manual whole-file preloads stay available."
+                                    checked={draft.auto_preload}
+                                    onLabel="ON"
+                                    offLabel="OFF"
+                                    disabled={demoMode || busy}
+                                    onChange={(event) => {
+                                        setDraft({
+                                            ...draft,
+                                            auto_preload:
+                                                event.currentTarget.checked,
+                                        });
+                                        setNotice("");
+                                    }}
+                                />
+                            </Fieldset>
+                        </div>
                     )}
-                    <Fieldset
-                        className="performance-setting-group"
-                        data-hue="green"
-                        hidden={category !== "cache"}
-                        legend={
-                            <span className="configuration-group-title">
-                                <PlayCircle size={18} aria-hidden="true" />
-                                Automatic preloading
-                            </span>
-                        }
-                    >
-                        <p className="settings-help">
-                            Keep useful media ready while active playback and
-                            downloads take priority.
-                        </p>
-                        <Switch
-                            className="configuration-auto-preload"
-                            label="Preload during playback"
-                            description="Adapts extra server caching to media playback. Downloads fetch their requested ranges. Requested chunks and adaptive read-ahead still work when off; manual whole-file preloads stay available."
-                            checked={draft.auto_preload}
-                            onLabel="ON"
-                            offLabel="OFF"
-                            disabled={demoMode || busy}
-                            onChange={(event) => {
-                                setDraft({
-                                    ...draft,
-                                    auto_preload: event.currentTarget.checked,
-                                });
-                                setNotice("");
-                            }}
-                        />
-                    </Fieldset>
+                    {category === "transfers" && (
+                        <>
+                            <Fieldset
+                                className="performance-setting-group"
+                                legend="File transfer speeds"
+                            >
+                                <p className="settings-help">
+                                    One limit per direction across managed file
+                                    transfers and all accounts.
+                                    <SettingHelp label="File transfer speeds">
+                                        <p>
+                                            Run a speed test on the hosting
+                                            machine. Start around 80% of its
+                                            measured upload and download Mbps to
+                                            leave room for other traffic. This
+                                            is a starting point, not a
+                                            guarantee. Limits apply to managed
+                                            payloads, including Telegram
+                                            transfers, viewer delivery and
+                                            native torrents; protocol overhead
+                                            and provider retransmissions can
+                                            exceed them. Telegram server-side
+                                            copies use no host payload. Very low
+                                            limits can delay the first complete
+                                            Telegram part for minutes. Cancel
+                                            transfers from Transfers. Native
+                                            torrents reserve an aggregate Python
+                                            share even when idle.
+                                        </p>
+                                    </SettingHelp>
+                                </p>
+                                {speedLimits.map(({ key, label }) => (
+                                    <div
+                                        className="performance-field"
+                                        key={key}
+                                    >
+                                        <div>
+                                            <label
+                                                htmlFor={"speed-mode-" + key}
+                                            >
+                                                {label}
+                                            </label>
+                                            <p id={"speed-help-" + key}>
+                                                {key ===
+                                                "upload_limit_bytes_per_second"
+                                                    ? "Files sent to Telegram and delivered to viewers."
+                                                    : "Files received from devices, URLs, torrents and Telegram."}
+                                            </p>
+                                        </div>
+                                        <div className="configuration-value resource-limit-controls">
+                                            <NativeSelect
+                                                id={"speed-mode-" + key}
+                                                aria-label={
+                                                    label + " limit mode"
+                                                }
+                                                aria-describedby={
+                                                    "speed-help-" + key
+                                                }
+                                                disabled={demoMode || busy}
+                                                value={draft[key].mode}
+                                                data={[
+                                                    {
+                                                        value: "unlimited",
+                                                        label: "Unlimited",
+                                                    },
+                                                    {
+                                                        value: "custom",
+                                                        label: "Custom limit",
+                                                    },
+                                                ]}
+                                                onChange={(event) => {
+                                                    setDraft({
+                                                        ...draft,
+                                                        [key]: {
+                                                            ...draft[key],
+                                                            mode: event
+                                                                .currentTarget
+                                                                .value,
+                                                        },
+                                                    });
+                                                    setNotice("");
+                                                }}
+                                            />
+                                            {draft[key].mode === "custom" && (
+                                                <NumberInput
+                                                    aria-label={
+                                                        label + " limit (Mbps)"
+                                                    }
+                                                    suffix=" Mbps"
+                                                    min={0.008192}
+                                                    step={1}
+                                                    decimalScale={6}
+                                                    allowNegative={false}
+                                                    required
+                                                    disabled={demoMode || busy}
+                                                    value={draft[key].value}
+                                                    onChange={(value) => {
+                                                        setDraft({
+                                                            ...draft,
+                                                            [key]: {
+                                                                ...draft[key],
+                                                                value: String(
+                                                                    value,
+                                                                ),
+                                                            },
+                                                        });
+                                                        setNotice("");
+                                                    }}
+                                                />
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </Fieldset>
+                            <Fieldset
+                                className="performance-setting-group"
+                                legend="Temporary upload storage"
+                            >
+                                {resourceLimits
+                                    .filter(
+                                        (item) => item.category === "transfers",
+                                    )
+                                    .map(limitField)}
+                                <p className="settings-help">
+                                    Uploads, imports and archive work share this
+                                    budget. Existing jobs keep their
+                                    reservations. New work needs space within
+                                    this limit.
+                                </p>
+                            </Fieldset>
+                        </>
+                    )}
+
                     <Fieldset
                         className="performance-setting-group"
                         data-hue="violet"
@@ -520,9 +777,18 @@ export default function PerformanceSettings({
                                 <label htmlFor="performance-timezone">
                                     Timezone
                                 </label>
+                                <SettingHelp label="Timezone">
+                                    <p>
+                                        Use an IANA name such as Asia/Kolkata,
+                                        Europe/London or UTC. Dates show their
+                                        UTC offset for the date being displayed,
+                                        including daylight-saving changes. Share
+                                        expiry uses this installation timezone.
+                                    </p>
+                                </SettingHelp>
                                 <p id="performance-timezone-help">
                                     Used for dates and share expiry. Examples:
-                                    Asia/Kolkata (IST), Europe/London or UTC.
+                                    Asia/Kolkata, Europe/London or UTC.
                                 </p>
                             </div>
                             <TextInput
@@ -670,7 +936,8 @@ function TimezonePreview({ zone }: { zone: string }) {
                 timeZoneName: "longOffset",
             })
                 .formatToParts(now)
-                .find((part) => part.type === "timeZoneName")?.value || "";
+                .find((part) => part.type === "timeZoneName")
+                ?.value.replace(/^GMT/, "UTC") || "";
     } catch {
         time = "";
     }

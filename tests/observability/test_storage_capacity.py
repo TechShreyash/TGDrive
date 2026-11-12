@@ -25,6 +25,7 @@ def test_system_snapshot_keeps_guest_totals_and_reports_backing_scope(
     monkeypatch.setattr("tgdrive.storage.capacity.shutil.disk_usage", usage)
     settings = SimpleNamespace(
         resolved_data_dir=tmp_path,
+        resolved_cache_dir=tmp_path,
         data_backing_capacity_dir=probe,
         cache_min_free_bytes=5,
         staging_budget_bytes=100,
@@ -57,6 +58,7 @@ def test_connection_stats_keep_guest_free_separate_from_unavailable_backing(tmp_
     assert stats["free_disk_bytes"] > 0
     assert stats["disk_capacity"]["effective"] == {
         "available": False,
+        "total_bytes": None,
         "free_bytes": None,
         "headroom_bytes": None,
     }

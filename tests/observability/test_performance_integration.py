@@ -113,6 +113,13 @@ def test_lazy_resource_api_without_telegram_runtime_is_controlled(
             assert performance.status_code == 200
             assert performance.json()["cache"]["disk"]["available"] is False
             assert performance.json()["cache"]["files"] == []
+            summary = performance.json()["resource_summary"]
+            assert summary["sampled_at"] > 0
+            assert set(summary["storage"]) == {"data", "cache"}
+            assert "capacity_cores" in summary["cpu"]
+            assert "available_bytes" in summary["memory"]
+            assert "total_bytes" in summary["storage"]["data"]["effective"]
+            assert performance.json()["server"]["stale_after_seconds"] == 15
             assert client.get("/api/v1/preloads").status_code == 503
             assert client.post("/api/v1/preloads/clear", json={}).status_code == 503
     finally:

@@ -31,6 +31,7 @@ def test_backing_limits_headroom_without_replacing_guest_totals(tmp_path, monkey
     assert snapshot["backing"]["free_bytes"] == 20
     assert snapshot["effective"] == {
         "available": True,
+        "total_bytes": 100,
         "free_bytes": 20,
         "headroom_bytes": 12,
     }
@@ -74,6 +75,7 @@ def test_configured_invalid_probe_never_falls_back_to_guest(
     assert snapshot["scope"] == "backing_unavailable"
     assert snapshot["effective"] == {
         "available": False,
+        "total_bytes": None,
         "free_bytes": None,
         "headroom_bytes": None,
     }
@@ -86,6 +88,7 @@ def test_measured_zero_is_distinct_from_unavailable(tmp_path, monkeypatch):
     result = capacity.measure_capacity(guest, probe_directory=probe)
     assert result.as_dict()["effective"] == {
         "available": True,
+        "total_bytes": 100,
         "free_bytes": 0,
         "headroom_bytes": 0,
     }

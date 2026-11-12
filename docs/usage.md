@@ -561,13 +561,14 @@ Your server operator chooses which Telegram users may use the bot
 2. Send or forward files, photos, video or audio to the bot. Send photos as files
    to preserve quality.
 3. Each file gets one status message that updates in place, about every
-   4 seconds and at 5% steps: **Receiving 42% · …**, then **Saving to TGDrive …**,
+   4 seconds and at 5% steps when the total is known. Unknown totals show received
+   bytes. Status moves from **Receiving 42% · …** to **Saving to TGDrive …**,
    then **Saved ✓** with the name, size and folder. When the website address is
    known, an **Open in TGDrive** button opens that folder. Several files can be
    sent at once; each gets its own status message.
 
-Messages from users who are not allowed get one reply with their Telegram user
-ID, so the owner can allow them; later messages are ignored.
+Users who are not allowed cannot import files. The bot can reply with their
+Telegram user ID so the owner can allow them.
 
 Default: **My Files / TGDriveBotModeFiles**, created on first use. All allowed
 users share the destination; changes apply to new imports without restart.
@@ -575,12 +576,19 @@ Moving/deleting it pauses new imports until an available folder is chosen.
 Repeated sends create copies; conflicting names are kept alongside existing ones.
 
 **Encrypt bot uploads** (on by default) makes the server download each file and
-upload it encrypted, which takes longer for large files. Turn it off for instant
-Telegram copies that stay unencrypted. [Encryption details](reference.md#stored-file-encryption).
+upload it encrypted, which takes longer for large files. Turn it off for
+Telegram-side copies that stay unencrypted and readable to anyone with channel
+access. If encrypted importing is unavailable, encryption-on fails instead of
+falling back to a plaintext copy. [Encryption details](reference.md#stored-file-encryption).
 
 Encrypted bot imports appear in the website **Transfers** panel: first
 **Receiving from Telegram bot** with bytes and speed, then the usual Telegram
-upload. Cancel them there. Sending the same message again reuses its transfer
+upload. Cancel there, or reply **/cancel** to the original file message in the
+bot chat. Cancellation can require cleanup and does not delete already saved
+files. Direct Telegram copies cannot be cancelled through this command; check
+Transfers if no matching encrypted import is found.
+
+Sending the same message again reuses its transfer
 instead of downloading twice. A server restart during the download marks it
 failed and deletes the partial file; send the file again. A failed upload keeps
 the downloaded file so **Retry** works.
@@ -588,7 +596,8 @@ the downloaded file so **Retry** works.
 If the bot says **Upload could not be confirmed**, check the drive before
 resending: its database write may have succeeded.
 
-**/start** and **/help** explain uploads; **/current_folder** shows the destination,
+**/start** and **/help** explain the selected encryption mode and cancellation;
+**/current_folder** shows the destination,
 and **/set_folder** links to the website setting.
 [Bot access settings](configuration.md#telegram-bot-access) · [Known recovery gaps](roadmap.md#known-correctness-and-recovery-gaps)
 

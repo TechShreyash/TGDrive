@@ -90,7 +90,17 @@ verification are in [architecture](architecture.md#independent-backup-pacing-and
 | `POST /api/v1/replica/recover` | Three steps: `source_channel` + `bot_token` to inspect; `target_channel` + `target_bot_token` + `confirm_channel` (optional `catalog_only`) to copy; `activate: true` + `confirm_channel` to switch | Wrong confirmation or an incomplete candidate can't activate |
 | `POST /api/v1/start-new` | `confirm: "START NEW"` and `password`; in-place reset is unavailable | A valid request returns `409 START_NEW_UNAVAILABLE` without erasing the drive; `403` wrong password or demo mode; `422` invalid confirmation. [Fresh-drive procedure](backup-recovery.md#start-a-new-drive) |
 
+Status `recovery.state: "protected"` describes MongoDB ownership/durability, not
+Telegram confirmation. `recovery.independent_backup` reports `enabled`, `phase`,
+`protected_revision`, `last_success_at` and `error` from independent protection;
+when disabled, its evidence fields are null. Current confirmation requires a
+protected phase, valid confirmation date, no error and a protected revision at
+least as new as the metadata revision. Pending/error states remain significant.
+
 The status endpoint's `backup` list is latest-first and may be empty.
+With independent protection enabled, retained main-channel history is separate
+from that current summary; an old unverified row is not proof the current
+independent protection failed.
 `pin_verified_at` records a pin check at that time; `unverified` discovery does
 not establish archive corruption. Local download availability is reported
 separately by `backup_file_available` from the replica endpoint; do not infer it
@@ -204,7 +214,7 @@ All routes are **Owner**. Field meanings and limits are in
 | Method and route | Purpose | Notes and errors |
 | --- | --- | --- |
 | `GET /api/v1/settings/performance` | Owner preferences, revision, defaults, `auto_resource_limits` and `auto_free_space_reserve`; excludes managed live resource values | Live managed values are under `/api/v1/performance` → `tuning` |
-| `PATCH /api/v1/settings/performance` | `timezone`, `auto_preload`, `upload_split_mib` and nullable `cache_disk_limit_bytes`, `cache_memory_limit_bytes`, `staging_limit_bytes`, `protected_free_bytes` ([bounds](reference.md#performance-and-cache-settings)) | Optional revision in `If-Match`; stale edits return `409`. Managed keys (including `max_file_size`, `staging_budget_bytes`, `min_free_bytes`) and unknown fields return `422` |
+| `PATCH /api/v1/settings/performance` | `timezone`, `auto_preload`, `upload_split_mib`, `cache_ttl_seconds` and nullable `cache_disk_limit_bytes`, `cache_memory_limit_bytes`, `staging_limit_bytes`, `stream_memory_limit_bytes`, `protected_free_bytes`, `upload_limit_bytes_per_second`, `download_limit_bytes_per_second` ([bounds](reference.md#performance-and-cache-settings)) | Optional revision in `If-Match`; stale edits return `409`. Managed keys (including `max_file_size`, `staging_budget_bytes`, `min_free_bytes`) and unknown fields return `422` |
 | `GET /api/v1/performance` | Live accounts, queues, `traffic`, `server`, `drive`/`database` readings, `tuning` and `diagnosis` | Live samples reset on restart; recorded history/totals use the history route |
 | `GET /api/v1/performance/history` | `start`, `end` (Unix seconds, within 31 days): up to 360 bins plus lifetime `totals` | `422` bad range; `503` storage unavailable. Don't add the totals together |
 | `GET /api/v1/preloads` | Cached files, coverage as `[start, end)` intervals and jobs | |

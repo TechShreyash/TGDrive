@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { Button, Paper } from "@mantine/core";
+import { Button, Paper, Switch } from "@mantine/core";
 import { Bot, ChevronRight, Folder } from "lucide-react";
 import { api, errorMessage, type BotUploadSettings } from "../../shared/api";
 import { ErrorNotice, Modal, Spinner } from "../../shared/components";
 import { itemPath, type DriveItem } from "../../shared/types";
+import SettingHelp from "../../shared/SettingHelp";
 import {
     useManualRefresh,
     type RefreshNotice,
@@ -92,7 +93,19 @@ export default function BotModeSettings({
                 saved && (
                     <>
                         <p className="bot-upload-destination">
-                            <span>Upload folder</span>
+                            <span>
+                                Upload folder{" "}
+                                <SettingHelp label="Bot upload folder">
+                                    <p>
+                                        Choose where the next file sent or
+                                        forwarded to the bot appears. Default
+                                        uses My Files / TGDriveBotModeFiles,
+                                        created on the first upload. Existing
+                                        files stay in their current folders.
+                                        Changes save immediately.
+                                    </p>
+                                </SettingHelp>
+                            </span>
                             <strong>{saved.folder_label}</strong>
                         </p>
                         {!saved.available && (
@@ -130,27 +143,32 @@ export default function BotModeSettings({
                             automatically on the first bot upload. Changes apply
                             without restarting.
                         </p>
-                        <label className="bot-upload-encrypt">
-                            <input
-                                type="checkbox"
+                        <div className="bot-upload-encrypt">
+                            <Switch
+                                label="Encrypt bot uploads"
+                                onLabel="ON"
+                                offLabel="OFF"
                                 checked={saved.encrypt}
                                 disabled={demoMode || busy}
                                 onChange={(event) =>
                                     void save(
                                         saved.folder_path,
-                                        event.target.checked,
+                                        event.currentTarget.checked,
                                     )
                                 }
                             />
-                            <span>Encrypt bot uploads</span>
-                        </label>
-                        <p className="settings-help">
-                            On: TGDrive downloads each forwarded file and
-                            uploads it encrypted, which takes longer and uses
-                            server bandwidth. Off: Telegram copies the file
-                            instantly, but it stays readable by anyone with
-                            channel access.
-                        </p>
+                            <SettingHelp label="Encrypt bot uploads">
+                                <p>
+                                    On: TGDrive downloads each forwarded file
+                                    and uploads it encrypted, which takes longer
+                                    and uses server bandwidth. Off: Telegram can
+                                    copy the file without downloading and
+                                    reuploading through this server. The copy
+                                    remains readable to anyone with channel
+                                    access. Transfer time varies.
+                                </p>
+                            </SettingHelp>
+                        </div>
                     </>
                 )
             )}

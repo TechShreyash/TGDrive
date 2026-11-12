@@ -23,6 +23,7 @@ from tgdrive.storage.file_parts import (
 )
 from tgdrive.telegram.client_pool import ClientPoolNotRunning, NoClientAvailable
 from tgdrive.telegram.connection_errors import TelegramConnectionError
+from tgdrive.transfers.bandwidth import payload_timeout
 from tgdrive.transfers.manager import (
     TransferCancelled,
     TransferEmptyFile,
@@ -648,7 +649,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
         poster = plan.get("poster")
         if poster:
             try:
-                async with asyncio.timeout(15):
+                async with payload_timeout(15):
                     await upload_part(poster, sidecar=True)
             except (
                 OSError,

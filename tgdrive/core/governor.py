@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
+import time
 from pathlib import Path
 
+from tgdrive.core.system_resources import cpu_snapshot, memory_snapshot
 from tgdrive.storage.capacity import measure_capacity
 
 logger = logging.getLogger(__name__)
@@ -42,45 +43,24 @@ BYTES = (
     "max_file_size",
 )
 # Values the owner no longer edits; saves that include them are refused. Queue
-# size, request pacing and cache retention keep their tested defaults.
+# size and request pacing keep their tested defaults.
 MANAGED = frozenset(
-    CONCURRENCY
-    + BYTES
-    + ("telegram_parts_per_second", "telegram_max_queue", "cache_ttl_seconds")
+    CONCURRENCY + BYTES + ("telegram_parts_per_second", "telegram_max_queue")
 )
-
-
-def _words(path) -> list[str] | None:
-    try:
-        return Path(path).read_text().split()
-    except OSError:
-        return None
 
 
 def memory(
     cgroup: str = "/sys/fs/cgroup", meminfo: str = "/proc/meminfo"
 ) -> tuple[int | None, int | None]:
-    """Return (limit, available) bytes; cgroup v2 first, then the host."""
-    limit, current = _words(f"{cgroup}/memory.max"), _words(f"{cgroup}/memory.current")
-    if limit and current and limit[0] != "max":
-        return int(limit[0]), max(0, int(limit[0]) - int(current[0]))
-    rows = {}
-    try:
-        lines = Path(meminfo).read_text().splitlines()
-    except OSError:
-        return None, None
-    for line in lines:
-        name, _, rest = line.partition(":")
-        if rest.split():
-            rows[name] = int(rest.split()[0]) * 1024
-    return rows.get("MemTotal"), rows.get("MemAvailable")
+    """Return effective (limit, available) bytes within this kernel namespace."""
+    value = memory_snapshot(
+        cgroup=Path(cgroup), proc=Path(meminfo).parent, meminfo=meminfo
+    )
+    return value["limit_bytes"], value["available_bytes"]
 
 
-def cpus(path: str = "/sys/fs/cgroup/cpu.max") -> int:
-    row = _words(path)
-    if row and row[0] != "max":
-        return max(1, -(-int(row[0]) // int(row[1])))
-    return os.cpu_count() or 1
+def cpus(path: str = "/sys/fs/cgroup/cpu.max") -> float | None:
+    return cpu_snapshot(cgroup=Path(path).parent)["capacity_cores"]
 
 
 def measure(
@@ -101,11 +81,11 @@ def measure(
         memory_limit=limit,
         memory_available=available,
         cpus=cpus(),
-        disk_total=disk.filesystem.total if disk.filesystem else 0,
+        disk_total=disk.effective_total_bytes or 0,
         disk_free=disk.filesystem.free if disk.filesystem else None,
         disk_effective_free=disk.effective_free_bytes,
         disk_capacity=disk.as_dict(),
-        cache_disk_total=media_disk.filesystem.total if media_disk.filesystem else 0,
+        cache_disk_total=media_disk.effective_total_bytes or 0,
         cache_disk_free=media_disk.filesystem.free if media_disk.filesystem else None,
         cache_disk_effective_free=media_disk.effective_free_bytes,
         cache_disk_capacity=media_disk.as_dict(),
@@ -204,7 +184,11 @@ def decide(measurements: dict, previous: dict, policy: dict | None = None):
         values[key] = ceiling
         reasons[key] = f"startup ceiling ({ceiling})"
     for key in CPU_BOUND:
-        target = min(values[key], m["cpus"] * 4, 8)
+        target = (
+            min(values[key], max(1, int(m["cpus"] * 4)), 8)
+            if m["cpus"]
+            else values[key]
+        )
         if target != values[key]:
             values[key] = target
             reasons[key] = f"capped at 4 per CPU and 8 jobs ({target})"
@@ -245,6 +229,7 @@ class Governor:
         self.measurements = await asyncio.to_thread(
             measure, directory, media_directory, **probes
         )
+        self.measurements["sampled_at"] = time.time()
         manager = getattr(self.runtime, "transfers", None)
         if manager is not None:
             from tgdrive.transfers.staging import staging_usage
@@ -297,6 +282,10 @@ class Governor:
             ):
                 await pool.set_uploads_per_bot(uploads)
                 self.settings.telegram_uploads_per_bot = uploads
+            cache = getattr(pool, "_media_read_cache", None)
+            update = getattr(cache, "update_stream_capacity", None)
+            if callable(update):
+                update(self.measurements)
 
     async def _run(self) -> None:
         while True:

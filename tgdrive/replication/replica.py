@@ -145,7 +145,9 @@ class ChannelReplica:
         self.settings, self.runtime = settings, runtime
         self._request_pacer = ReplicaRequestPacer()
         self.factory = transport_factory or partial(
-            ReplicaTransport, pacer=self._request_pacer
+            ReplicaTransport,
+            pacer=self._request_pacer,
+            bandwidth=getattr(runtime, "bandwidth", None),
         )
         self.directory = settings.resolved_data_dir
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)

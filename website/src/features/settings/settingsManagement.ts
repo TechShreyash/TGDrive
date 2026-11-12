@@ -140,12 +140,19 @@ export function clientConnectionLabel(client: {
     connected: boolean | null;
     healthy: boolean;
     connection_check?: ManagedClient["connection_check"];
+    error_code?: ManagedClient["error_code"];
 }): string {
     if (!client.enabled) return "Disabled in saved configuration";
     if (client.connection_check === "queued") return "Waiting to check";
     if (client.connection_check === "checking") return "Checking connection…";
     if (client.connection_check === "waiting") return "Waiting to retry…";
     if (client.connection_check === "failed") return "Check failed";
+    if (client.error_code === "TELEGRAM_RECONNECTING")
+        return "Reconnecting automatically";
+    if (client.error_code === "TELEGRAM_CREDENTIALS_REVOKED")
+        return "Credentials need attention";
+    if (client.error_code === "TELEGRAM_CONNECTION_UNAVAILABLE")
+        return "Connection needs attention";
     if (
         client.connection_check === "passed" &&
         !(client.connected && client.healthy)

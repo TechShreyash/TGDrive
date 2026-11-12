@@ -36,6 +36,7 @@ import {
 import { transfers, uploadBackupState } from "../transfers/transfers";
 import PremiumConnection from "./PremiumConnection";
 import DemoModeNotice from "../../shared/DemoModeNotice";
+import SettingHelp from "../../shared/SettingHelp";
 import "./SettingsManagement.css";
 
 function announceSaved(value: ManagementSettings) {
@@ -638,6 +639,18 @@ export default function SettingsManagement({
                                     download speed. All accounts use the same
                                     file split size, capped at 2000 MiB per
                                     document.
+                                    <SettingHelp label="Storage clients">
+                                        <p>
+                                            Add storage bots or a Premium user
+                                            account with access to this drive's
+                                            storage channel. Refresh checks
+                                            saved credentials and channel
+                                            permissions. More accounts do not
+                                            multiply aggregate speed limits; all
+                                            accounts share the file split size
+                                            in Transfer settings.
+                                        </p>
+                                    </SettingHelp>
                                 </p>
                             </div>
                             <div className="management-actions">
@@ -877,6 +890,16 @@ export default function SettingsManagement({
                                 <p>
                                     Application credentials for connecting this
                                     installation to Telegram.
+                                    <SettingHelp label="Telegram API credentials">
+                                        <p>
+                                            Use the API ID and hash for your
+                                            Telegram application. These are
+                                            separate from bot tokens. Keep
+                                            credentials private. Editing
+                                            credentials rechecks the connection
+                                            and does not move stored files.
+                                        </p>
+                                    </SettingHelp>
                                 </p>
                             </div>
                             <button

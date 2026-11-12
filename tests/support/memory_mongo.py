@@ -78,9 +78,9 @@ class FixtureCursor:
 
 
 class FixtureCollection:
-    def __init__(self):
+    def __init__(self, lock=None):
         self.rows = {}
-        self.lock = threading.RLock()
+        self.lock = lock if lock is not None else threading.RLock()
 
     def find(self, query=None, **_kwargs):
         with self.lock:
@@ -161,11 +161,16 @@ class FixtureCollection:
 
 class FixtureMongoBackend:
     def __init__(self):
-        collections = defaultdict(FixtureCollection)
+        self._lock = threading.RLock()
+        self._transaction = threading.local()
+        collections = defaultdict(lambda: FixtureCollection(self._lock))
+        self._collections = collections
+        lock = self._lock
 
         class Database:
             def __getattr__(self, name):
-                return collections[name]
+                with lock:
+                    return collections[name]
 
         self.db = Database()
         self._settings_lock = threading.RLock()
@@ -177,3 +182,27 @@ class FixtureMongoBackend:
 
     def assert_writable(self, **_kwargs):
         return None
+
+    def transaction(self, operation):
+        with self._lock:
+            if getattr(self._transaction, "session", None) is not None:
+                raise AssertionError("Nested fixture transactions are unsupported")
+            before = {
+                name: copy.deepcopy(value.rows)
+                for name, value in self._collections.items()
+            }
+            session = self._transaction.session = object()
+            try:
+                return operation(session)
+            except BaseException:
+                for name, collection in self._collections.items():
+                    collection.rows = before.get(name, {})
+                raise
+            finally:
+                self._transaction.session = None
+
+    def fence(self, session):
+        if session is None or session is not getattr(
+            self._transaction, "session", None
+        ):
+            raise AssertionError("Fixture fence requires its active transaction")

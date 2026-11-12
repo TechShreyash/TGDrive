@@ -210,11 +210,15 @@ input::placeholder {
     color: var(--muted);
     opacity: 1;
 }
-input[type="checkbox"] {
+input[type="checkbox"]:not(.mantine-Switch-input) {
     width: 17px;
     height: 17px;
     cursor: pointer;
 }
+.mantine-Switch-body {
+    min-height: 44px;
+}
+
 label {
     display: block;
     font-weight: 500;
@@ -2596,7 +2600,6 @@ textarea,
 .pdf-text-layer *,
 .settings-facts dd,
 .connection-api-summary dd,
-.storage-catalog dd,
 .recovery-command code,
 .error-notice,
 [role="alert"],
@@ -3391,11 +3394,6 @@ textarea,
     }
     .column-sort-button {
         min-width: 44px;
-    }
-    .storage-count-link {
-        min-width: 44px;
-        min-height: 44px;
-        text-align: start;
     }
     .file-selection-slot:has(input) {
         flex-basis: 44px;

@@ -47,7 +47,7 @@ The resource governor sizes budgets at startup, then re-measures the server ever
 5 seconds and applies resource changes live within saved owner ceilings. Owners
 can cap retained RAM cache, payload disk cache and staging, and set a protected
 free-space floor. Managed live values are not direct PATCH inputs. Open
-**Performance → Resources → Applied limits and reasons** to inspect the chosen
+**Performance tab → Automatic tuning** to inspect the chosen
 values and reasons. The API returns
 current values, a reason for each value and the latest measurements under
 `tuning` in `GET /api/v1/performance`.
@@ -55,16 +55,21 @@ current values, a reason for each value and the latest measurements under
 | Value | Rule |
 | --- | --- |
 | Memory cache | Up to 25% of available memory, bounded by the saved ceiling; Auto ceiling 256 MiB |
-| Disk reserves (`min_free_bytes`, `cache_min_free_bytes`) | Saved protected-free-space value, or Auto: larger of 1 GiB and 5% of each relevant filesystem |
+| Disk reserves (`min_free_bytes`, `cache_min_free_bytes`) | Saved protected-free-space value, or Auto: larger of 1 GiB and 5% of the limiting measured filesystem capacity |
 | Disk cache | Up to 50% of free media-cache disk after reserve, bounded by the saved ceiling; Auto ceiling 10 GiB |
 | Total staging budget, logical file ceiling | Free staging disk after reserve plus allocated staging, bounded by the saved ceiling; Auto ceiling 16 GiB. Admission still checks other reservations and actual free space |
 | Concurrency | Preserve configured startup ceilings; preloads also stay within 4 jobs per CPU and 8 jobs total. The resource governor does not cut or raise unrelated queues from throughput, FloodWait or database latency |
 
-Memory comes from cgroup v2 (`memory.max`, `memory.current`), with
-`/proc/meminfo` as the fallback. If memory metrics are unavailable, the current
-memory value is retained while disk/CPU policy continues. CPU count comes from
-`cpu.max`, falling back to the host CPU count. Byte values use the same 10%
-growth hysteresis; reductions apply immediately. The governor does not sample MongoDB latency. Per-account request
+Memory uses visible cgroup limits and usage, with separately scoped kernel/VM
+readings. The effective allocation ceiling is distinct from a finite container
+hard limit; neither a VM total nor an allocation policy identifies physical host
+RAM. CPU capacity respects visible quotas and affinity before the
+OS logical CPU count. Hidden outer constraints can remain unknown; these values
+do not identify physical Windows host RAM or CPU. If available memory cannot be
+measured, the current retained-cache budget is retained. Cache/staging byte-budget
+reductions apply immediately; growth uses 10% hysteresis. Transient stream buffers
+use the separate adaptive rule described below. The governor does not sample
+MongoDB latency. Per-account request
 schedulers separately reduce effective rate/concurrency after FloodWait and
 recover toward their configured ceilings after successful requests. Cache and
 staging updates preserve that cooldown/recovery state.
@@ -75,7 +80,7 @@ staging updates preserve that cooldown/recovery state.
 - Cache sizing uses remaining free disk; staging adds its allocated bytes back
   to the total budget so an admitted transfer does not consume its own limit as
   it writes. Unrelated disk exhaustion can still stop it.
-- cgroup `memory.current` includes the page cache, so heavy file I/O lowers
+- cgroup v2 `memory.current` includes the page cache, so heavy file I/O lowers
   the measured available memory and shrinks the memory cache.
 - Owner ceilings are saved; live resource values are recomputed at restart
   within those ceilings from startup values and available measurements. It does not bypass saved
@@ -106,9 +111,9 @@ and disk; see their current values on **Performance**.
 | Retained RAM | Up to ¼ of available memory, within the owner ceiling (Auto: 256 MiB) |
 | Retained disk | Up to half of free disk after reserve, within the owner ceiling (Auto: 10 GiB) |
 | Cache free-disk reserve | Saved reserve or Auto: larger of 1 GiB and 5% of the filesystem |
-| Disk expiry | 24 hours since last reuse |
+| Disk expiry | Saved inactivity period; default 24 hours since last reuse, minimum 1 minute |
 | RAM expiry | 10 idle minutes |
-| Transient streaming payload | 32 MiB, availability-clamped with a 2 MiB floor |
+| Transient streaming payload | Adaptive from a 32 MiB baseline or lower, within the saved ceiling (Auto: 256 MiB), with a 2 MiB floor |
 
 Budgets cover the running installation and are separate from temporary upload
 storage. Units are binary (1 GiB = 1024 MiB). **Cache is temporary, not a backup.**
@@ -119,7 +124,13 @@ retained cache. Compare its current effective limit with waiting streams; a
 configured ceiling is not a measurement of free physical RAM. Neither this
 budget nor retained-cache bytes include all process, transport or container
 memory. Unused cache or stream capacity alone does not establish a throughput
-problem; interpret it alongside the workload and observed waits.
+problem; interpret it alongside the workload and observed waits. Growth requires
+foreground memory waits after reclaiming speculative buffers and measured
+headroom. Growth is at most 32 MiB per five-second sizing sample, within the
+saved ceiling and measured-headroom allowance. Memory pressure, an idle interval
+or unknown memory can reduce the limit; unknown memory does not trigger growth. Existing owned reservations
+drain safely after a reduction. Fill reservations overlap stream reservations;
+do not add them as separate process memory.
 
 <details>
 <summary>Memory, disk integrity and eviction</summary>
@@ -244,13 +255,15 @@ still need authentication, server bandwidth, sockets, memory and proxy capacity.
 Cold misses share bounded account media/request admission and origin queues;
 uploads compete within the same account budget. Demand precedes background work.
 
-Requested payloads take turns in **1 MiB blocks**. After admitting a download
-block, its request's remaining queued blocks move behind other waiting requests
-at the same priority. This keeps one file's read-ahead from taking every next
-turn. Anonymous responses get their own internal request identity; identified
-parallel ranges share their supplied identity. This is request fairness, not a
-per-person quota, and running reads are not interrupted. Shared cache fills still
-fetch each block once for their subscribers.
+Requested payloads take turns in **1 MiB blocks**. For file responses, queued
+foreground reads and transient-buffer heads also share turns by verified session
+and file identity, or by verified share capability and file identity. Parallel
+ranges in the same group do not each gain an independent turn. Anonymous viewers
+using the same share capability are indistinguishable within that file group;
+this is not a per-person quota or equal-throughput guarantee. Admission does not
+preempt active Telegram reads or revoke already held response heads. Demand
+remains ahead of background preloads, within account cooldowns and compatible
+request lanes. Shared cache fills still fetch each block once for subscribers.
 
 Uploads hold an operation slot for a Telegram document part. If configured upload
 concurrency fills every combined media slot, downloads must wait for a part to
@@ -335,6 +348,36 @@ an interrupted URL retrieval may restart from zero. See
 Comparisons with a server-local downloader should use the same URL and comparable
 time windows; simultaneous downloads compete for bandwidth. These policies do not
 establish a measured speedup or guarantee the same rate as another client.
+
+## File transfer speed limits
+
+Upload and download are relative to the TGDrive server. **Upload from server**
+limits managed outgoing file payloads, including Telegram sends and delivery to
+viewers. **Download to server** limits managed incoming payloads, including device
+uploads, URL imports and Telegram reads. These are shared directional limits,
+not a separate allowance for each file or account. Native torrent averages share
+the same allocation; Telegram-native message copies do not move host file bytes.
+
+Actual server-interface traffic is measured separately and can exceed payload
+admission. The controls do not cap protocol overhead, hidden provider/Telethon
+retransmissions, authentication, MongoDB or status traffic. They are not host
+network shaping and do not reserve capacity against other applications.
+
+<details>
+<summary>Native torrent allocation and very low rates</summary>
+
+For a finite limit, one aggregate Python participant and each active aria2
+process receive a share. With one torrent process, its native allowance can be
+half the configured total even when Python is idle; unused shares are not
+borrowed. Unlimited avoids these partition caps.
+
+Telegram uploads retain durable 512 KiB parts. At an unusually low 1 KiB/s cap,
+admission for a complete part can take about 512 seconds before provider work
+starts. Smaller scheduling slices do not remove that startup delay. HTTP body
+chunks can be split, but a low setting is not a promise of smooth or immediate
+progress. Choose sensible host-measured rates and keep cancellation available.
+
+</details>
 
 ## Device upload receipts
 

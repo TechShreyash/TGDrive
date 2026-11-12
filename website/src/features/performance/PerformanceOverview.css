@@ -1,0 +1,145 @@
+.performance-dashboard {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 20px;
+    margin-bottom: 24px;
+}
+.performance-dashboard > .performance-sample-time {
+    grid-column: 1 / -1;
+    margin-bottom: 0;
+}
+.performance-dashboard > section {
+    min-width: 0;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+}
+.performance-dashboard h3 {
+    margin: 0 0 8px;
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--ink);
+}
+.performance-dashboard p {
+    font-size: 13px;
+    line-height: 1.5;
+}
+.network-readings {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-block: 16px;
+}
+.network-readings > div {
+    min-width: 0;
+}
+.network-readings dt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 13px;
+}
+.network-readings dt svg {
+    color: var(--action);
+    flex-shrink: 0;
+}
+.network-readings dd {
+    margin: 8px 0 0;
+    font-size: clamp(24px, 2.5vw, 32px);
+    font-weight: 650;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+}
+.network-readings dd[data-unavailable="true"] {
+    font-size: 18px;
+    color: var(--muted);
+}
+.performance-waiting {
+    background: var(--surface-subtle);
+}
+.performance-waiting ul {
+    padding-inline-start: 20px;
+    margin-block: 8px;
+}
+.performance-waiting p {
+    margin: 0;
+}
+.performance-dashboard .inline-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+}
+.performance-summary-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 20px;
+    font-size: 13px;
+}
+@media (max-width: 900px) {
+    .performance-dashboard {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+@media (max-width: 540px) {
+    .network-readings dt {
+        align-items: start;
+        min-height: 40px;
+    }
+}
+
+.performance-page .tuning-section + .performance-all-time {
+    margin-block-start: 24px;
+}
+.performance-page .tuning-intro {
+    margin-block: 8px 16px;
+}
+.performance-page .performance-detail-note[open] > summary {
+    margin-bottom: 12px;
+}
+.performance-sample-time {
+    color: var(--muted);
+    font-size: 13px;
+    margin-block: 4px 20px;
+}
+.performance-page .performance-network-chart {
+    margin-block-end: 20px;
+}
+.performance-page
+    .performance-network-chart
+    .performance-chart-plot
+    .performance-plot-active {
+    stroke: var(--action);
+}
+.performance-page
+    .performance-network-chart
+    .performance-chart-plot
+    .performance-plot-queued {
+    stroke: var(--ink);
+    stroke-dasharray: 5 4;
+}
+.performance-page .performance-network-chart .performance-chart-point {
+    fill: var(--action);
+}
+.performance-page
+    .performance-network-chart
+    .performance-chart-point-secondary {
+    fill: var(--ink);
+}
+.performance-page
+    .performance-network-chart
+    :is(.performance-chart-legend, .performance-chart-readout)
+    > .chart-series-primary::before {
+    background: var(--action);
+}
+.performance-page
+    .performance-network-chart
+    :is(.performance-chart-legend, .performance-chart-readout)
+    > .chart-series-secondary::before {
+    background: transparent;
+    height: 0;
+    border-top: 2px dashed var(--ink);
+    border-radius: 0;
+}

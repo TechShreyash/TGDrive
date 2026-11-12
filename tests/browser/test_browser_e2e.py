@@ -2682,24 +2682,73 @@ def test_actual_unavailable_wmv_codec_stays_in_custom_player_with_original_downl
     )
 
 
-def test_revoked_account_warning_links_to_connections_and_clears(server, desktop):
+@pytest.mark.parametrize(
+    "codes,client_label",
+    [
+        (["TELEGRAM_RECONNECTING"], "Reconnecting automatically"),
+        (["TELEGRAM_CREDENTIALS_REVOKED"], "Credentials need attention"),
+        (["TELEGRAM_CONNECTION_UNAVAILABLE"], "Connection needs attention"),
+        (
+            ["TELEGRAM_RECONNECTING", "TELEGRAM_CREDENTIALS_REVOKED"],
+            "Reconnecting automatically",
+        ),
+        (["UNKNOWN_ERROR"], "Verified · runtime disconnected"),
+    ],
+    ids=["reconnecting", "revoked", "unavailable", "mixed", "unknown"],
+)
+def test_revoked_account_warning_links_to_connections_and_clears(
+    server, desktop, codes, client_label
+):
     _, page = desktop
-    detail = (
-        "This storage bot can no longer sign in. Open Connections and replace "
-        "its revoked token, then retry."
-    )
-    issue = {"code": "TELEGRAM_CREDENTIALS_REVOKED", "detail": detail}
-    state = {"telegram_ready": False, "telegram_issues": [issue]}
+    detail = {
+        "TELEGRAM_RECONNECTING": (
+            "Telegram transport is unavailable; reconnecting automatically."
+        ),
+        "TELEGRAM_CREDENTIALS_REVOKED": (
+            "This storage bot can no longer sign in. Replace its revoked token."
+        ),
+        "TELEGRAM_CONNECTION_UNAVAILABLE": (
+            "Telegram connection requires owner verification."
+        ),
+        "UNKNOWN_ERROR": "The connection needs owner verification.",
+    }[codes[0]]
+    issues = [{"code": code, "detail": detail} for code in codes]
+    state = {"telegram_ready": False, "telegram_issues": issues}
     page.route("**/api/v1/status", lambda route: route.fulfill(json=state))
     login(page, server.url)
+    management = page.request.get(server.url + "/api/v1/settings").json()
+    client = management["clients"][0]
+    client.update(
+        connected=False,
+        healthy=False,
+        connection_check="passed",
+        error_code=codes[0],
+        error=detail,
+    )
+    page.route(
+        "**/api/v1/settings",
+        lambda route: (
+            route.fulfill(json=management)
+            if route.request.method == "GET"
+            else route.continue_()
+        ),
+    )
     warning = page.get_by_role("status").filter(has_text=detail)
     expect(warning).to_be_visible()
+    heading = (
+        "Reconnecting automatically"
+        if all(code == "TELEGRAM_RECONNECTING" for code in codes)
+        else "A Telegram connection needs attention"
+    )
+    expect(warning.locator("strong")).to_have_text(heading)
     warning.get_by_role("button", name="Open Connections", exact=True).click()
     expect(
         page.get_by_role("heading", name="Storage Clients", exact=True)
     ).to_be_visible()
+    expect(page.locator(".managed-client-state").first).to_contain_text(client_label)
+    expect(page.locator(".connection-editor")).to_have_count(0)
     state.update(telegram_ready=True, telegram_issues=[])
-    expect(page.get_by_text(detail, exact=True)).not_to_be_visible(timeout=10000)
+    expect(warning).not_to_be_visible(timeout=10000)
 
 
 def assert_single_appearance(page: Any) -> None:

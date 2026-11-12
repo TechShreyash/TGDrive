@@ -33,6 +33,16 @@ class DiskCapacity:
     probe_directory: Path | None = None
 
     @property
+    def effective_total_bytes(self) -> int | None:
+        if self.filesystem is None or (self.probe_configured and self.backing is None):
+            return None
+        return (
+            min(self.filesystem.total, self.backing.total)
+            if self.backing
+            else self.filesystem.total
+        )
+
+    @property
     def effective_free_bytes(self) -> int | None:
         if self.filesystem is None or (self.probe_configured and self.backing is None):
             return None
@@ -75,6 +85,7 @@ class DiskCapacity:
             "backing": {"configured": self.probe_configured, **usage(self.backing)},
             "effective": {
                 "available": self.effective_free_bytes is not None,
+                "total_bytes": self.effective_total_bytes,
                 "free_bytes": self.effective_free_bytes,
                 "headroom_bytes": usable_headroom(
                     self, reserve_bytes, outstanding_bytes

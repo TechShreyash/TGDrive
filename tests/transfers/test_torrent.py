@@ -199,7 +199,7 @@ async def test_validates_and_admits_before_unpausing_payload(monkeypatch, tmp_pa
     source[b"url-list"] = b"http://127.0.0.1/private"
 
     class Engine:
-        def __init__(self, directory):
+        def __init__(self, directory, *, bandwidth=None):
             nonlocal metadata_dir
             metadata_dir = directory
 
@@ -303,7 +303,7 @@ async def test_selected_files_are_the_only_ones_aria2c_downloads(monkeypatch, tm
     options = {}
 
     class Engine:
-        def __init__(self, _directory):
+        def __init__(self, _directory, *, bandwidth=None):
             pass
 
         async def __aenter__(self):

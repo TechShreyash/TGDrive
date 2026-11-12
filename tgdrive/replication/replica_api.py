@@ -206,7 +206,20 @@ def register_replica_routes(app, settings, require_admin, get_runtime):
                     with path.open("xb", buffering=0) as target:
                         path.chmod(0o600)
                         size = 0
-                        async for part in request.stream():
+                        from tgdrive.web.file_bandwidth import PacedReceive
+
+                        bandwidth = getattr(get_runtime(request), "bandwidth", None)
+                        body_request = (
+                            Request(
+                                request.scope,
+                                receive=PacedReceive(
+                                    request.receive, bandwidth.download
+                                ),
+                            )
+                            if bandwidth is not None
+                            else request
+                        )
+                        async for part in body_request.stream():
                             size += len(part)
                             if size > MAX_STAGED_RECOVERY_BYTES:
                                 raise HTTPException(

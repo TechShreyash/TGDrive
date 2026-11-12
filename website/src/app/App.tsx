@@ -77,7 +77,6 @@ import { Modal, Spinner, ToastNotice as Toast } from "../shared/components";
 import Login from "./Login";
 import SharesView from "../features/shares/SharesView";
 import StorageView from "../features/settings/StorageView";
-import StartNewDrive from "../features/settings/StartNewDrive";
 import SettingsManagement from "../features/settings/SettingsManagement";
 import PerformanceSettings from "../features/performance/PerformanceSettings";
 import Preloads from "../features/performance/Preloads";
@@ -176,7 +175,10 @@ export default function App() {
     }, [location.view, location.settingsSection]);
     const [authenticated, setAuthenticated] = useState<boolean | null>(null);
     const [admissionPaused, setAdmissionPaused] = useState(false);
-    const [telegramWarning, setTelegramWarning] = useState("");
+    const [telegramWarning, setTelegramWarning] = useState<{
+        detail: string;
+        reconnecting: boolean;
+    } | null>(null);
     const [config, setConfig] = useState<{
         max_file_size: number;
         demo_data?: boolean;
@@ -629,18 +631,31 @@ export default function App() {
     useEffect(() => {
         if (authenticated !== true || isPublic) {
             setAdmissionPaused(false);
-            setTelegramWarning("");
+            setTelegramWarning(null);
             return;
         }
         return startStatusPolling((status) => {
             setAdmissionPaused(Boolean(status.admission_paused));
+            const issues = status.telegram_issues ?? [];
+            const detail =
+                issues[0]?.detail ||
+                (status.telegram_ready === false &&
+                !status.demo &&
+                !status.recovery_only
+                    ? "No usable Telegram account is connected. Open Connections and Refresh to check bot tokens, Premium sessions and channel permissions. Existing files and saved upload progress are preserved."
+                    : "");
             setTelegramWarning(
-                status.telegram_issues?.[0]?.detail ||
-                    (status.telegram_ready === false &&
-                    !status.demo &&
-                    !status.recovery_only
-                        ? "No usable Telegram account is connected. Open Connections and Refresh to check bot tokens, Premium sessions and channel permissions. Existing files and saved upload progress are preserved."
-                        : ""),
+                detail
+                    ? {
+                          detail,
+                          reconnecting:
+                              issues.length > 0 &&
+                              issues.every(
+                                  (issue) =>
+                                      issue.code === "TELEGRAM_RECONNECTING",
+                              ),
+                      }
+                    : null,
             );
         });
     }, [authenticated, isPublic]);
@@ -1737,7 +1752,6 @@ export default function App() {
                                 demoMode={demoReadOnly}
                                 onNotice={notify}
                             />
-                            <StartNewDrive />
                         </>
                     ) : (
                         configGate
@@ -2101,9 +2115,11 @@ export default function App() {
                             <ShieldAlert size={20} />
                             <div>
                                 <strong>
-                                    A Telegram connection needs attention
+                                    {telegramWarning.reconnecting
+                                        ? "Reconnecting automatically"
+                                        : "A Telegram connection needs attention"}
                                 </strong>
-                                <p>{telegramWarning}</p>
+                                <p>{telegramWarning.detail}</p>
                             </div>
                             {view !== "connections" && (
                                 <button
@@ -2318,7 +2334,10 @@ export default function App() {
                             onNotice={notify}
                         />
                     ) : view === "performance" ? (
-                        <PerformancePanel onNotice={notify} />
+                        <PerformancePanel
+                            onNotice={notify}
+                            maxFileSizeBytes={config.max_file_size}
+                        />
                     ) : ["connections", "storage", "settings"].includes(
                           view,
                       ) ? (
@@ -2339,15 +2358,8 @@ export default function App() {
                                         />
                                     ) : view === "storage" ? (
                                         <StorageView
-                                            config={config}
                                             demoMode={demoReadOnly}
                                             onNotice={notify}
-                                            onTransfers={() =>
-                                                navigate("/", "activity")
-                                            }
-                                            onTrash={() =>
-                                                navigate("/trash", "trash")
-                                            }
                                         />
                                     ) : view === "settings" ? (
                                         <PerformanceSettings

@@ -265,6 +265,10 @@ def test_peak_memory_units_follow_the_native_platform(
         lambda _who: SimpleNamespace(ru_maxrss=5000),
     )
     result = performance_api.system_snapshot(
-        SimpleNamespace(resolved_data_dir=tmp_path, staging_budget_bytes=0)
+        SimpleNamespace(
+            resolved_data_dir=tmp_path,
+            resolved_cache_dir=tmp_path,
+            staging_budget_bytes=0,
+        )
     )
     assert result["process_peak_rss_bytes"] == expected

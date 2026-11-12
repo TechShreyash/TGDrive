@@ -1,11 +1,18 @@
 import { Tabs, Paper } from "@mantine/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { errorMessage } from "../../shared/api";
+import { api, errorMessage } from "../../shared/api";
 import { ErrorNotice, Spinner } from "../../shared/components";
-import { formatTimestamp, getTimezone } from "../../shared/types";
+import {
+    formatTimestamp,
+    getTimezone,
+    type ManagementStats,
+} from "../../shared/types";
 import StreamMemoryFact from "./StreamMemoryFact";
-import PerformanceExplanation from "./PerformanceExplanation";
+import PerformanceOverview from "./PerformanceOverview";
+import SettingHelp from "../../shared/SettingHelp";
+import { measuredNumber, megabits } from "./performanceReadings";
+import "./PerformanceOverview.css";
 import { cachedFileComplete } from "./Preloads";
 import { useManualRefresh } from "../../shared/useManualRefresh";
 import {
@@ -61,7 +68,7 @@ const TUNING_CATEGORIES = [
 ] as const;
 
 const TUNING_DESCRIPTIONS: Record<string, string> = {
-    cache_memory_bytes: "Fast RAM for active media streams and thumbnails",
+    cache_memory_bytes: "Retained media blocks in TGDrive process memory",
     cache_disk_bytes:
         "Local disk reserved for preloaded files and media chunks",
     cache_min_free_bytes:
@@ -115,11 +122,11 @@ function AutomaticTuning({
                     {tuning.running ? "Resource sizing" : "Not running"}
                 </span>
             </div>
-            <details className="performance-detail-note">
+            <details className="performance-detail-note" open>
                 <summary>Applied limits and reasons</summary>
                 <p className="tuning-intro">
                     {tuning.running
-                        ? "Cache and staging follow available resources. Transfer limits remain configured; preloads also have a CPU cap. Telegram cooldowns apply per account."
+                        ? "Resource budgets stay within owner ceilings. Telegram cooldowns apply per account."
                         : "Automatic tuning starts with the drive."}
                 </p>
                 <div className="tuning-groups">
@@ -830,11 +837,18 @@ export function loadPoints(
 }
 export default function PerformancePanel({
     onNotice,
+    maxFileSizeBytes,
 }: {
     onNotice?: (message: string, error?: boolean) => void;
+    maxFileSizeBytes?: number;
 } = {}) {
     const [snapshot, setSnapshot] = useState<PerformanceSnapshot | null>(null);
     const [error, setError] = useState("");
+    const [usage, setUsage] = useState<ManagementStats | null>(null);
+    const [usageError, setUsageError] = useState("");
+    const [usageUpdatedAt, setUsageUpdatedAt] = useState<number | null>(null);
+    const [usageChanged, setUsageChanged] = useState(false);
+    const latestUsage = useRef(0);
     const [loading, setLoading] = useState(true);
     const [range, setRange] = useState<HistoryRange>(savedHistoryRange);
     const [customStart, setCustomStart] = useState(() =>
@@ -858,9 +872,7 @@ export default function PerformancePanel({
             ? customBounds.end - customBounds.start
             : HISTORY_RANGES[range];
     const historical = range !== "live";
-    const [view, setView] = useState<"overview" | "telegram" | "server">(
-        "overview",
-    );
+    const [view, setView] = useState<"telegram" | "server">("server");
     const latestSnapshot = useRef(0);
     const latestHistory = useRef(0);
     const manualLoading = useRef(false);
@@ -927,6 +939,31 @@ export default function PerformancePanel({
         },
         [range, customBounds, rangeKey],
     );
+    const loadUsage = useCallback(
+        async (signal: AbortSignal, manual = false) => {
+            if (!manual && manualLoading.current) return false;
+            const request = ++latestUsage.current;
+            try {
+                const value = await api.settings(signal);
+                if (signal.aborted || request !== latestUsage.current)
+                    return false;
+                setUsage(value.stats);
+                setUsageUpdatedAt(Date.now() / 1000);
+                setUsageChanged(false);
+                setUsageError("");
+                return true;
+            } catch (cause) {
+                if (!signal.aborted && request === latestUsage.current)
+                    setUsageError(
+                        "Drive figures could not be refreshed. " +
+                            errorMessage(cause),
+                    );
+                if (manual) throw cause;
+                return false;
+            }
+        },
+        [],
+    );
     const refreshPerformance = () =>
         void run(async (signal) => {
             manualLoading.current = true;
@@ -934,6 +971,7 @@ export default function PerformancePanel({
                 const results = await Promise.allSettled([
                     loadSnapshot(signal, true),
                     loadHistory(signal, true),
+                    loadUsage(signal, true),
                 ]);
                 for (const result of results)
                     if (result.status === "rejected") throw result.reason;
@@ -958,6 +996,16 @@ export default function PerformancePanel({
             clearTimeout(timer);
         };
     }, [loadSnapshot]);
+    useEffect(() => {
+        const controller = new AbortController();
+        void loadUsage(controller.signal);
+        const changed = () => setUsageChanged(true);
+        window.addEventListener("tgdrive:files-changed", changed);
+        return () => {
+            controller.abort();
+            window.removeEventListener("tgdrive:files-changed", changed);
+        };
+    }, [loadUsage]);
     useEffect(() => {
         const controller = new AbortController();
         let timer: ReturnType<typeof setTimeout>;
@@ -1003,8 +1051,19 @@ export default function PerformancePanel({
         (sample) => sample.active > 0 || sample.queued > 0,
     );
     const memory = snapshot?.server.memory;
-    const diskCapacity = snapshot?.server.disk.capacity;
-    const memoryUsed = memory?.cgroup_current ?? NaN;
+    const diskCapacity =
+        snapshot?.resource_summary?.storage.data ??
+        snapshot?.server.disk.capacity;
+    const backingFree =
+        diskCapacity?.backing.configured &&
+        diskCapacity.backing.available &&
+        diskCapacity.effective.available
+            ? measuredNumber(diskCapacity.effective.free_bytes)
+            : null;
+    const memoryUsed =
+        snapshot?.resource_summary?.memory.used_bytes ??
+        memory?.cgroup_current ??
+        NaN;
     const network = snapshot?.server.network;
     const cpu = snapshot?.server.cpu;
     const resourceHistory = historical
@@ -1021,7 +1080,22 @@ export default function PerformancePanel({
             ]),
         ),
     );
-    const memoryLimit = memory?.cgroup_limit || 0;
+    const resourceSummary = snapshot?.resource_summary;
+    const memoryLimit =
+        resourceSummary?.memory.scope === "host"
+            ? (resourceSummary.memory.environment_total_bytes ??
+              memory?.MemTotal ??
+              0)
+            : resourceSummary?.memory.scope === "cgroup"
+              ? (resourceSummary.memory.cgroup_limit_bytes ?? 0)
+              : 0;
+    const stagingCapacity = usage?.disk_capacity ?? diskCapacity;
+    const stagingFree =
+        stagingCapacity?.backing.configured &&
+        stagingCapacity.backing.available &&
+        stagingCapacity.effective.available
+            ? measuredNumber(stagingCapacity.effective.free_bytes)
+            : null;
     const memoryCeiling =
         memoryLimit > 0
             ? Math.max(
@@ -1091,20 +1165,14 @@ export default function PerformancePanel({
     ]
         .filter(Boolean)
         .join(" · ");
-    const networkRate = (value: number | null | undefined) =>
-        typeof value === "number" ? formatBytes(value) + "/s" : "Measuring…";
+    const networkRate = (value: number | null | undefined) => megabits(value);
     return (
         <Tabs
             className="performance-page page-body"
             id="performance"
             value={view}
             onChange={(value) => {
-                if (
-                    value === "overview" ||
-                    value === "telegram" ||
-                    value === "server"
-                )
-                    setView(value);
+                if (value === "telegram" || value === "server") setView(value);
             }}
         >
             <div
@@ -1115,9 +1183,8 @@ export default function PerformancePanel({
                     className="performance-view-tabs"
                     aria-label="Performance views"
                 >
-                    <Tabs.Tab value="overview">Overview</Tabs.Tab>
+                    <Tabs.Tab value="server">Performance</Tabs.Tab>
                     <Tabs.Tab value="telegram">Accounts</Tabs.Tab>
-                    <Tabs.Tab value="server">Resources</Tabs.Tab>
                 </Tabs.List>
                 <div className="performance-history-controls">
                     <button
@@ -1137,106 +1204,15 @@ export default function PerformancePanel({
                     <Spinner /> Loading server performance…
                 </p>
             )}
-            <ErrorNotice message={error} />
+            <ErrorNotice
+                message={
+                    error && snapshot
+                        ? "Showing the last loaded snapshot. " + error
+                        : error
+                }
+            />
             {snapshot && telegram && (
                 <>
-                    <Tabs.Panel
-                        value="overview"
-                        className="performance-overview-grid"
-                    >
-                        <PerformanceExplanation
-                            diagnosis={snapshot.diagnosis}
-                            serverAt={snapshot.traffic?.at}
-                            liveRates={{
-                                toViewers: sendRate ?? null,
-                                fromDevices: receiveRate ?? null,
-                            }}
-                            telegram={{
-                                active: telegram.active,
-                                queued: telegram.queued,
-                            }}
-                            onAccounts={() => setView("telegram")}
-                        />
-                        <section
-                            className="performance-section performance-overview-resources"
-                            aria-labelledby="overview-resources-heading"
-                        >
-                            <div className="performance-section-title">
-                                <h3 id="overview-resources-heading">
-                                    Server resources
-                                </h3>
-                                <button
-                                    type="button"
-                                    className="inline-link"
-                                    onClick={() => setView("server")}
-                                >
-                                    View resource history
-                                </button>
-                            </div>
-                            <div className="performance-overview-meters">
-                                <UsageMeter
-                                    label="CPU usage"
-                                    used={cpu?.percent ?? NaN}
-                                    total={100}
-                                    percent
-                                    detail={
-                                        cpu?.scope === "cgroup"
-                                            ? "Container CPU"
-                                            : cpu?.scope === "host"
-                                              ? "System CPU"
-                                              : "Scope unavailable"
-                                    }
-                                />
-                                <UsageMeter
-                                    label="Container RAM"
-                                    used={memoryUsed}
-                                    total={memoryLimit || NaN}
-                                    unavailableLabel={
-                                        Number.isFinite(memoryUsed)
-                                            ? formatBytes(memoryUsed) +
-                                              " in use"
-                                            : "Unavailable"
-                                    }
-                                    detail={
-                                        memoryLimit > 0
-                                            ? "All processes in this container"
-                                            : "No container limit reported"
-                                    }
-                                />
-                                <UsageMeter
-                                    label="Disk cache"
-                                    used={
-                                        snapshot.cache.disk.available
-                                            ? snapshot.cache.disk.bytes
-                                            : NaN
-                                    }
-                                    total={snapshot.cache.disk.max_bytes}
-                                    detail="Retained media copies"
-                                />
-                                <UsageMeter
-                                    label="RAM cache"
-                                    used={snapshot.cache.memory.bytes}
-                                    total={
-                                        snapshot.cache.memory
-                                            .effective_max_bytes
-                                    }
-                                    detail="Retained media in memory"
-                                />
-                            </div>
-                            <p className="performance-overview-resource-note">
-                                <a
-                                    className="inline-link"
-                                    href="/?view=settings&section=cache"
-                                >
-                                    Cache limits
-                                </a>
-                                <span>
-                                    Cache copies are disposable; originals stay
-                                    in Telegram.
-                                </span>
-                            </p>
-                        </section>
-                    </Tabs.Panel>
                     <Tabs.Panel
                         value="telegram"
                         className="performance-accounts-grid"
@@ -1453,7 +1429,7 @@ export default function PerformancePanel({
                                                                               0,
                                                                       ),
                                                                   )
-                                                                : "Ready"}
+                                                                : "No pause reported"}
                                                             <small>
                                                                 {account.requests
                                                                     ? account
@@ -1621,6 +1597,10 @@ export default function PerformancePanel({
                         </section>
                     </Tabs.Panel>
                     <Tabs.Panel value="server">
+                        <PerformanceOverview
+                            snapshot={snapshot}
+                            error={error}
+                        />
                         <div className="performance-measurements-heading">
                             <h3>Charts and history</h3>
                             <div className="performance-history-controls">
@@ -1786,19 +1766,19 @@ export default function PerformancePanel({
                             samples={resourceHistory}
                             series={[
                                 {
-                                    key: "received_bytes_per_second",
-                                    label: "Received by server",
+                                    key: "sent_bytes_per_second",
+                                    label: "Upload from server",
                                     hint: "all traffic on the reported interface",
                                 },
                                 {
-                                    key: "sent_bytes_per_second",
-                                    label: "Sent by server",
+                                    key: "received_bytes_per_second",
+                                    label: "Download to server",
                                     hint: "all traffic on the reported interface",
                                     secondary: true,
                                 },
                             ]}
                             maximum={networkCeiling}
-                            format={(value) => formatBytes(value) + "/s"}
+                            format={networkRate}
                             scope="network_interface"
                             current={
                                 "Received " +
@@ -1846,9 +1826,11 @@ export default function PerformancePanel({
                                         : "Measuring…"
                                 }
                                 note={
-                                    cpu?.capacity_cores
-                                        ? "Reported CPU capacity: " +
-                                          cpu.capacity_cores.toLocaleString() +
+                                    resourceSummary?.cpu.capacity_cores
+                                        ? "Assigned CPU capacity (" +
+                                          resourceSummary.cpu.scope +
+                                          "): " +
+                                          resourceSummary.cpu.capacity_cores.toLocaleString() +
                                           " CPU equivalents."
                                         : "Measured CPU utilization; missing readings remain gaps."
                                 }
@@ -1861,7 +1843,15 @@ export default function PerformancePanel({
                                         ? recorded?.bucket_seconds || 60
                                         : 3
                                 }
-                                title="Container RAM"
+                                title={
+                                    resourceSummary?.memory.scope === "host"
+                                        ? "Visible system RAM"
+                                        : resourceSummary?.memory.scope ===
+                                                "cgroup" ||
+                                            memory?.cgroup_current != null
+                                          ? "Container RAM"
+                                          : "Server memory"
+                                }
                                 samples={resourceHistory}
                                 series={[
                                     { key: "memory_bytes", label: "In use" },
@@ -1873,15 +1863,19 @@ export default function PerformancePanel({
                                         ? formatBytes(memoryUsed) +
                                           (memoryLimit
                                               ? " / " + formatBytes(memoryLimit)
-                                              : " in use · limit unavailable")
+                                              : " in use · hard limit unavailable")
                                         : "Unavailable"
                                 }
                                 note={
-                                    memoryLimit
-                                        ? "Current container limit: " +
+                                    resourceSummary?.memory.scope === "host"
+                                        ? "Visible operating system or VM memory total: " +
                                           formatBytes(memoryLimit) +
-                                          ". Includes all processes in this container."
-                                        : "No container memory limit reported. The graph scales to observed usage, not total capacity."
+                                          ". This is not a container hard limit."
+                                        : memoryLimit
+                                          ? "Current container limit: " +
+                                            formatBytes(memoryLimit) +
+                                            ". Includes all processes in this container."
+                                          : "No finite visible container limit established. Available system memory is shown separately; the graph scales to observed usage."
                                 }
                             />
                         </div>
@@ -1898,24 +1892,32 @@ export default function PerformancePanel({
                                 </span>
                             </div>
                             <div className="performance-resource-summary">
-                                <UsageMeter
-                                    label="Data filesystem"
-                                    used={
-                                        snapshot.server.disk.available === false
-                                            ? NaN
-                                            : snapshot.server.disk.used_bytes
-                                    }
-                                    total={snapshot.server.disk.total_bytes}
-                                    detail={
-                                        snapshot.server.disk.available === false
-                                            ? "Filesystem measurement unavailable"
-                                            : formatBytes(
-                                                  snapshot.server.disk
-                                                      .free_bytes,
-                                              ) +
-                                              " reported free on this filesystem"
-                                    }
-                                />
+                                <div
+                                    className="performance-usage"
+                                    data-storage="effective"
+                                >
+                                    <div>
+                                        <span>Backing storage free</span>
+                                        <strong>
+                                            {backingFree === null
+                                                ? "Unavailable"
+                                                : formatBytes(backingFree)}
+                                        </strong>
+                                    </div>
+                                    <small>
+                                        {backingFree === null
+                                            ? "Backing storage is not separately verified. Reported filesystem measurements are available in the details below."
+                                            : (diskCapacity!.effective
+                                                  .headroom_bytes === null
+                                                  ? "Reserve headroom unavailable."
+                                                  : formatBytes(
+                                                        diskCapacity!.effective
+                                                            .headroom_bytes,
+                                                    ) +
+                                                    " available after reserve.") +
+                                              " Measured backing-storage envelope, not physical-host capacity."}
+                                    </small>
+                                </div>
                                 {snapshot.database && (
                                     <UsageMeter
                                         label="MongoDB"
@@ -1946,7 +1948,7 @@ export default function PerformancePanel({
                                         snapshot.cache.memory
                                             .effective_max_bytes === 0
                                             ? "Disabled"
-                                            : "Retained media; part of container memory"
+                                            : "Retained media; part of TGDrive process memory"
                                     }
                                 />
                                 <UsageMeter
@@ -2033,7 +2035,7 @@ export default function PerformancePanel({
                                     partial
                                 </span>
                             </p>
-                            <details className="performance-detail-note">
+                            <details className="performance-detail-note" open>
                                 <summary>Memory and cache details</summary>
                                 <dl className="performance-facts performance-memory-details">
                                     <div>
@@ -2048,7 +2050,7 @@ export default function PerformancePanel({
                                                 : "Unavailable"}
                                         </dd>
                                         <small>
-                                            Part of container RAM · peak{" "}
+                                            Part of server memory · peak{" "}
                                             {formatBytes(
                                                 snapshot.server
                                                     .process_peak_rss_bytes,
@@ -2056,7 +2058,7 @@ export default function PerformancePanel({
                                         </small>
                                     </div>
                                     <div>
-                                        <dt>Host memory available</dt>
+                                        <dt>Visible system memory available</dt>
                                         <dd>
                                             {typeof memory?.MemAvailable ===
                                             "number"
@@ -2068,9 +2070,9 @@ export default function PerformancePanel({
                                         <small>
                                             {typeof memory?.MemTotal ===
                                             "number"
-                                                ? "Host total " +
+                                                ? "Visible system total " +
                                                   formatBytes(memory.MemTotal)
-                                                : "Host memory is unavailable"}
+                                                : "Visible system memory is unavailable"}
                                         </small>
                                     </div>
                                     <StreamMemoryFact
@@ -2104,30 +2106,282 @@ export default function PerformancePanel({
                                     </a>
                                 </p>
                             </details>
-                            <details className="performance-detail-note">
-                                <summary>Resource measurement details</summary>
-                                <p className="settings-help">
-                                    Data filesystem readings describe the
-                                    filesystem visible to TGDrive. Free after
-                                    reserve uses the smaller measured free space
-                                    and subtracts the configured reserve; it
-                                    does not subtract outstanding upload
-                                    reservations.
-                                    {!diskCapacity?.backing.configured &&
-                                        " Backing storage is not separately measured; a virtual filesystem can report more free space than its host can provide."}
-                                </p>
-                                <p className="settings-help">
-                                    {network?.scope ||
-                                        "Network interface scope unavailable."}{" "}
-                                    {snapshot.server.load_average.length
-                                        ? "Host load averages (1 / 5 / 15 minutes): " +
-                                          snapshot.server.load_average
-                                              .map((value) => value.toFixed(2))
-                                              .join(" / ") +
-                                          ". These are not CPU percentages."
-                                        : "Host load averages unavailable."}
-                                </p>
-                            </details>
+                            <section
+                                className="performance-detail-note"
+                                aria-labelledby="measurement-scope-heading"
+                            >
+                                <h4 id="measurement-scope-heading">
+                                    Resource measurements
+                                    <SettingHelp label="Resource measurements">
+                                        <p>
+                                            Measurements describe this server's
+                                            visible container, operating system
+                                            or VM. They do not establish
+                                            physical-host capacity. Free after
+                                            reserve is separate from outstanding
+                                            upload reservations.
+                                        </p>
+                                    </SettingHelp>
+                                </h4>
+                                <dl className="performance-facts performance-memory-details">
+                                    <div>
+                                        <dt>Assigned CPU capacity</dt>
+                                        <dd>
+                                            {resourceSummary?.cpu
+                                                .capacity_cores != null
+                                                ? resourceSummary.cpu.capacity_cores.toLocaleString() +
+                                                  " CPU equivalents"
+                                                : "Unavailable"}
+                                        </dd>
+                                        <small>
+                                            {resourceSummary?.cpu.scope ||
+                                                "Scope unavailable"}
+                                        </small>
+                                    </div>
+                                    <div>
+                                        <dt>Available memory</dt>
+                                        <dd>
+                                            {resourceSummary?.memory
+                                                .available_bytes != null
+                                                ? formatBytes(
+                                                      resourceSummary.memory
+                                                          .available_bytes,
+                                                  )
+                                                : "Unavailable"}
+                                        </dd>
+                                        <small>
+                                            {resourceSummary?.memory.scope ===
+                                            "cgroup"
+                                                ? "Container and visible system headroom"
+                                                : resourceSummary?.memory
+                                                        .scope === "host"
+                                                  ? "Operating system or VM headroom"
+                                                  : "Scope unavailable"}
+                                        </small>
+                                    </div>
+                                    <div>
+                                        <dt>
+                                            Automatic resource-sizing ceiling
+                                        </dt>
+                                        <dd>
+                                            {resourceSummary?.memory
+                                                .limit_bytes != null
+                                                ? formatBytes(
+                                                      resourceSummary.memory
+                                                          .limit_bytes,
+                                                  )
+                                                : "Unavailable"}
+                                        </dd>
+                                        <small>
+                                            {resourceSummary?.memory
+                                                .limit_source ||
+                                                "Source unavailable"}{" "}
+                                            · allocation policy, not a container
+                                            hard limit or total process RAM
+                                        </small>
+                                    </div>
+                                    <div>
+                                        <dt>Backing storage</dt>
+                                        <dd>
+                                            {resourceSummary?.storage.data
+                                                .backing.configured
+                                                ? resourceSummary.storage.data
+                                                      .backing.available
+                                                    ? "Configured backing volume"
+                                                    : "Unavailable"
+                                                : "Not separately measured"}
+                                        </dd>
+                                    </div>
+                                </dl>
+                                <details className="performance-detail-note">
+                                    <summary>
+                                        Filesystem measurement details
+                                    </summary>
+                                    <dl className="performance-facts performance-memory-details">
+                                        <div>
+                                            <dt>Reported filesystem total</dt>
+                                            <dd>
+                                                {snapshot.server.disk
+                                                    .available === false
+                                                    ? "Unavailable"
+                                                    : formatBytes(
+                                                          snapshot.server.disk
+                                                              .total_bytes,
+                                                      )}
+                                            </dd>
+                                        </div>
+                                        <div>
+                                            <dt>Reported filesystem used</dt>
+                                            <dd>
+                                                {snapshot.server.disk
+                                                    .available === false
+                                                    ? "Unavailable"
+                                                    : formatBytes(
+                                                          snapshot.server.disk
+                                                              .used_bytes,
+                                                      )}
+                                            </dd>
+                                        </div>
+                                        <div>
+                                            <dt>Reported filesystem free</dt>
+                                            <dd>
+                                                {snapshot.server.disk
+                                                    .available === false
+                                                    ? "Unavailable"
+                                                    : formatBytes(
+                                                          snapshot.server.disk
+                                                              .free_bytes,
+                                                      )}
+                                            </dd>
+                                        </div>
+                                        <div>
+                                            <dt>
+                                                Reported staging filesystem free
+                                            </dt>
+                                            <dd>
+                                                {usage?.free_disk_bytes == null
+                                                    ? "Unavailable"
+                                                    : formatBytes(
+                                                          usage.free_disk_bytes,
+                                                      )}
+                                            </dd>
+                                        </div>
+                                    </dl>
+                                    <p className="settings-help">
+                                        These are the filesystem measurements
+                                        visible to TGDrive. A container or VM
+                                        may report a different capacity from its
+                                        backing storage.
+                                    </p>
+                                </details>
+                            </section>
+                        </section>
+                        <section
+                            className="performance-section"
+                            aria-labelledby="drive-usage-heading"
+                        >
+                            <h3 id="drive-usage-heading">
+                                Files in This Drive
+                            </h3>
+                            <p className="performance-sample-time">
+                                {usageUpdatedAt === null
+                                    ? "Loading drive figures…"
+                                    : "Drive figures updated " +
+                                      formatTimestamp(usageUpdatedAt)}
+                                {usageChanged &&
+                                    " · Files changed; refresh for the latest figures."}
+                            </p>
+                            <ErrorNotice message={usageError} />
+                            {usage ? (
+                                <dl className="performance-facts performance-memory-details">
+                                    <div>
+                                        <dt>Files</dt>
+                                        <dd>{usage.files.toLocaleString()}</dd>
+                                        <small>
+                                            {formatBytes(usage.total_bytes)}{" "}
+                                            stored
+                                        </small>
+                                    </div>
+                                    <div>
+                                        <dt>Folders</dt>
+                                        <dd>
+                                            {usage.folders.toLocaleString()}
+                                        </dd>
+                                        <small>Across your drive</small>
+                                    </div>
+                                    <div>
+                                        <dt>In Trash</dt>
+                                        <dd>
+                                            {usage.trashed_files.toLocaleString()}
+                                        </dd>
+                                        <small>
+                                            {formatBytes(usage.trashed_bytes)} ·{" "}
+                                            <a
+                                                className="inline-link"
+                                                href="/?path=%2Ftrash"
+                                            >
+                                                Open Trash
+                                            </a>
+                                        </small>
+                                    </div>
+                                </dl>
+                            ) : (
+                                !usageError && (
+                                    <p role="status">Loading drive figures…</p>
+                                )
+                            )}
+                        </section>
+                        <section
+                            className="performance-section"
+                            aria-labelledby="staging-heading"
+                        >
+                            <h3 id="staging-heading">Temporary Storage</h3>
+                            <p className="performance-sample-time">
+                                {usageUpdatedAt === null
+                                    ? "Staging figures unavailable"
+                                    : "Staging figures updated " +
+                                      formatTimestamp(usageUpdatedAt) +
+                                      ". Refresh Performance for the latest reservations."}
+                            </p>
+                            {usage && (
+                                <>
+                                    <UsageMeter
+                                        label="Upload staging reservations"
+                                        used={usage.staging_reserved_bytes}
+                                        total={usage.staging_budget_bytes}
+                                        detail="Reserved upload budget, not bytes on disk or total process RAM."
+                                    />
+                                    <dl className="performance-facts performance-memory-details">
+                                        <div>
+                                            <dt>Backing storage free</dt>
+                                            <dd>
+                                                {stagingFree === null
+                                                    ? "Unavailable"
+                                                    : formatBytes(stagingFree)}
+                                            </dd>
+                                            <small>
+                                                Verified effective envelope
+                                                before reserve
+                                            </small>
+                                        </div>
+                                        <div>
+                                            <dt>Available after reserve</dt>
+                                            <dd>
+                                                {stagingFree === null ||
+                                                stagingCapacity?.effective
+                                                    .headroom_bytes == null
+                                                    ? "Unavailable"
+                                                    : formatBytes(
+                                                          stagingCapacity
+                                                              .effective
+                                                              .headroom_bytes,
+                                                      )}
+                                            </dd>
+                                            <small>
+                                                Outstanding upload reservations
+                                                are separate
+                                            </small>
+                                        </div>
+                                        <div>
+                                            <dt>File limit</dt>
+                                            <dd>
+                                                {typeof (
+                                                    snapshot.tuning?.values
+                                                        .max_file_size ??
+                                                    maxFileSizeBytes
+                                                ) === "number"
+                                                    ? formatBytes(
+                                                          (snapshot.tuning
+                                                              ?.values
+                                                              .max_file_size ??
+                                                              maxFileSizeBytes)!,
+                                                      )
+                                                    : "Unavailable"}
+                                            </dd>
+                                        </div>
+                                    </dl>
+                                </>
+                            )}
                         </section>
                         {snapshot.tuning && (
                             <AutomaticTuning tuning={snapshot.tuning} />
@@ -2135,6 +2389,7 @@ export default function PerformancePanel({
                         {recorded && (
                             <details
                                 className="performance-all-time performance-detail-note"
+                                open
                                 aria-labelledby="all-time-heading"
                             >
                                 <summary>
