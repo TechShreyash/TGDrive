@@ -24,7 +24,32 @@ type PreviewCore = {
     ): Promise<Blob | null>;
     stopPreviewFill(): void;
     isPreviewGenerating: boolean;
+} & PreviewInitialization;
+type PreviewInitialization = {
+    initPreviewPipeline(): Promise<void>;
+    _tgPreviewBudget?: { remaining: number };
 };
+
+/** Embedded MKV fonts are metadata; do not spend the per-frame read allowance on them. */
+export function installPreviewInitializationBudget(
+    core: PreviewInitialization,
+) {
+    const original = core.initPreviewPipeline;
+    const initialize = async () => {
+        const frameBudget = core._tgPreviewBudget;
+        core._tgPreviewBudget = { remaining: 64 * 1024 * 1024 };
+        try {
+            await original.call(core);
+        } finally {
+            core._tgPreviewBudget = frameBudget;
+        }
+    };
+    core.initPreviewPipeline = initialize;
+    return () => {
+        if (core.initPreviewPipeline === initialize)
+            core.initPreviewPipeline = original;
+    };
+}
 type PreviewPlayer = HTMLElement & {
     player: PreviewCore | null;
     isTimelineOpen(): boolean;
@@ -49,6 +74,17 @@ export function attachVideoPreviews(element: MoviElement): () => void {
     shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, hoverStyle];
 
     let disposed = false;
+    let budgetCore: PreviewCore | null = null;
+    let detachBudget: (() => void) | undefined;
+    const prepareCore = () => {
+        if (budgetCore === player.player) return;
+        detachBudget?.();
+        budgetCore = player.player;
+        detachBudget = budgetCore
+            ? installPreviewInitializationBudget(budgetCore)
+            : undefined;
+    };
+    prepareCore();
     let hovering = false;
     let hoverPosition: { clientX: number; clientY: number } | null = null;
     let inFlight = false;
@@ -187,6 +223,7 @@ export function attachVideoPreviews(element: MoviElement): () => void {
         }
     };
     const refresh = () => {
+        prepareCore();
         if (document.hidden || !player.isTimelineOpen()) {
             clearTimer();
             failed = new WeakSet();
@@ -246,6 +283,7 @@ export function attachVideoPreviews(element: MoviElement): () => void {
     player.addEventListener("loadstart", reset);
     return () => {
         disposed = true;
+        detachBudget?.();
         reset();
         observer.disconnect();
         resize.disconnect();

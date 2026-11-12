@@ -562,8 +562,11 @@ playback can reuse complete retained ranges without moving its active window.
 This cache is additional browser memory, has no persistent storage, and clears
 when the source closes. Evicted ranges can require another download.
 An uncached frame can require several reads; typical windows are 2 MiB, with a
-5 MiB per-read ceiling. Each new image has a 16 MiB allowance for requested range
-payloads, including metadata and retries; cached bytes do not spend it. If more
+5 MiB per-read ceiling. Opening the preview decoder has a separate 64 MiB
+requested-range allowance so embedded metadata, such as large MKV fonts, does
+not consume a frame's budget. Each new image then has a 16 MiB allowance for
+requested range payloads, including retries; cached bytes do not spend either
+allowance. If more
 reads are needed, that image is skipped and playback remains available. This is
 not an exact wire-traffic cap or a limit on the whole viewing session.
 Generated images are cached by the player for revisits during
