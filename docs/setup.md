@@ -29,6 +29,7 @@ MongoDB database and a new private Telegram channel; v1 catalogs are not importe
 - [Additional bots and Premium accounts](#additional-bots-and-premium-accounts)
 - [Hosting beyond your machine](#hosting-beyond-your-machine)
   - [Coolify](#coolify)
+  - [Coolify with a manually built image](#coolify-with-a-manually-built-image)
   - [Docker Compose on a server](#docker-compose-on-a-server)
   - [Other hosting](#other-hosting)
 - [Features and settings after setup](#features-and-settings-after-setup)
@@ -371,6 +372,48 @@ does not meet TGDrive's [remote browser requirements](operations.md#can-tgdrive-
 Compose configures proxy access and secure cookies. Preserve its **`/app/data`**
 and **`/app/cache`** volumes when redeploying.
 [Coolify Compose guide](https://coolify.io/docs/applications/builds/docker-compose).
+
+### Coolify with a manually built image
+
+Use this optional path when the deployment server cannot comfortably build the
+application. The normal `/compose.yaml` path above still builds directly from
+the repository. The separate `/compose.prebuilt.yaml` has no build step and keeps
+the same service, environment, volume names and proxy configuration.
+
+1. Disable **Auto Deploy** on the existing Coolify application. Leave the source
+   build cancelled while preparing the image.
+2. In GitHub, open **Actions → Build deployment image → Run workflow**. Select
+   the branch to build; `main` is stable and `dev` may be unstable.
+   The workflow must exist on the repository's default branch for the manual
+   button to appear, and on the selected revision to run. It runs only when
+   dispatched manually, not on pushes, pull requests or releases.
+3. Wait for the run to succeed. It builds on a GitHub-hosted AMD64 runner and
+   publishes `ghcr.io/<owner>/<repository>-deployment:<commit-sha>`. This is a
+   separate package from the release publisher's `tgdrive` package. No Telegram,
+   MongoDB or application secrets belong in the build; GitHub supplies the
+   registry token.
+4. For a public repository, open the new package's **Package settings** and set
+   its visibility to **Public** so the deployment server can pull anonymously.
+   Keep private application code private: for a private package, configure GHCR
+   pull credentials on the deployment server instead.
+5. Copy the `TGDRIVE_IMAGE=ghcr.io/...@sha256:...` value from the successful
+   workflow's summary into the application's Coolify environment variables.
+   The digest pins the exact image built by that run. This workflow currently
+   builds **AMD64/x86-64 only**, matching B1s and B2ats v2, not ARM64 B2pts v2.
+6. In the **same Coolify application**, keep Docker Compose and Base Directory
+   `/`, then change Docker Compose Location to `/compose.prebuilt.yaml`. Save
+   and reload its configuration. Use this file alone; merging it with
+   `compose.yaml` retains the source build. Keep the repository revision aligned
+   with the image's source commit so configuration and application agree.
+7. Preserve all existing credentials, the original `ENCRYPTION_KEY`, domain,
+   service name `app` and volumes. Keep the HTTPS domain routed to internal port
+   `8000`. **Deploy** manually, then [verify the drive](#5-open-your-drive).
+
+For later updates, run the workflow again, wait for success, update
+`TGDRIVE_IMAGE` from its summary and deploy manually. Building or publishing an
+image never updates Coolify. Keep Auto Deploy off for this path. Returning to
+`/compose.yaml` restores source builds; keep the same application and volumes.
+Never run both deployments against the same drive at once.
 
 ### Docker Compose on a server
 

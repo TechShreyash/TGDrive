@@ -295,6 +295,7 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     for name in (
         "compose.yaml",
         "compose.override.yaml",
+        "compose.prebuilt.yaml",
         "compose.server.yaml",
     ):
         shutil.copyfile(root / name, tmp_path / name)
@@ -312,7 +313,8 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     (tmp_path / ".env").write_text(
         "".join(f"{key}={value}\n" for key, value in fixture.items())
     )
-    environment = {**os.environ, **fixture}
+    image = "ghcr.io/example/tgdrive-deployment@sha256:" + "a" * 64
+    environment = {**os.environ, **fixture, "TGDRIVE_IMAGE": image}
     environment.pop("BOT_TOKENS", None)
     environment.pop("COMPOSE_FILE", None)
     environment.pop("BIND_ADDRESS", None)
@@ -343,6 +345,12 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     assert hosted["environment"]["SESSION_SECRET"] == fixture["SESSION_SECRET"]
     assert hosted["environment"]["COOKIE_SECURE"] == "true"
     assert hosted["restart"] == "unless-stopped"
+    prebuilt = config("compose.prebuilt.yaml")
+    assert prebuilt["image"] == image
+    assert "build" not in prebuilt
+    assert {key: value for key, value in prebuilt.items() if key != "image"} == {
+        key: value for key, value in hosted.items() if key != "build"
+    }
     local = config()
     assert local["ports"][0]["host_ip"] == "127.0.0.1"
     assert str(local["ports"][0]["published"]) == "8000"
@@ -355,7 +363,7 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     assert server["environment"]["COOKIE_SECURE"] == "true"
     assert server["environment"]["TGDRIVE_PROXY_HOSTS"] == ""
     assert server["restart"] == "unless-stopped"
-    for deployment in (hosted, local, server):
+    for deployment in (hosted, prebuilt, local, server):
         assert deployment["environment"]["MAIN_BOT_TOKEN"] == fixture["MAIN_BOT_TOKEN"]
         assert deployment["environment"]["TELEGRAM_ADMIN_IDS"] == "12345"
         assert "BOT_TOKENS" not in deployment["environment"]
@@ -377,7 +385,12 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     (tmp_path / ".env").write_text(
         "".join(f"{key}={value}\n" for key, value in (fixture | overrides).items())
     )
-    for files in (("compose.yaml",), (), ("compose.yaml", "compose.server.yaml")):
+    for files in (
+        ("compose.yaml",),
+        ("compose.prebuilt.yaml",),
+        (),
+        ("compose.yaml", "compose.server.yaml"),
+    ):
         rendered = config(*files)["environment"]
         assert {key: rendered[key] for key in overrides} == overrides
 

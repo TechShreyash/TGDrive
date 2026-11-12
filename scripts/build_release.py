@@ -26,6 +26,7 @@ ROOT_FILES = (
     "SECURITY.md",
     "compose.yaml",
     "compose.override.yaml",
+    "compose.prebuilt.yaml",
     "compose.server.yaml",
     "pyproject.toml",
     "uv.lock",
