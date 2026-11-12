@@ -10,10 +10,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import SecretStr
+from telethon.extensions import html as telegram_html
 
 from tests.support.mongo_fixtures import new_store, register_test_backend
 from tgdrive.core.config import Settings
 from tgdrive.settings.bot_settings import BotUploadPreferences
+from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.telegram.bot_mode import BotMode
@@ -89,10 +91,18 @@ class FakeMessage:
         self.command = command if command is not None else text.split()
         self.copied = copied
         self.replies: list[tuple[str, Any | None]] = []
+        self.reply_modes: list[str | None] = []
         self.status = SimpleNamespace(edit_text=_async_recorder())
 
-    async def reply_text(self, text: str, reply_markup: Any | None = None) -> Any:
+    async def reply_text(
+        self,
+        text: str,
+        reply_markup: Any | None = None,
+        *,
+        parse_mode: str | None = None,
+    ) -> Any:
         self.replies.append((text, reply_markup))
+        self.reply_modes.append(parse_mode)
         return self.status
 
     async def copy(self, _channel: int, **_kwargs: object) -> Any:
@@ -132,8 +142,8 @@ async def test_photo_upload_gets_fallback_name_and_metadata(tmp_path: Path) -> N
     item = next(iter(store.list_directory("/").values()))
     assert item["name"].startswith("photo-")
     assert item["name"].endswith("-55.jpg")
-    assert message.replies[0][0].startswith("Saving")
-    assert message.status.edit_text.calls[-1][0][0].startswith("Saved ✓")
+    assert message.replies[0][0].startswith("<b>Saving")
+    assert message.status.edit_text.calls[-1][0][0].startswith("<b>Saved ✓</b>")
     assert client.deleted == []
 
 
@@ -312,7 +322,7 @@ async def test_failed_success_message_edit_does_not_roll_back_committed_upload(b
     await bot._file(bot.client, message)
     assert len(bot.store.list_directory("/")) == 1
     assert not bot.client.deleted
-    assert message.replies[-1][0].startswith("Saved ✓")
+    assert message.replies[-1][0].startswith("<b>Saved ✓</b>")
 
 
 @pytest.mark.asyncio
@@ -367,7 +377,7 @@ async def test_uncertain_rollback_asks_user_to_check_drive_before_resending(bot)
     await bot._file(bot.client, message)
     feedback = message.status.edit_text.calls[-1][0][0]
     assert "could not be confirmed" in feedback
-    assert "before sending this file again" in feedback
+    assert "before resending" in feedback
     assert not bot.client.deleted
 
 
@@ -424,7 +434,7 @@ async def test_bot_repeated_file_forwards_and_same_message_replay(bot, same_mess
         )
         message.id = incoming_id
         await bot._file(bot.client, message)
-        assert message.status.edit_text.calls[-1][0][0].startswith("Saved ✓")
+        assert message.status.edit_text.calls[-1][0][0].startswith("<b>Saved ✓</b>")
 
     names = {item["name"] for item in bot.store.list_directory("/").values()}
     assert names == (
@@ -462,7 +472,7 @@ async def test_bot_operation_identity_survives_token_rotation_and_bot_replacemen
         replay = FakeMessage(1, copied=copied)
         await replacement._file(replacement.client, replay)
         assert len(bot.store.list_directory("/")) == (1 if same_account else 2)
-        assert replay.status.edit_text.calls[-1][0][0].startswith("Saved ✓")
+        assert replay.status.edit_text.calls[-1][0][0].startswith("<b>Saved ✓</b>")
         assert cast(FakeBotClient, replacement.client).deleted == []
     finally:
         replacement.close()
@@ -500,14 +510,22 @@ class ProgressStatus:
     def __init__(self, *, flood_once=False) -> None:
         self.edits: list[tuple[str, Any]] = []
         self.flood_once = flood_once
+        self.modes: list[str | None] = []
 
-    async def edit_text(self, text: str, reply_markup: Any | None = None) -> None:
+    async def edit_text(
+        self,
+        text: str,
+        reply_markup: Any | None = None,
+        *,
+        parse_mode: str | None = None,
+    ) -> None:
         if self.flood_once:
             from telethon.errors import FloodWaitError
 
             self.flood_once = False
             raise FloodWaitError(request=None, capture=30)
         self.edits.append((text, reply_markup))
+        self.modes.append(parse_mode)
 
 
 @pytest.mark.asyncio
@@ -531,18 +549,21 @@ async def test_progress_edits_are_throttled_by_time_percent_and_flood_wait(bot):
     await at(10, 20 * mib)
     assert status.edits == []
     await at(31, 42 * mib)
-    assert status.edits[-1][0] == "Receiving 42% · 42.0 MB of 100.0 MB\na.mkv"
+    assert status.edits[-1][0] == "<b>Receiving</b> · 42%\n42.0 MB / 100.0 MB"
     await at(33, 60 * mib)  # Under the edit interval.
     await at(40, 44 * mib)  # Under 5 percentage points.
     assert len(status.edits) == 1
     await at(41, 60 * mib)
     await at(43, 10 * mib, "uploading")  # Under the edit interval.
     await at(46, 10 * mib, "uploading")  # A new stage shows despite a lower %.
-    assert [text.split(" ", 1)[0] for text, _ in status.edits] == [
+    assert [
+        telegram_html.parse(text)[0].split(" ", 1)[0] for text, _ in status.edits
+    ] == [
         "Receiving",
         "Receiving",
         "Saving",
     ]
+    assert status.modes == ["html"] * 3
 
 
 class FakeTransfers:
@@ -603,10 +624,18 @@ async def test_encrypted_import_reports_saved_file_with_open_button(tmp_path):
     message.document = SimpleNamespace(file_name="movie.mkv", file_size=3 * 1024**2)
     try:
         await mode._file(mode.client, message)
-        assert message.replies[0] == ("Saving to My Files / Inbox…", None)
+        assert message.replies[0] == (
+            "<b>Saving…</b>\nFolder · <code>My Files / Inbox</code>",
+            None,
+        )
+        assert message.reply_modes == ["html"]
         text = message.status.edit_text.calls[-1][0][0]
         buttons = message.status.edit_text.calls[-1][1]["reply_markup"]
-        assert text == "Saved ✓ movie.mkv\n3.0 MB · in My Files / Inbox"
+        assert text == (
+            "<b>Saved ✓</b>\n<code>movie.mkv</code>\n"
+            "3.0 MB · <code>My Files / Inbox</code>"
+        )
+        assert message.status.edit_text.calls[-1][1]["parse_mode"] == "html"
         assert buttons[0][0].text == "Open in TGDrive"
         assert (
             buttons[0][0].type.url == f"https://drive.example/?path=%2F{folder['id']}"
@@ -701,7 +730,7 @@ async def test_bot_help_explains_mode_and_reply_cancellation(bot, encrypted):
     message = FakeMessage(1)
     await bot._help(bot.client, message)
     text = message.replies[-1][0]
-    assert f"Encryption: {'on' if encrypted else 'off'}" in text
+    assert f"<b>Encryption</b> · {'On' if encrypted else 'Off'}" in text
     assert "/cancel" in text and "reply" in text.lower()
 
 
@@ -726,7 +755,7 @@ async def test_bot_unknown_size_and_wait_changes_keep_progress_truthful(bot):
     now = 15
     record.phase = "waiting_for_telegram"
     await report(record)
-    assert "retrying automatically" in status.edits[-1][0]
+    assert "retrying automatically" in status.edits[-1][0].lower()
     assert len(status.edits) == 4
 
 
@@ -744,7 +773,7 @@ async def test_bot_cancel_cannot_select_another_private_chats_import(bot):
     await bot._cancel(bot.client, message)
 
     cancel.assert_not_awaited()
-    assert "No encrypted import matches" in message.replies[-1][0]
+    assert "<b>No matching encrypted import</b>" in message.replies[-1][0]
 
 
 @pytest.mark.asyncio
@@ -755,3 +784,118 @@ async def test_bot_stranger_notices_keep_bounded_recent_memory(bot):
     repeated = FakeMessage(1099)
     await bot._unauthorized(bot.client, repeated)
     assert repeated.replies == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encrypted", [False, True])
+async def test_start_is_short_and_help_keeps_commands_and_safety_guidance(
+    bot, encrypted
+):
+    bot.folder_settings.value = BotUploadPreferences(folder_path="/", encrypt=encrypted)
+    welcome = FakeMessage(1, text="/start@drive_bot")
+    await bot._help(bot.client, welcome)
+    text = telegram_html.parse(welcome.replies[-1][0])[0]
+    assert "/cancel" not in text and "Commands" not in text
+    assert len(text.splitlines()) <= 8
+    assert "Encryption" in text and "Folder" in text
+    assert (
+        "encrypted through this server" if encrypted else "readable by channel members"
+    ) in text
+    help_message = FakeMessage(1, text="Help")
+    await bot._help(bot.client, help_message)
+    help_text = telegram_html.parse(help_message.replies[-1][0])[0]
+    assert all(
+        command in help_text
+        for command in ("/current_folder", "/set_folder", "/cancel")
+    )
+    assert "reply to the original file" in help_text
+    assert "encrypted import" in help_text and "full quality" in help_text
+    assert welcome.reply_modes == help_message.reply_modes == ["html"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handler", ["_help", "_current_folder", "_set_folder"])
+async def test_folder_copy_escapes_markup_in_all_folder_messages(
+    bot, monkeypatch, handler
+):
+    folder = 'My Files / <a href="https://unexpected.example">A & B</a>'
+    monkeypatch.setattr(
+        bot.folder_settings,
+        "snapshot",
+        AsyncMock(
+            return_value={
+                "folder_label": folder,
+                "encrypt": True,
+                "settings_url": None,
+            }
+        ),
+    )
+    message = FakeMessage(1)
+    await getattr(bot, handler)(bot.client, message)
+    text = message.replies[-1][0]
+    plain, entities = telegram_html.parse(text)
+    assert folder in plain
+    assert '<a href="https://unexpected.example">' not in text
+    assert not any(
+        type(entity).__name__ == "MessageEntityTextUrl" for entity in entities
+    )
+    assert message.reply_modes == ["html"]
+
+
+@pytest.mark.asyncio
+async def test_saved_copy_escapes_actual_filename_and_folder(bot):
+    name = '<b>A & "notes"</b>.txt'
+    folder = "My Files / <i>Inbox & reports</i>"
+    message = FakeMessage(1)
+    await bot._saved(message, message.status, {"name": name, "size": 123}, "/", folder)
+    text = message.status.edit_text.calls[-1][0][0]
+    plain, entities = telegram_html.parse(text)
+    assert name in plain and folder in plain and "123 B" in plain
+    assert "<b>A" not in text and "<i>Inbox" not in text
+    assert not any(
+        type(entity).__name__ == "MessageEntityItalic" for entity in entities
+    )
+    assert message.status.edit_text.calls[-1][1]["parse_mode"] == "html"
+
+
+@pytest.mark.asyncio
+async def test_paused_copy_escapes_error_details_without_copying(bot):
+    detail = '<a href="https://unexpected.example">repair & retry</a>'
+
+    def pause():
+        raise SettingsProblem(detail)
+
+    bot.before_write = pause
+    message = FakeMessage(1)
+    message.copy = AsyncMock()
+    await bot._file(bot.client, message)
+    text = message.replies[-1][0]
+    plain, entities = telegram_html.parse(text)
+    assert detail in plain and "Upload paused" in plain
+    assert not any(
+        type(entity).__name__ == "MessageEntityTextUrl" for entity in entities
+    )
+    assert message.reply_modes == ["html"]
+    message.copy.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "phase,label",
+    [
+        ("downloading", "Receiving"),
+        ("uploading", "Saving"),
+        ("finalizing", "Finalizing"),
+        ("verifying", "Verifying"),
+    ],
+)
+def test_progress_has_distinct_stage_bytes_and_no_repeated_filename(phase, label):
+    from tgdrive.telegram.bot_mode import _progress
+
+    record = SimpleNamespace(
+        phase=phase, current=42, total=100, context={"name": "private-file-name.txt"}
+    )
+    result = _progress(record)
+    assert result is not None
+    text, percent = result
+    assert telegram_html.parse(text)[0] == f"{label} · 42%\n42 B / 100 B"
+    assert percent == 42 and "private-file-name" not in text

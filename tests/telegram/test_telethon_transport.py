@@ -97,6 +97,26 @@ async def test_bot_transport_returns_editable_replies_and_preserves_literal_text
     )
 
 
+@pytest.mark.asyncio
+async def test_bot_transport_opt_in_html_preserves_explicit_buttons():
+    sent = native_message()
+    sent.edit = AsyncMock()
+    original = native_message()
+    original.reply = AsyncMock(return_value=sent)
+    client = transport_client(SimpleNamespace())
+    message = TelegramMessage(client, original)
+    reply = await message.reply_text(
+        "<b>Receiving</b> · 42%", reply_markup="menu", parse_mode="html"
+    )
+    original.reply.assert_awaited_once_with(
+        "<b>Receiving</b> · 42%", buttons="menu", parse_mode="html"
+    )
+    await reply.edit_text("<b>Saved ✓</b>", reply_markup="folder", parse_mode="html")
+    sent.edit.assert_awaited_once_with(
+        "<b>Saved ✓</b>", buttons="folder", parse_mode="html"
+    )
+
+
 def native_message(message_id: int = 77) -> Any:
     return SimpleNamespace(
         id=message_id,

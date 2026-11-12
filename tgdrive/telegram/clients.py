@@ -419,12 +419,18 @@ class TelegramMessage:
     def __getattr__(self, name: str) -> Any:
         return getattr(self.native, name)
 
-    async def reply_text(self, text: str, reply_markup: Any = None) -> Any:
-        sent = await self.native.reply(text, buttons=reply_markup, parse_mode=None)
+    async def reply_text(
+        self, text: str, reply_markup: Any = None, *, parse_mode: str | None = None
+    ) -> Any:
+        sent = await self.native.reply(
+            text, buttons=reply_markup, parse_mode=parse_mode
+        )
         return TelegramMessage(self._client, sent)
 
-    async def edit_text(self, text: str, reply_markup: Any = None) -> Any:
-        return await self.native.edit(text, buttons=reply_markup, parse_mode=None)
+    async def edit_text(
+        self, text: str, reply_markup: Any = None, *, parse_mode: str | None = None
+    ) -> Any:
+        return await self.native.edit(text, buttons=reply_markup, parse_mode=parse_mode)
 
     async def copy(self, channel: int, **_kwargs: Any) -> Any:
         identity = f"{channel}:{self.native.chat_id}:{self.id}".encode()

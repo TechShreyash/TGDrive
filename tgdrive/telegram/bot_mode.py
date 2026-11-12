@@ -10,6 +10,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from html import escape
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlencode
@@ -61,23 +62,24 @@ def _size(value: float) -> str:
 
 def _progress(record: Any) -> tuple[str, int] | None:
     """Status text and percent for a bot import transfer, or None when idle."""
-    name = record.context.get("name", "file")
     if record.phase == "downloading":
         label = "Receiving"
-    elif record.phase in {"uploading", "finalizing", "verifying"}:
-        label = "Saving to TGDrive"
+    elif record.phase == "uploading":
+        label = "Saving"
+    elif record.phase in {"finalizing", "verifying"}:
+        label = record.phase.capitalize()
     elif record.phase in {"retry_wait", "waiting_for_telegram"}:
-        return f"Waiting for Telegram, retrying automatically…\n{name}", -1
+        return "<b>Waiting for Telegram</b>\nRetrying automatically…", -1
     elif record.phase == "queued":
-        return f"Waiting for a free upload slot…\n{name}", -2
+        return "<b>Queued</b>\nWaiting for an upload slot…", -2
     else:
         return None
     total = record.total
     if not total:
-        return f"{label} · {_size(record.current)}\n{name}", -3
-    percent = min(100, record.current * 100 // total) if total else 0
+        return f"<b>{label}</b> · {_size(record.current)}", -3
+    percent = min(100, record.current * 100 // total)
     return (
-        f"{label} {percent}% · {_size(record.current)} of {_size(total)}\n{name}",
+        f"<b>{label}</b> · {percent}%\n{_size(record.current)} / {_size(total)}",
         percent,
     )
 
@@ -144,33 +146,37 @@ class BotMode:
     async def _help(self, _client: Client, message: Message) -> None:
         value = await self.folder_settings.snapshot()
         encryption = (
-            "Encryption: on. Files pass through this server and are encrypted "
-            "before storage."
+            "On · encrypted through this server"
             if value["encrypt"]
-            else "Encryption: off. Telegram copies files without encrypting them; "
-            "anyone with channel access can read them."
+            else "Off · readable by channel members"
         )
-        await message.reply_text(
-            "Send or forward files here to save them to TGDrive.\n\n"
-            f"Folder: {value['folder_label']}\n\n"
-            "/current_folder · show the folder\n"
-            "/set_folder · change it on the website\n\n"
-            f"{encryption}\n\n"
-            "To cancel an encrypted import, reply to its original file with "
-            "/cancel, or open Transfers on the website.\n\n"
-            "Tip: send photos as files to keep full quality.",
-            reply_markup=self._menu(),
+        text = (
+            "<b>TGDrive</b>\nSend or forward a file to save it.\n\n"
+            f"<b>Folder</b> · <code>{escape(value['folder_label'])}</code>\n"
+            f"<b>Encryption</b> · {encryption}"
         )
+        words = message.text.split()
+        command = words[0].split("@")[0].lower() if words else ""
+        if command == "/start":
+            text += "\n\nUse Help for commands."
+        else:
+            text += (
+                "\n\n<b>Commands</b>\n"
+                "/current_folder · show the destination\n"
+                "/set_folder · change it on the website\n"
+                "/cancel · reply to the original file to cancel an encrypted import"
+                "\n\nYou can also cancel in Transfers on the website.\n"
+                "Send photos as files to keep full quality."
+            )
+        await message.reply_text(text, reply_markup=self._menu(), parse_mode="html")
 
     async def _set_folder(self, _client: Client, message: Message) -> None:
         value = await self.folder_settings.snapshot()
         text = (
-            f"Folder: {value['folder_label']}\n\n"
-            "Change it on the TGDrive website: Configuration → Transfer limits "
-            "→ Bot uploads. New files use the new folder right away."
+            f"<b>Upload folder</b>\n<code>{escape(value['folder_label'])}</code>\n\n"
+            "Change it in TGDrive: Configuration → Transfer limits → Bot uploads.\n"
+            "New files use the updated folder."
         )
-        if value["settings_url"]:
-            text += "\n\n" + value["settings_url"]
         await message.reply_text(
             text,
             reply_markup=(
@@ -178,13 +184,14 @@ class BotMode:
                 if value["settings_url"]
                 else self._menu()
             ),
+            parse_mode="html",
         )
 
     async def _cancel(self, _client: Client, message: Message) -> None:
         reply_id = getattr(getattr(message, "native", None), "reply_to_msg_id", None)
         text = (
-            "Reply to the original file with /cancel to stop its encrypted import. "
-            "You can also cancel in Transfers on the TGDrive website."
+            "<b>Cancel an encrypted import</b>\n"
+            "Reply to the original file with /cancel, or use Transfers in TGDrive."
         )
         if self.transfers is not None and type(reply_id) is int and reply_id > 0:
             identity = self._operation_id(message, reply_id)[:32]
@@ -193,40 +200,45 @@ class BotMode:
                 if record.context.get("source_kind") != "telegram":
                     raise KeyError(identity)
                 if record.status.value in {"completed", "cancelled"}:
-                    text = "This import has finished. Check Transfers in TGDrive."
+                    text = "<b>Import finished</b>\nCheck Transfers in TGDrive."
                 else:
                     await self.transfers.cancel_job(identity)
                     text = (
-                        "Cancellation requested. Transfers in TGDrive shows any "
-                        "remaining cleanup; saved files are not deleted."
+                        "<b>Cancellation requested</b>\n"
+                        "Check Transfers in TGDrive for cleanup. Saved files are kept."
                     )
             except KeyError:
                 text = (
-                    "No encrypted import matches that file. Check Transfers in "
-                    "TGDrive; direct Telegram copies cannot be cancelled here."
+                    "<b>No matching encrypted import</b>\nCheck Transfers in TGDrive. "
+                    "Direct Telegram copies cannot be cancelled here."
                 )
             except BackupError, SettingsProblem, TransferError, ValueError:
                 text = (
-                    "This import cannot be cancelled right now. Open Transfers "
-                    "in TGDrive to review its current state."
+                    "<b>Cancellation unavailable</b>\n"
+                    "Check Transfers in TGDrive for its current state."
                 )
         await message.reply_text(
             text,
             reply_markup=self._menu(),
+            parse_mode="html",
         )
 
     async def _folder_query(self, _client: Client, message: Message) -> None:
         await message.reply_text(
-            "Send a file, photo, video or audio to save it. "
-            "Text messages are not saved. /help shows the commands.",
+            "<b>Send a file to save it</b>\n"
+            "Files, photos, video and audio are supported.\n"
+            "Text is not saved. Use Help for commands.",
             reply_markup=self._menu(),
+            parse_mode="html",
         )
 
     async def _current_folder(self, _client: Client, message: Message) -> None:
         value = await self.folder_settings.snapshot()
         await message.reply_text(
-            f"Folder: {value['folder_label']}\n\nUse /set_folder to change it.",
+            f"<b>Upload folder</b>\n<code>{escape(value['folder_label'])}</code>"
+            "\n\nUse /set_folder to change it.",
             reply_markup=self._menu(),
+            parse_mode="html",
         )
 
     async def _unauthorized(self, _client: Client, message: Message) -> None:
@@ -236,9 +248,10 @@ class BotMode:
             return
         seen.append(message.from_user.id)
         await message.reply_text(
-            "This is a private TGDrive bot.\n\n"
-            f"Your Telegram user ID is {message.from_user.id}. The owner can "
-            "allow you by adding it to TELEGRAM_ADMIN_IDS."
+            "<b>Private TGDrive bot</b>\n"
+            f"Your Telegram ID: <code>{escape(str(message.from_user.id))}</code>\n"
+            "Ask the owner to add it to <code>TELEGRAM_ADMIN_IDS</code>.",
+            parse_mode="html",
         )
 
     async def _feedback(
@@ -246,11 +259,13 @@ class BotMode:
     ) -> None:
         if status is not None:
             try:
-                await status.edit_text(text, reply_markup=buttons)
+                await status.edit_text(text, reply_markup=buttons, parse_mode="html")
                 return
             except Exception:
                 logger.warning("Could not update bot upload feedback", exc_info=True)
-        await message.reply_text(text, reply_markup=buttons or self._menu())
+        await message.reply_text(
+            text, reply_markup=buttons or self._menu(), parse_mode="html"
+        )
 
     def _reporter(self, status: Message):
         """Edit one status message, throttled by time, percent and FloodWait."""
@@ -272,7 +287,7 @@ class BotMode:
             ):
                 return
             try:
-                await status.edit_text(current[0])
+                await status.edit_text(current[0], parse_mode="html")
             except FloodWaitError as error:
                 next_at = self.clock() + max(1, error.seconds)
                 return
@@ -297,9 +312,9 @@ class BotMode:
         await self._feedback(
             message,
             status,
-            f"Saved ✓ {item['name']}\n"
+            f"<b>Saved ✓</b>\n<code>{escape(item['name'])}</code>\n"
             + (f"{_size(size)} · " if size else "")
-            + f"in {folder_name}",
+            + f"<code>{escape(folder_name)}</code>",
             buttons,
         )
 
@@ -330,7 +345,10 @@ class BotMode:
             if path is None:
                 raise RuntimeError("The upload destination is unavailable")
             # No reply keyboard here: inline buttons are edited in when saved.
-            status = await message.reply_text(f"Saving to {folder_name}…")
+            status = await message.reply_text(
+                f"<b>Saving…</b>\nFolder · <code>{escape(folder_name)}</code>",
+                parse_mode="html",
+            )
             if encrypted:
                 item = await self._encrypted_import(message, path, operation_id, status)
                 await self._saved(message, status, item, path, folder_name)
@@ -378,38 +396,38 @@ class BotMode:
             logger.exception("Bot-mode upload failed")
             if not rolled_back:
                 text = (
-                    "Upload could not be confirmed. Check your drive in TGDrive "
-                    "before sending this file again."
+                    "<b>Not confirmed</b>\nUpload could not be confirmed. "
+                    "Check your drive in TGDrive before resending."
                 )
             elif isinstance(error, SettingsProblem):
                 text = (
-                    f"Upload paused. {error}\n"
-                    "Open TGDrive to resolve this, then resend."
+                    f"<b>Upload paused</b>\n{escape(str(error))}\n"
+                    "Open TGDrive to resolve this before resending."
                 )
             elif isinstance(error, BackupError):
                 text = (
-                    "Upload paused while drive protection needs attention. "
-                    "Open TGDrive → Storage and Backups, then send this file again."
+                    "<b>Upload paused</b>\nDrive protection needs attention.\n"
+                    "Open TGDrive → Storage and Backups before resending."
                 )
             elif isinstance(error, FloodWaitError):
                 text = (
-                    f"Telegram needs a pause. Wait {max(1, error.seconds)} seconds, "
-                    "then send this file again."
+                    "<b>Telegram needs a pause</b>\n"
+                    f"Wait {max(1, error.seconds)} seconds before resending."
                 )
             elif isinstance(error, (_ImportFailed, TransferError, StorageUnavailable)):
                 text = (
-                    f"Couldn't save this file: {error}\n"
-                    "Check Transfers in TGDrive, or send the file again."
+                    f"<b>Import stopped</b>\n{escape(str(error))}\n"
+                    "Check Transfers in TGDrive before resending."
                 )
             elif isinstance(error, ChatForwardsRestrictedError):
                 text = (
-                    "This chat protects its files from copying. "
-                    "If you have the original file, send it here as a new attachment."
+                    "<b>Copying is restricted</b>\nThis chat protects its files.\n"
+                    "Send the original file as a new attachment if you have it."
                 )
             else:
                 text = (
-                    "Upload failed. Try sending this file again. "
-                    "If it keeps failing, check Telegram connections in TGDrive."
+                    "<b>Upload failed</b>\nTry sending the file again. "
+                    "If this repeats, check Connections in TGDrive."
                 )
             await self._feedback(message, status, text)
             return

@@ -562,7 +562,7 @@ Your server operator chooses which Telegram users may use the bot
    to preserve quality.
 3. Each file gets one status message that updates in place, about every
    4 seconds and at 5% steps when the total is known. Unknown totals show received
-   bytes. Status moves from **Receiving 42% · …** to **Saving to TGDrive …**,
+   bytes. Status moves from **Receiving · 42%** to **Saving**, **Finalizing** or **Verifying**,
    then **Saved ✓** with the name, size and folder. When the website address is
    known, an **Open in TGDrive** button opens that folder. Several files can be
    sent at once; each gets its own status message.
@@ -596,7 +596,9 @@ the downloaded file so **Retry** works.
 If the bot says **Upload could not be confirmed**, check the drive before
 resending: its database write may have succeeded.
 
-**/start** and **/help** explain the selected encryption mode and cancellation;
+**/start** shows a short welcome, destination and encryption mode. **Help** or
+**/help** shows commands and encrypted-import cancellation guidance. Progress
+shows the stage, percentage and bytes without repeating the quoted filename.
 **/current_folder** shows the destination,
 and **/set_folder** links to the website setting.
 [Bot access settings](configuration.md#telegram-bot-access) · [Known recovery gaps](roadmap.md#known-correctness-and-recovery-gaps)
