@@ -217,7 +217,7 @@ export default function PerformanceOverview({
                             ? "Collecting observations. No wait reported yet."
                             : bandwidthWaits.length > 0
                               ? "No additional Telegram or stream-buffer wait reported."
-                              : "No wait reported in the latest observation window."}
+                              : "All clear — no delays detected in the latest check."}
                     </p>
                 )}
                 {constraints.some((item) =>
