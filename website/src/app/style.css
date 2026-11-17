@@ -210,7 +210,7 @@ input::placeholder {
     color: var(--muted);
     opacity: 1;
 }
-input[type="checkbox"]:not(.mantine-Switch-input) {
+input[type="checkbox"]:not(.mantine-Switch-input):not(.switch) {
     width: 17px;
     height: 17px;
     cursor: pointer;

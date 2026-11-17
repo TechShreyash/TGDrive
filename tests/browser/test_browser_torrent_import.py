@@ -21,6 +21,77 @@ pytestmark = pytest.mark.e2e
 browser, desktop, server = browser_fixture, desktop_fixture, server_fixture
 
 
+@pytest.mark.parametrize("width", [1440, 390])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_url_compatibility_switch_keeps_thumb_inside_track_without_importing(
+    server: Server, desktop: tuple[Any, Any], width: int, theme: str
+) -> None:
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 960})
+    page.add_init_script(f"localStorage.setItem('tgdrive.appearance','{theme}')")
+    page.emulate_media(reduced_motion="reduce")
+    starts: list[str] = []
+
+    def unexpected_import(route: Any) -> None:
+        starts.append(route.request.url)
+        route.abort()
+
+    page.route("**/api/startFileDownloadFromUrl", unexpected_import)
+    login(page, server.url)
+    page.locator("#new-button:visible, #compact-new-button:visible").click()
+    page.get_by_role("button", name="Upload from URL", exact=True).click()
+    dialog = page.get_by_role("dialog", name="Upload from URL", exact=True)
+    dialog.get_by_label("Direct File URL", exact=True).fill(
+        "https://example.invalid/switch-check.bin"
+    )
+    switch = dialog.get_by_role("checkbox", name="Compatibility Mode", exact=False)
+    expect(switch).to_be_visible()
+    expect(switch).to_have_css("width", "40px")
+    expect(switch).to_have_css("height", "24px")
+
+    def assert_thumb_inside(checked: bool) -> None:
+        if checked:
+            expect(switch).to_be_checked()
+        else:
+            expect(switch).not_to_be_checked()
+        geometry = page.wait_for_function(
+            """el => {
+                const rail = getComputedStyle(el);
+                const thumb = getComputedStyle(el, '::before');
+                const box = el.getBoundingClientRect();
+                const x = parseFloat(thumb.left) +
+                    parseFloat(rail.borderLeftWidth) +
+                    (parseFloat(thumb.translate) || 0);
+                const y = parseFloat(thumb.top) + parseFloat(rail.borderTopWidth);
+                const w = parseFloat(thumb.width), h = parseFloat(thumb.height);
+                const center = x + w / 2;
+                if (el.checked ? center <= box.width / 2 : center >= box.width / 2)
+                    return false;
+                return {x, y, w, h, width: box.width, height: box.height};
+            }""",
+            arg=switch.element_handle(),
+        ).json_value()
+        assert geometry["w"] > 0 and geometry["h"] > 0
+        assert geometry["x"] >= 0 and geometry["y"] >= 0
+        assert geometry["x"] + geometry["w"] <= geometry["width"] + 0.5
+        assert geometry["y"] + geometry["h"] <= geometry["height"] + 0.5
+
+    assert_thumb_inside(False)
+    page.screenshot(path=ARTIFACTS / f"url-switch-off-{width}-{theme}.png")
+    dialog.locator("label.check-field").click()
+    assert_thumb_inside(True)
+    page.screenshot(path=ARTIFACTS / f"url-switch-on-{width}-{theme}.png")
+    switch.focus()
+    page.keyboard.press("Space")
+    assert_thumb_inside(False)
+    switch.click()
+    assert_thumb_inside(True)
+    expect(dialog).to_be_visible()
+    dialog.get_by_role("button", name="Cancel", exact=True).click()
+    expect(dialog).not_to_be_visible()
+    assert starts == []
+
+
 @pytest.mark.parametrize("width", [1440, 390, 320])
 def test_torrent_import_metadata_and_reload_keep_server_identity(
     server: Server, desktop: tuple[Any, Any], width: int
