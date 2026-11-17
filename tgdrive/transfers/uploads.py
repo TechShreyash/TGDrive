@@ -29,6 +29,7 @@ from tgdrive.transfers.tasks import _journalled
 from tgdrive.web.schemas import FolderUploadMetadata
 
 logger = logging.getLogger(__name__)
+_worker = _journalled(asyncio.to_thread)
 
 CHUNK_SIZE = 8 * 1024 * 1024
 _ACTIVE = {"receiving", "queued", "cancelling"}
@@ -219,7 +220,7 @@ class ResumableUploads:
                 and (lock is None or not lock.locked())
             ):
                 self._cancel_receiving(item)
-        item = self._admit(name, parent_id, total_size, folder_upload)
+        item = self._admit(self._prepare(name, parent_id, total_size, folder_upload))
         self._open_receipt(
             item,
             outstanding_bytes=staging_usage(
@@ -228,7 +229,7 @@ class ResumableUploads:
         )
         return item
 
-    def _admit(
+    def _prepare(
         self,
         name: str,
         parent_id: str,
@@ -268,10 +269,6 @@ class ResumableUploads:
         else:
             binding = self.manager.store.upload_destination(parent_id)
             parent_id = binding["path"]
-        try:
-            check_staging(self.settings, self.manager, total_size, receipts=self)
-        except StorageUnavailable as exc:
-            raise UploadError(str(exc), exc.status) from None
         upload_id = secrets.token_hex(16)
         item = {
             "id": upload_id,
@@ -288,6 +285,18 @@ class ResumableUploads:
         }
         if folder_upload is not None:
             item["folder_upload"] = folder_upload
+        return item
+
+    def _admit(self, item: dict[str, Any]) -> dict[str, Any]:
+        # Settings and shared reservations may change during catalog lookup.
+        if item["total_size"] > self.settings.upload_limit:
+            raise UploadError("File exceeds the configured upload limit", 413)
+        try:
+            check_staging(
+                self.settings, self.manager, item["total_size"], receipts=self
+            )
+        except StorageUnavailable as exc:
+            raise UploadError(str(exc), exc.status) from None
         return item
 
     def _open_receipt(self, item: dict[str, Any], *, outstanding_bytes=0) -> None:
@@ -396,7 +405,14 @@ class ResumableUploads:
     ) -> dict[str, Any]:
         async with self._creation_lock:
             await self._reconcile_for_creation()
-            item = self._admit(name, parent_id, total_size, folder_upload)
+            prepared = await _worker(
+                self._prepare,
+                name,
+                parent_id,
+                total_size,
+                copy.deepcopy(folder_upload),
+            )
+            item = self._admit(prepared)
             self._pending[item["id"]] = item
             remaining = staging_usage(self.manager, receipts=self, exclude=item["id"])[
                 1

@@ -196,7 +196,8 @@ class TransferManager:
     async def _resolve_upload_destination(
         self, record: TransferRecord, path: str
     ) -> str:
-        binding = self.store.upload_destination(
+        binding = await _worker(
+            self.store.upload_destination,
             path,
             directory_id=record.context.get("destination_id"),
         )
@@ -1060,7 +1061,7 @@ class TransferManager:
     ) -> TransferRecord:
         if self._check_upload_allowed is not None:
             self._check_upload_allowed()
-        binding = self.store.upload_destination(destination)
+        binding = await _worker(self.store.upload_destination, destination)
         destination = binding["path"]
         context: dict[str, Any] = dict(
             kind="upload",
@@ -1100,28 +1101,37 @@ class TransferManager:
         """Show a bot download as a transfer, then queue its encrypted upload."""
         if self._check_upload_allowed is not None:
             self._check_upload_allowed()
-        binding = self.store.upload_destination(destination)
+        binding = await _worker(self.store.upload_destination, destination)
         destination = binding["path"]
-        if all(item.id != transfer_id for item in self.registry.list()):
+        reserve = transfer_id not in self._pending_staging and all(
+            item.id != transfer_id for item in self.registry.staging_records()
+        )
+        if reserve:
             limit = await current_upload_limit(self.settings, self.pool)
             if size > limit:
                 raise TransferTooLarge(f"file exceeds the {limit}-byte upload limit")
             check_staging(self.settings, self, size)
-        record = await self.registry.create(
-            "downloading",
-            total=size,
-            transfer_id=transfer_id,
-            context=dict(
-                kind="receiving",
-                source_kind="telegram",
-                local_path=str(local_path),
-                destination=destination,
-                destination_id=binding["id"],
-                name=file_name,
-                staging_size=size,
-                staging_written=0,
-            ),
-        )
+            # Reserve before journal creation yields, including concurrent bot imports.
+            self._pending_staging[transfer_id] = size
+        try:
+            record = await self.registry.create(
+                "downloading",
+                total=size,
+                transfer_id=transfer_id,
+                context=dict(
+                    kind="receiving",
+                    source_kind="telegram",
+                    local_path=str(local_path),
+                    destination=destination,
+                    destination_id=binding["id"],
+                    name=file_name,
+                    staging_size=size,
+                    staging_written=0,
+                ),
+            )
+        finally:
+            if reserve:
+                self._pending_staging.pop(transfer_id, None)
         # A replayed message reuses the existing job instead of downloading again.
         if record.task is not None or record.terminal:
             return record

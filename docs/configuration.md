@@ -64,8 +64,11 @@ after confirmation. See [rebuild progress and limits](thumbnails.md#rebuild-exis
 
 Save before starting more work. A lower staging ceiling preserves unchanged
 or shrinking claims for already admitted work. New or growing claims must fit
-the new ceiling, other reservations and actual free space. Startup values set uploads per bot, URL downloads and Telegram request
-ceilings. **Bot uploads** (folder and encryption) also live on this page. [Staging policy](performance.md#automatic-tuning).
+the new ceiling, other reservations and actual free space. Encrypted bot imports
+reserve their declared size before receiving bytes and share this budget with
+browser uploads and other imports. When space is unavailable, TGDrive refuses
+the new import before downloading it. Startup values set uploads per bot, URL
+downloads and Telegram request ceilings. **Bot uploads** (folder and encryption) also live on this page. [Staging policy](performance.md#automatic-tuning).
 
 **File transfer speeds** has two independent controls: **Upload from server**
 for outgoing file payloads and **Download to server** for incoming file payloads.

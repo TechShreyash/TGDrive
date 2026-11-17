@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import threading
+from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import tgdrive.transfers.uploads as upload_module
 from tests.support.mongo_fixtures import new_store, register_test_backend, reopen_store
 from tests.transfers.test_multipart_transfers import (
     Account,
@@ -355,4 +357,138 @@ async def test_catalog_outage_does_not_turn_destination_validation_into_cancella
         assert len(ledger.requests) == sent
     finally:
         ledger.release.set()
+        await dispose(manager)
+
+
+@pytest.mark.parametrize("outcome", ["file", "folder", "budget"])
+async def test_receipt_binding_yields_and_preserves_loop_admission(
+    receipt, monkeypatch, outcome
+):
+    uploads, manager = receipt
+    destination, metadata = "/", None
+    if outcome == "folder":
+        destination = folder(manager.store, "Incoming")
+        metadata = {
+            "id": "responsiveness-folder",
+            "name": "Incoming",
+            "root_path": destination,
+            "created_at": 1.0,
+        }
+    entered, release = threading.Event(), threading.Event()
+    loop_thread = threading.get_ident()
+    marker = ContextVar("receipt_request_scope", default=False)
+    token = marker.set(True)
+    resolve = manager.store.upload_destination
+    check = upload_module.check_staging
+
+    def lookup(*args, **kwargs):
+        entered.set()
+        assert threading.get_ident() != loop_thread
+        assert marker.get()
+        assert release.wait(2), "Independent loop work could not release the lookup"
+        return resolve(*args, **kwargs)
+
+    def admit(*args, **kwargs):
+        assert threading.get_ident() == loop_thread
+        return check(*args, **kwargs)
+
+    monkeypatch.setattr(manager.store, "upload_destination", lookup)
+    monkeypatch.setattr("tgdrive.transfers.uploads.check_staging", admit)
+    task = asyncio.create_task(
+        uploads.create_async("one.bin", destination, 3, folder_upload=metadata)
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        ready = asyncio.get_running_loop().create_future()
+        asyncio.get_running_loop().call_soon(ready.set_result, True)
+        assert await asyncio.wait_for(ready, 1)
+        assert not task.done()
+        if outcome == "budget":
+            uploads.settings.staging_budget_bytes = 2
+        release.set()
+        if outcome == "budget":
+            with pytest.raises(UploadError) as error:
+                await task
+            assert error.value.status == 507
+            assert uploads._all() == []
+        else:
+            item = await task
+            assert item["parent_id"] == destination
+            assert item.get("folder_upload") == metadata
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        marker.reset(token)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize("helper", ["enqueue", "resolve", "bot"])
+async def test_transfer_binding_yields_and_drains_cancellation(
+    tmp_path, monkeypatch, cancel, helper
+):
+    manager, _ = await manager_for(tmp_path)
+    source = staged(manager, b"one")
+    entered, release = threading.Event(), threading.Event()
+    loop_thread = threading.get_ident()
+    marker = ContextVar("enqueue_request_scope", default=False)
+    token = marker.set(True)
+    resolve = manager.store.upload_destination
+
+    def lookup(*args, **kwargs):
+        entered.set()
+        assert threading.get_ident() != loop_thread
+        assert marker.get()
+        assert release.wait(2), "Independent loop work could not release the lookup"
+        return resolve(*args, **kwargs)
+
+    monkeypatch.setattr(manager.store, "upload_destination", lookup)
+    spawn = Mock()
+    monkeypatch.setattr(manager.registry, "spawn", spawn)
+    if helper == "resolve":
+        record = await manager.registry.create(
+            "queued", context={"destination_id": "root", "destination": "/"}
+        )
+        operation = manager._resolve_upload_destination(record, "/")
+    elif helper == "bot":
+        operation = manager.receive_telegram_file(
+            AsyncMock(), source, "/", "one.bin", 3, transfer_id="b" * 32
+        )
+    else:
+        operation = manager.enqueue_upload(source, "/", "one.bin", 3)
+    task = asyncio.create_task(operation)
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        ready = asyncio.get_running_loop().create_future()
+        asyncio.get_running_loop().call_soon(ready.set_result, True)
+        assert await asyncio.wait_for(ready, 1)
+        assert not task.done()
+        if cancel:
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+        release.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            result = await task
+            if helper == "resolve":
+                assert result == "/"
+        records = manager.registry.list()
+        if helper == "bot" and cancel:
+            # Lookup cancellation precedes bot admission and owns no claim yet.
+            assert records == []
+            spawn.assert_not_called()
+        else:
+            assert len(records) == 1
+            assert records[0].context["destination_id"] == "root"
+            if helper in {"enqueue", "bot"}:
+                spawn.assert_called_once()
+            else:
+                spawn.assert_not_called()
+        assert source.read_bytes() == b"one"
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        marker.reset(token)
         await dispose(manager)
