@@ -283,11 +283,13 @@ export default function Preview({
     item,
     auth,
     videoProgressMode,
+    inFrame = false,
     onClose,
 }: {
     item: DriveItem;
     auth: string;
     videoProgressMode?: VideoProgressMode;
+    inFrame?: boolean;
     onClose?: () => void;
 }) {
     const nativeKind = nativePreviewKind(item.name);
@@ -765,7 +767,7 @@ export default function Preview({
                             <a
                                 className="preview-download"
                                 href={fileUrl(path, auth, true)}
-                                download={item.name}
+                                download={inFrame ? undefined : item.name}
                                 aria-label="Download Original"
                                 title="Download Original"
                             >
@@ -817,7 +819,7 @@ export default function Preview({
                         <a
                             className="primary-button file-details-download"
                             href={fileUrl(path, auth, true)}
-                            download={item.name}
+                            download={inFrame ? undefined : item.name}
                             aria-label="Download Original"
                         >
                             <Download size={19} /> Download File

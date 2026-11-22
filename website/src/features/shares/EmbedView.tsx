@@ -53,6 +53,8 @@ export async function loadEmbeddedShare(
 }
 
 export default function EmbedView() {
+    // Attachment navigation keeps framed requests in the publisher’s cookie partition.
+    const inFrame = window.self !== window.top;
     const [params] = useState(
         () => new URLSearchParams(window.location.search),
     );
@@ -365,7 +367,7 @@ export default function EmbedView() {
                                 <a
                                     className="icon-button"
                                     href={fileUrl(itemPath(item), auth, true)}
-                                    download={item.name}
+                                    download={inFrame ? undefined : item.name}
                                     aria-label={"Download " + item.name}
                                     title={"Download " + item.name}
                                 >
@@ -400,6 +402,7 @@ export default function EmbedView() {
                     key={preview.id}
                     item={preview}
                     auth={auth}
+                    inFrame={inFrame}
                     onClose={folder ? () => setPreview(null) : undefined}
                 />
             )}

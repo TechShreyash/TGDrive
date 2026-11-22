@@ -53,7 +53,7 @@ export default function SharedUnlock({
         try {
             await request(
                 "/api/v1/shared/unlock",
-                { auth, password },
+                { auth, password, embedded: inFrame },
                 {
                     notifySessionExpiry: false,
                 },

@@ -29,7 +29,8 @@ def token_factory(settings):
 
 def unlock_cookie_name(token):
     digest = hashlib.sha256(token.encode()).hexdigest()[:32]
-    return "tgdrive_share_" + digest
+    # Earlier cookies allowed cross-site requests after a top-level unlock.
+    return "tgdrive_share_v2_" + digest
 
 
 def _unlock_signature(settings, token, password_hash, expired_at):

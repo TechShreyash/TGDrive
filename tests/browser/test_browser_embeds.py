@@ -82,7 +82,8 @@ def test_protected_folder_and_embed_require_unlock_and_honor_revocation(
         ).to_be_visible()
         embed.get_by_label("Share password").fill(password)
         embed.get_by_role("button", name="Open shared link").click()
-        expect(embed.get_by_role("link", name="Download")).to_be_visible()
+        download = embed.get_by_role("link", name="Download")
+        expect(download).to_have_attribute("download", "résumé #1.txt")
 
         links = owner.request.get(server.url + "/api/v1/shares").json()["shares"]
         identity = next(row["id"] for row in links if row["path"] == seed["folder"])
@@ -803,6 +804,9 @@ def test_cross_origin_embed_renders_and_rejects_invalid_or_revoked_links(
             frame.get_by_role("navigation", name="Shared folder path")
         ).to_be_visible()
         frame.get_by_role("button", name="資料 Folder", exact=True).click()
+        download = frame.get_by_role("link", name="Download résumé #1.txt")
+        expect(download).to_be_visible()
+        assert download.get_attribute("download") is None
         frame.get_by_role("button", name=re.compile("résumé #1.txt")).click()
     if kind == "image":
         image = frame.locator(".preview-surface img")

@@ -54,9 +54,10 @@ def test_share_password_unlock_scopes_all_public_reads_and_expires(
             == 403
         )
 
-        def unlock(value):
+        def unlock(value, **options):
             return guest.post(
-                "/api/v1/shared/unlock", json={"auth": auth, "password": value}
+                "/api/v1/shared/unlock",
+                json={"auth": auth, "password": value, **options},
             )
 
         wrong = unlock("wrong")
@@ -64,8 +65,19 @@ def test_share_password_unlock_scopes_all_public_reads_and_expires(
         assert "set-cookie" not in wrong.headers
         correct = unlock(password)
         assert correct.status_code == 200, correct.text
-        for attribute in ("httponly", "secure", "partitioned", "samesite=none"):
-            assert attribute in correct.headers["set-cookie"].lower()
+        attributes = correct.headers["set-cookie"].lower().split("; ")[1:]
+        assert {"httponly", "secure", "samesite=lax"} <= set(attributes)
+        assert "partitioned" not in attributes
+        cookie_name, value = next(iter(correct.cookies.items()))
+        with TestClient(owner.app, base_url="https://testserver") as legacy_guest:
+            legacy_guest.cookies.set(cookie_name.replace("_v2_", "_"), value)
+            assert (
+                legacy_guest.get("/api/v1/embed", params=file_params).status_code == 403
+            )
+        embedded = unlock(password, embedded=True)
+        assert embedded.status_code == 200
+        attributes = embedded.headers["set-cookie"].lower().split("; ")[1:]
+        assert {"httponly", "secure", "partitioned", "samesite=none"} <= set(attributes)
         assert (
             guest.get("/api/v1/shared/nodes", params=folder_params).status_code == 200
         )

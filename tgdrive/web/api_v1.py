@@ -135,6 +135,7 @@ class ShareOpen(BaseModel):
 class ShareUnlock(BaseModel):
     auth: str = Field(min_length=1, max_length=512)
     password: ArchivePassword
+    embedded: bool = False
 
 
 logger = logging.getLogger(__name__)
@@ -568,6 +569,7 @@ def register_routes(
                 raise HTTPException(403, "Incorrect share password.")
             share_attempts.success(attempt_key)
         secure = settings.cookie_secure or request.url.scheme == "https"
+        partitioned = secure and payload.embedded
         response = JSONResponse({"status": "ok"}, headers={"Cache-Control": "no-store"})
         response.set_cookie(
             cookie_name,
@@ -575,8 +577,8 @@ def register_routes(
             max_age=SHARE_UNLOCK_TTL,
             httponly=True,
             secure=secure,
-            samesite="none" if secure else "lax",
-            partitioned=secure,
+            samesite="none" if partitioned else "lax",
+            partitioned=partitioned,
         )
         return response
 

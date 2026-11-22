@@ -411,9 +411,15 @@ root can't be starred.
 | `POST /api/v1/download-links` | Owner | `path`: attachment URL plus `expires_at` for a download manager | Reuses a copyable "Download link" share with its current expiry; only a new share defaults to one day |
 | `POST /api/getFileShareAuth`, `/api/getFolderShareAuth` | Owner | Older link-creation routes | |
 | `GET /api/v1/embed` | Share | File metadata for the embed viewer | Token required even with an owner cookie |
-| `POST /api/v1/shared/unlock` | Share | `auth` and `password` | Sets an HTTP-only unlock cookie for up to eight hours. `403` invalid link or password, `429` retry later |
+| `POST /api/v1/shared/unlock` | Share | `auth`, `password`, optional `embedded` (defaults to false) | Sets an HTTP-only unlock cookie for up to eight hours. `403` invalid link or password, `429` retry later |
 | `POST /api/v1/shared/opens` | Share | Records a displayed visit using `auth`, the displayed item `path` and a random 32-character lowercase hex `event_id` | `204` for a counted or previously seen event. Standard share scope and password checks apply. Retry IDs are retained for up to one day and excluded from backups |
 | `GET`, `HEAD /file` | Owner, Share | File bytes; `Range`, `quality`, `preview=1`, `download=1` | `206`, `304`, `416`, `503` with `Retry-After` |
+
+Top-level unlock cookies use SameSite=Lax. An HTTPS iframe can request a
+partitioned cookie with `embedded: true`. If the browser blocks iframe
+cookies, open the link in a new tab and enter the password there. An upgrade
+from an older cookie format prompts viewers to unlock again. Shared URLs
+and passwords stay the same.
 
 Starred, Trash, and Shares accept an optional `limit` from 1 through 500.
 A paged response adds `next_cursor` to the usual response shape, with null on
