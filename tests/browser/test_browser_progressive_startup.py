@@ -4,7 +4,13 @@ import json
 
 import pytest
 
-from tests.browser.test_browser_e2e import ARTIFACTS, Server, login, preview_dialog
+from tests.browser.test_browser_e2e import (
+    ARTIFACTS,
+    Server,
+    expect,
+    login,
+    preview_dialog,
+)
 
 pytestmark = pytest.mark.e2e
 pytest_plugins = ("tests.browser.test_browser_e2e",)
@@ -50,3 +56,49 @@ def test_video_plays_while_the_rest_of_its_response_is_held(server: Server, desk
         )
     finally:
         server.control("/progressive-video?release=1", method="POST")
+
+
+@pytest.mark.parametrize(
+    "route,chunk,heading",
+    [
+        ("connections", "SettingsManagement", "Storage Clients"),
+        ("storage", "StorageView", "MongoDB catalog"),
+        ("performance", "PerformancePanel", "TGDrive library"),
+    ],
+)
+def test_owner_tools_load_only_when_opened(server, desktop, route, chunk, heading):
+    _, page = desktop
+    requested = []
+    page.on("request", lambda request: requested.append(request.url))
+    page.goto(server.url)
+    expect(page.locator("#login-dialog")).to_be_visible()
+    owner_chunks = (
+        "SettingsManagement-",
+        "StorageView-",
+        "PerformancePanel-",
+        "ChannelBackup-",
+    )
+    assert not any(any(name in url for name in owner_chunks) for url in requested)
+    login(page)
+    expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
+    assert not any(any(name in url for name in owner_chunks) for url in requested)
+
+    page.goto(server.url + "/?view=" + route)
+    expect(page.get_by_role("heading", name=heading, exact=True)).to_be_visible()
+    assert any("/assets/" + chunk + "-" in url for url in requested)
+    page.reload()
+    expect(page.get_by_role("heading", name=heading, exact=True)).to_be_visible()
+
+
+def test_owner_tool_chunk_failure_offers_reload_without_losing_route(server, desktop):
+    _, page = desktop
+    page.route("**/assets/SettingsManagement-*.js", lambda route: route.abort("failed"))
+    login(page, server.url + "/?view=connections")
+    expect(page.get_by_text("This page could not load.", exact=False)).to_be_visible()
+    page.unroute("**/assets/SettingsManagement-*.js")
+    with page.expect_navigation():
+        page.get_by_role("button", name="Reload Page", exact=True).click()
+    expect(
+        page.get_by_role("heading", name="Storage Clients", exact=True)
+    ).to_be_visible()
+    assert page.url.endswith("?view=connections")

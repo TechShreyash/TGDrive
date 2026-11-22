@@ -3,6 +3,8 @@ import GitHubMark from "../shared/GitHubMark";
 import ThemeControl from "../shared/ThemeControl";
 import {
     Activity,
+    lazy,
+    Suspense,
     useCallback,
     useEffect,
     useLayoutEffect,
@@ -81,14 +83,16 @@ import {
     type FetchPage,
     type FolderPages,
 } from "../features/files/folderPages";
-import { Modal, Spinner, ToastNotice as Toast } from "../shared/components";
+import {
+    ErrorNotice,
+    Modal,
+    Spinner,
+    ToastNotice as Toast,
+} from "../shared/components";
 import Login from "./Login";
 import SharesView from "../features/shares/SharesView";
-import StorageView from "../features/settings/StorageView";
-import SettingsManagement from "../features/settings/SettingsManagement";
 import PerformanceSettings from "../features/performance/PerformanceSettings";
 import Preloads from "../features/performance/Preloads";
-import PerformancePanel from "../features/performance/PerformancePanel";
 import FileBrowser, { type FileFilter } from "../features/files/FileBrowser";
 import {
     COMPACT_LAYOUT_QUERY,
@@ -104,10 +108,50 @@ import TransferHistory from "../features/transfers/TransferHistory";
 import FolderUpload from "../features/transfers/FolderUpload";
 import DeletionNotice from "../features/transfers/DeletionNotice";
 import SidebarLogout from "./SidebarLogout";
-import ChannelBackup from "../features/backup/ChannelBackup";
 import BotModeSettings from "../features/settings/BotModeSettings";
 import { useManualRefresh } from "../shared/useManualRefresh";
 import { startStatusPolling } from "./statusPolling";
+function OwnerPageUnavailable() {
+    return (
+        <div className="page-load-error">
+            <ErrorNotice message="This page could not load. Check your connection and try again." />
+            <button
+                className="secondary-button"
+                type="button"
+                onClick={() => window.location.reload()}
+            >
+                Reload Page
+            </button>
+        </div>
+    );
+}
+
+function OwnerPageLoading() {
+    return (
+        <p className="workspace-loading" role="status">
+            <Spinner /> Loading page…
+        </p>
+    );
+}
+
+const ownerPageUnavailable = () => ({ default: OwnerPageUnavailable });
+const StorageView = lazy(() =>
+    import("../features/settings/StorageView").catch(ownerPageUnavailable),
+);
+const SettingsManagement = lazy(() =>
+    import("../features/settings/SettingsManagement").catch(
+        ownerPageUnavailable,
+    ),
+);
+const PerformancePanel = lazy(() =>
+    import("../features/performance/PerformancePanel").catch(
+        ownerPageUnavailable,
+    ),
+);
+const ChannelBackup = lazy(() =>
+    import("../features/backup/ChannelBackup").catch(ownerPageUnavailable),
+);
+
 function getLocation() {
     const url = new URL(window.location.href);
     const path = url.searchParams.get("path") || "/";
@@ -1862,11 +1906,13 @@ export default function App() {
                     </p>
                     {configLoad === "ready" ? (
                         <>
-                            <ChannelBackup
-                                recoveryOnly
-                                demoMode={demoReadOnly}
-                                onNotice={notify}
-                            />
+                            <Suspense fallback={<OwnerPageLoading />}>
+                                <ChannelBackup
+                                    recoveryOnly
+                                    demoMode={demoReadOnly}
+                                    onNotice={notify}
+                                />
+                            </Suspense>
                         </>
                     ) : (
                         configGate
@@ -2412,9 +2458,11 @@ export default function App() {
                             onNotice={notify}
                         />
                     ) : view === "performance" ? (
-                        <PerformancePanel
-                            maxFileSizeBytes={config.max_file_size}
-                        />
+                        <Suspense fallback={<OwnerPageLoading />}>
+                            <PerformancePanel
+                                maxFileSizeBytes={config.max_file_size}
+                            />
+                        </Suspense>
                     ) : ["connections", "storage", "settings"].includes(
                           view,
                       ) ? (
@@ -2428,45 +2476,47 @@ export default function App() {
                                     disabled={configLoad !== "ready"}
                                     inert={configLoad !== "ready"}
                                 >
-                                    {view === "connections" ? (
-                                        <SettingsManagement
-                                            demoMode={demoReadOnly}
-                                            onNotice={notify}
-                                        />
-                                    ) : view === "storage" ? (
-                                        <StorageView
-                                            demoMode={demoReadOnly}
-                                            onNotice={notify}
-                                        />
-                                    ) : view === "settings" ? (
-                                        <PerformanceSettings
-                                            demoMode={demoReadOnly}
-                                            onNotice={notify}
-                                            category={
-                                                location.settingsSection ===
-                                                "transfers"
-                                                    ? "transfers"
-                                                    : location.settingsSection ===
-                                                        "regional"
-                                                      ? "regional"
-                                                      : "cache"
-                                            }
-                                            uploadPreferences={
-                                                <BotModeSettings
-                                                    demoMode={demoReadOnly}
-                                                    onNotice={notify}
-                                                />
-                                            }
-                                            onSaved={(value) => {
-                                                setTimezone(value.timezone);
-                                                void loadConfig();
-                                                notify(
-                                                    "Performance settings saved.",
-                                                );
-                                                reload();
-                                            }}
-                                        />
-                                    ) : null}
+                                    <Suspense fallback={<OwnerPageLoading />}>
+                                        {view === "connections" ? (
+                                            <SettingsManagement
+                                                demoMode={demoReadOnly}
+                                                onNotice={notify}
+                                            />
+                                        ) : view === "storage" ? (
+                                            <StorageView
+                                                demoMode={demoReadOnly}
+                                                onNotice={notify}
+                                            />
+                                        ) : view === "settings" ? (
+                                            <PerformanceSettings
+                                                demoMode={demoReadOnly}
+                                                onNotice={notify}
+                                                category={
+                                                    location.settingsSection ===
+                                                    "transfers"
+                                                        ? "transfers"
+                                                        : location.settingsSection ===
+                                                            "regional"
+                                                          ? "regional"
+                                                          : "cache"
+                                                }
+                                                uploadPreferences={
+                                                    <BotModeSettings
+                                                        demoMode={demoReadOnly}
+                                                        onNotice={notify}
+                                                    />
+                                                }
+                                                onSaved={(value) => {
+                                                    setTimezone(value.timezone);
+                                                    void loadConfig();
+                                                    notify(
+                                                        "Performance settings saved.",
+                                                    );
+                                                    reload();
+                                                }}
+                                            />
+                                        ) : null}
+                                    </Suspense>
                                 </fieldset>
                             </>
                         )
