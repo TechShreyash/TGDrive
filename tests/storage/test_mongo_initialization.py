@@ -60,7 +60,9 @@ def test_missing_catalog_with_saved_records_is_never_initialized(
 ):
     backend.db[collection].find_one.return_value = {"_id": "saved"}
     create = Mock()
-    monkeypatch.setattr("tgdrive.storage.mongo_store.MongoStore.create", create)
+    monkeypatch.setattr(
+        "tgdrive.storage.mongo_store.MongoStore.initialize_catalog", create
+    )
     with pytest.raises(CorruptStoreError, match="saved drive state"):
         initialize_if_empty(SimpleNamespace(resolved_data_dir=tmp_path), backend)
     create.assert_not_called()
@@ -71,7 +73,9 @@ def test_existing_catalog_is_reused_without_initialization(
 ):
     backend.db.catalog.find_one.return_value = {"_id": "catalog"}
     create = Mock()
-    monkeypatch.setattr("tgdrive.storage.mongo_store.MongoStore.create", create)
+    monkeypatch.setattr(
+        "tgdrive.storage.mongo_store.MongoStore.initialize_catalog", create
+    )
     assert not initialize_if_empty(SimpleNamespace(resolved_data_dir=tmp_path), backend)
     create.assert_not_called()
 

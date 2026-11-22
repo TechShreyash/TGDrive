@@ -161,8 +161,7 @@ class ChannelReplica:
     @property
     def blocked(self):
         try:
-            self._check_saved_state()
-            state = self.journal.get_many({"recovery": None, "activation": None})
+            state = self._check_saved_state()
         except Exception:
             if self._resource_error():
                 return True
@@ -192,17 +191,20 @@ class ChannelReplica:
 
     def _check_saved_state(self):
         self._check_resources()
-        with self.journal.lock:
-            for key in (
-                "config",
-                "status",
-                "job",
-                "candidate",
-                "recovery",
-                "activation",
-                "restore_point",
-            ):
-                self.journal.get(key)
+        return self.journal.get_many(
+            dict.fromkeys(
+                (
+                    "config",
+                    "status",
+                    "job",
+                    "candidate",
+                    "recovery",
+                    "activation",
+                    "restore_point",
+                )
+            ),
+            retain={"recovery", "activation"},
+        )
 
     def status(self):
         problem = self._resource_error()

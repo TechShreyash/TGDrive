@@ -302,6 +302,54 @@ async def test_real_isolated_worker_protocol_and_fetch_bounds():
     assert error.value.status_code == 422
 
 
+async def test_book_worker_exits_after_finish_and_enforces_its_read_protocol():
+    import asyncio
+    import base64
+    import json
+    import sys
+
+    data = cbz()
+    worker = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "tgdrive.media.book_worker",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    assert worker.stdin is not None and worker.stdout is not None
+    assert worker.stderr is not None
+    try:
+        async with asyncio.timeout(10):
+            request = {"size": len(data), "format": "cbz"}
+            worker.stdin.write(json.dumps(request).encode() + b"\n")
+            await worker.stdin.drain()
+            for _ in range(16):
+                line = await worker.stdout.readline()
+                assert line, (await worker.stderr.read()).decode(errors="replace")
+                response = json.loads(line)
+                if "result" in response:
+                    assert len(response["result"]["entries"]) == 3
+                    break
+                offset, length = response["read"]
+                assert 0 <= offset < len(data) and 0 < length <= len(data) - offset
+                reply = {
+                    "data": base64.b64encode(data[offset : offset + length]).decode()
+                }
+                worker.stdin.write(json.dumps(reply).encode() + b"\n")
+                await worker.stdin.drain()
+            else:
+                pytest.fail(
+                    "Book worker did not return an index within its read budget"
+                )
+            worker.stdin.close()
+            assert await worker.wait() == 0
+    finally:
+        if worker.returncode is None:
+            worker.kill()
+            await worker.wait()
+
+
 async def test_large_selected_page_keeps_original_bytes_without_reading_whole_archive():
     from tgdrive.media.book_worker import BLOCK
 

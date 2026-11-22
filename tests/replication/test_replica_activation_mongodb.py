@@ -195,7 +195,11 @@ def deployment(tmp_path):
 
 
 def test_live_mongo_catalog_preferences_and_credentials_commit_together(deployment):
+    from tgdrive.transfers.task_history_index import HISTORY_INDEX
+
     row = deployment
+    runtime = row.backend.db.runtime
+    runtime.insert_one({"_id": HISTORY_INDEX, "generation": "replaced", "ready": True})
     identity = prepare_activation(row.settings, row.candidate)
     pending = effective_settings(row.settings)
     assert pending.storage_channel == NEW and pending.bot_tokens == (NEW_BOT,)
@@ -212,6 +216,7 @@ def test_live_mongo_catalog_preferences_and_credentials_commit_together(deployme
     assert {link["label"] for link in store.list_shares()} == {"Review", "External"}
     store.close()
     assert row.backend.db.jobs.count_documents({}) == 0
+    assert runtime.find_one({"_id": HISTORY_INDEX}) is None
     assert row.backend.db.receipts.count_documents({}) == 0
     assert row.backend.db.operations.count_documents({}) == 0
     assert row.backend.db.backups.count_documents({}) == 0

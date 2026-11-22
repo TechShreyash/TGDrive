@@ -110,6 +110,7 @@ class MongoBackend:
             ) from None
         self._settings_lock = threading.RLock()
         self._write_lock = threading.RLock()
+        self.deletion_lock = threading.Lock()
         self._writes_paused = False
         self._settings_cached = False
         self._settings_document: ManagedDocument | None = None
@@ -389,7 +390,7 @@ def database_is_empty(backend: MongoBackend) -> bool:
 
 
 def initialize_if_empty(settings: Any, backend: MongoBackend) -> bool:
-    """Initialize a pristine MongoDB under ownership; preserve prior drive state."""
+    """Commit a pristine catalog under ownership before opening the store."""
     from tgdrive.core import encryption
     from tgdrive.core.errors import CorruptStoreError
     from tgdrive.recovery.mongo_backup import COLLECTIONS
@@ -422,7 +423,7 @@ def initialize_if_empty(settings: Any, backend: MongoBackend) -> bool:
         api_hash=settings.api_hash,
         clients=initial_clients(settings),
     )
-    store = MongoStore.create(
+    MongoStore.initialize_catalog(
         backend,
         storage_channel=settings.storage_channel,
         initial_settings=[
@@ -435,7 +436,6 @@ def initialize_if_empty(settings: Any, backend: MongoBackend) -> bool:
             },
         ],
     )
-    store.close()
     settings.managed_revision = document.revision
     settings.managed_client_ids = tuple(row.id for row in document.clients)
     settings.managed_client_labels = tuple(row.label for row in document.clients)

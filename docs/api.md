@@ -63,7 +63,8 @@ per-person accounts or OpenAPI pages, and response fields may grow over time.
 | `GET /api/v1/status` | Owner | Connections, capacity, catalog revision, latest backup, client health, `telegram_issues` | Does not query Telegram backup history |
 | `POST /api/v1/backup` | Owner | Requests an immediate backup or retries pending publication | `409` during recovery or while independent protection is paused; `503` if it can't be confirmed |
 | `GET /health/live` | Public | `200` when HTTP answers | |
-| `GET /health/ready`, `GET /healthz` | Public | `200` when ready or in recovery mode | `503` otherwise |
+| `GET /health/ready` | Public | `200` when drive admission and Telegram are ready | `503` when unavailable or recovery is required |
+| `GET /healthz` | Public | Same readiness checks, with `200` during recovery so the proxy can serve the owner UI | Used by Docker |
 | `GET /`, `GET /stream`, `GET /embed` | Public | App, standalone player and embed shells | Data requests still check access |
 | `GET /assets/…`, `/static/…`, `/third-party/…` | Public | Frontend and player assets | |
 
@@ -413,6 +414,14 @@ root can't be starred.
 | `POST /api/v1/shared/unlock` | Share | `auth` and `password` | Sets an HTTP-only unlock cookie for up to eight hours. `403` invalid link or password, `429` retry later |
 | `POST /api/v1/shared/opens` | Share | Records a displayed visit using `auth`, the displayed item `path` and a random 32-character lowercase hex `event_id` | `204` for a counted or previously seen event. Standard share scope and password checks apply. Retry IDs are retained for up to one day and excluded from backups |
 | `GET`, `HEAD /file` | Owner, Share | File bytes; `Range`, `quality`, `preview=1`, `download=1` | `206`, `304`, `416`, `503` with `Retry-After` |
+
+Starred, Trash, and Shares accept an optional `limit` from 1 through 500.
+A paged response adds `next_cursor` to the usual response shape, with null on
+the last page. To continue, pass that opaque value as `cursor` with the same
+filters and page size. Starred and Trash pages are ordered by case-folded name
+and item ID. Shares pages are ordered by creation time and share ID. Requests
+without either parameter return the full listing. Restart a listing after a
+mutation to see the current order.
 
 URL formats:
 

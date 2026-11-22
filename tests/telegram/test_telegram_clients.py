@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from telethon.errors import FloodPremiumWaitError, FloodWaitError
 
 import tgdrive.telegram.clients as clients
 from tests.support.mongo_fixtures import register_test_backend
@@ -278,3 +280,45 @@ async def test_optional_session_failure_does_not_disable_working_storage_bots(
     async with pool.lease(prefer_premium=True) as client:
         assert pool.kind_of(client) == "bot"
     await pool.stop()
+
+
+@pytest.mark.parametrize("wait_type", [FloodWaitError, FloodPremiumWaitError])
+async def test_metadata_flood_wait_persists_account_delay(
+    tmp_path, monkeypatch, wait_type
+):
+    pool = clients.build_client_pool(settings(tmp_path, STRING_SESSIONS=""))
+    async with pool:
+        async with pool.lease(media=True) as client:
+            assert isinstance(client, clients.Client)
+            failure = wait_type(request=None, capture=60)
+            monkeypatch.setattr(
+                client.native,
+                "get_messages",
+                AsyncMock(side_effect=failure),
+                raising=False,
+            )
+            with pytest.raises(wait_type):
+                await client.get_messages(-1001234567890, message_ids=42)
+            deadline = await pool.account_retry_at(client.name)
+            assert deadline > time.time() + 50
+            assert client._identity_cache.retry_at(client.name) == deadline
+        async with pool.lease(media=True) as other:
+            assert other is not client
+
+
+async def test_pool_applies_saved_cooldown_before_first_download_lease(
+    tmp_path, monkeypatch, mongo_backend
+):
+    cooled = "storage-bot-123456"
+    deadline = time.time() + 60
+    mongo_backend.db.identities.insert_one({"_id": cooled, "retry_at": deadline})
+    # Display-name refresh may still be waiting when the pool accepts work.
+    monkeypatch.setattr(
+        clients.Client, "_start_identity_refresh", lambda *_a, **_kw: None
+    )
+    pool = clients.build_client_pool(settings(tmp_path, STRING_SESSIONS=""))
+    async with pool:
+        assert await pool.account_retry_at(cooled) == deadline
+        async with pool.lease(download=True, media=True) as client:
+            assert isinstance(client, clients.Client)
+            assert client.name == "storage-bot-654321"

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import unicodedata
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -16,6 +15,7 @@ from starlette.requests import ClientDisconnect
 
 from tgdrive.core.errors import NotDirectoryError, NotFoundError, TrashedItemError
 from tgdrive.core.errors import ValidationError as DriveValidationError
+from tgdrive.core.runtime import admission_status
 from tgdrive.core.security import LoginLimiter, verify_password
 from tgdrive.recovery.backup import RecoveryConflict
 from tgdrive.settings.management_api import register_management_routes
@@ -219,6 +219,7 @@ def register_routes(
                 "recovery": None,
                 "clients": None,
             }
+        admission = await asyncio.to_thread(admission_status, runtime)
         pool = getattr(runtime, "pool", None)
         health = await pool.health() if pool else None
         statuses = (
@@ -240,7 +241,10 @@ def register_routes(
         latest = getattr(backup, "latest_history", None)
         history = latest() if callable(latest) else []
         return {
-            "admission_paused": False,
+            "admission_paused": admission != "ok",
+            "restart_required": bool(
+                getattr(runtime, "archive_restore_restart_required", False)
+            ),
             "telegram_ready": bool(health and health.ready),
             "telegram_issues": telegram_issues,
             "demo": bool(getattr(runtime, "synthetic", False)),
@@ -251,7 +255,9 @@ def register_routes(
             "recovery": await asyncio.to_thread(
                 backup.protection_status, get_store(request)
             )
-            if backup and hasattr(backup, "protection_status")
+            if admission != "not ready"
+            and backup
+            and hasattr(backup, "protection_status")
             else None,
             "clients": asdict(health) if health else None,
         }
@@ -370,15 +376,32 @@ def register_routes(
         except DriveValidationError as error:
             raise HTTPException(422, str(error)) from None
 
+    async def marked_page(request, response, view, q, limit, cursor):
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            page = await asyncio.to_thread(
+                get_store(request).list_marked_page,
+                view,
+                q,
+                limit=(limit or 100) if cursor is not None else limit,
+                after=cursor,
+            )
+        except DriveValidationError as error:
+            raise HTTPException(422, str(error)) from None
+        result = {"data": {"contents": page["contents"]}}
+        if limit is not None or cursor is not None:
+            result["next_cursor"] = page["next_cursor"]
+        return describe(result)
+
     @app.get("/api/v1/starred", dependencies=admin)
     async def starred_items(
         request: Request,
         response: Response,
         q: str = Query(default="", max_length=MAX_NAME_LENGTH),
+        limit: int | None = Query(default=None, ge=1, le=500),
+        cursor: str | None = Query(default=None, max_length=MAX_CURSOR_LENGTH),
     ):
-        response.headers["Cache-Control"] = "no-store"
-        items = await asyncio.to_thread(get_store(request).list_starred, q)
-        return describe({"data": {"contents": items}})
+        return await marked_page(request, response, "starred", q, limit, cursor)
 
     @app.patch("/api/v1/starred", dependencies=admin)
     async def star_item(body: StarItem, request: Request, response: Response):
@@ -394,12 +417,10 @@ def register_routes(
         request: Request,
         response: Response,
         q: str = Query(default="", max_length=MAX_NAME_LENGTH),
+        limit: int | None = Query(default=None, ge=1, le=500),
+        cursor: str | None = Query(default=None, max_length=MAX_CURSOR_LENGTH),
     ):
-        response.headers["Cache-Control"] = "no-store"
-        contents = await asyncio.to_thread(
-            get_store(request).list_trash, unicodedata.normalize("NFC", q.strip())
-        )
-        return describe({"data": {"contents": contents}})
+        return await marked_page(request, response, "trash", q, limit, cursor)
 
     async def folder_page(request, parent_id, *, share_token=None, **options):
         sort = options["sort"]
@@ -869,13 +890,24 @@ def register_routes(
             raise HTTPException(409, str(exc)) from exc
 
     @app.get("/api/v1/shares", dependencies=admin)
-    async def shares(request: Request) -> Response:
-        records = await asyncio.to_thread(
-            get_store(request).list_shares,
-            include_expired=True,
-            token_factory=token_factory(settings),
-        )
-        return JSONResponse({"shares": records}, headers={"Cache-Control": "no-store"})
+    async def shares(
+        request: Request,
+        limit: int | None = Query(default=None, ge=1, le=500),
+        cursor: str | None = Query(default=None, max_length=MAX_CURSOR_LENGTH),
+    ) -> Response:
+        try:
+            page = await asyncio.to_thread(
+                get_store(request).list_shares_page,
+                include_expired=True,
+                token_factory=token_factory(settings),
+                limit=(limit or 100) if cursor is not None else limit,
+                after=cursor,
+            )
+        except DriveValidationError as error:
+            raise HTTPException(422, str(error)) from None
+        if limit is None and cursor is None:
+            del page["next_cursor"]
+        return JSONResponse(page, headers={"Cache-Control": "no-store"})
 
     def selected_share(store, payload):
         rows = store.list_shares(token_factory=token_factory(settings))

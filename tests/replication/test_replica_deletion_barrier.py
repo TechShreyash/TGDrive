@@ -48,12 +48,12 @@ async def test_catalog_delete_waits_for_backup_and_retains_original_messages(
     store.set_trashed(path, True)
     original_finish = store.finish_deletion
 
-    def checked_finish(intent_id):
+    def checked_finish(intent_id, *, return_messages=True):
         # The catalog subtree cannot disappear before its restore point exists.
         assert replica.journal.get("restore_point")
         copied = next(files_in(remote_bundle(remote, replica)["replica_catalog"]))
         assert remote.messages[BACKUP, copied["message_id"]] == b"abc"
-        return original_finish(intent_id)
+        return original_finish(intent_id, return_messages=return_messages)
 
     store.finish_deletion = checked_finish
     try:

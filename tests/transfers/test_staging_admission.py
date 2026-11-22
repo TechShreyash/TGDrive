@@ -420,7 +420,7 @@ def test_lower_cap_preserves_only_existing_claim_and_keeps_free_space_guard(
         manager._pending_staging["admitted"] = 80
     elif kind == "receipt":
         manager.uploads = SimpleNamespace(
-            _all=lambda: [
+            reservations=lambda: [
                 {
                     "id": "admitted",
                     "state": "receiving",

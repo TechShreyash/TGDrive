@@ -1619,3 +1619,40 @@ async def test_authorization_verifies_once_and_rechecks_next_invocation(
         assert verify.call_count == 2
     finally:
         restricted_writes.reset(token)
+
+
+@pytest.mark.parametrize("mode", ["normal", "lease", "recovery", "restart", "telegram"])
+def test_health_and_owner_status_reflect_admission(app_client, monkeypatch, mode):
+    from tgdrive.storage.mongo import DatabaseUnavailable
+    from tgdrive.telegram.client_pool import PoolHealth, PoolState
+
+    client, _, runtime, _ = app_client
+    login(client)
+
+    async def health():
+        return PoolHealth(PoolState.RUNNING, mode != "telegram", 1, 1, 1, 0, 1, 0)
+
+    monkeypatch.setattr(runtime, "pool", SimpleNamespace(health=health))
+    if mode == "lease":
+
+        def lost():
+            raise DatabaseUnavailable("simulated lease loss")
+
+        monkeypatch.setattr(runtime.mongo, "check_owner", lost)
+    if mode == "recovery":
+        runtime.recovery_only = True
+    if mode == "restart":
+        runtime.archive_restore_restart_required = True
+    try:
+        assert client.get("/health/live").status_code == 200
+        assert client.get("/health/ready").status_code == (
+            200 if mode == "normal" else 503
+        )
+        assert client.get("/healthz").status_code == (
+            503 if mode in {"lease", "telegram"} else 200
+        )
+        assert client.get("/api/v1/status").json()["admission_paused"] is (
+            mode not in {"normal", "telegram"}
+        )
+    finally:
+        runtime.recovery_only = False

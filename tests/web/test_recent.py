@@ -7,11 +7,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+import tests.support.app_fixtures as fixtures
 from tests.support.app_fixtures import FakeRuntime, make_settings
 from tests.support.mongo_fixtures import new_store
 from tgdrive.core.errors import ValidationError
 from tgdrive.web import app as app_module
 from tgdrive.web.app import create_app
+
+app_client = fixtures.app_client
 
 
 @pytest.fixture
@@ -156,3 +159,47 @@ def test_owner_opens_are_recorded_once_per_window_and_shares_never(
         assert stranger.get("/api/v1/recent").status_code == 401
     runtime.transfers.registry.close()
     store.close()
+
+
+def test_recent_records_distinct_opens_while_writer_is_busy(app_client, monkeypatch):
+    import threading
+
+    from tests.support.app_fixtures import login
+
+    client, store, _, _ = app_client
+    login(client)
+    first = store.add_file("/", "one.mkv", 21, 42)["id"]
+    second = store.add_file("/", "two.mkv", 22, 42)["id"]
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    recorded = []
+    original = store.mark_opened
+
+    def delayed(item_id):
+        if item_id == first:
+            started.set()
+            assert release.wait(4)
+        original(item_id)
+        recorded.append(item_id)
+        if item_id == second:
+            finished.set()
+
+    monkeypatch.setattr(store, "mark_opened", delayed)
+    try:
+        assert (
+            client.get("/api/v1/preview", params={"path": f"/{first}"}).status_code
+            == 200
+        )
+        assert started.wait(2)
+        for item_id in (second, second, first):
+            assert (
+                client.get(
+                    "/api/v1/preview", params={"path": f"/{item_id}"}
+                ).status_code
+                == 200
+            )
+    finally:
+        release.set()
+    assert finished.wait(2)
+    assert recorded == [first, second]

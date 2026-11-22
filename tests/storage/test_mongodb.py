@@ -8,7 +8,9 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
+from contextlib import closing, contextmanager
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -35,8 +37,8 @@ def mongo_uri():
     return uri
 
 
-@pytest.fixture
-def backend(tmp_path):
+@contextmanager
+def isolated_backend(tmp_path):
     uri = mongo_uri()
     name = "tgdrive_test_" + secrets.token_hex(8)
     instance = configure(tmp_path, uri, name)
@@ -51,6 +53,12 @@ def backend(tmp_path):
 
 
 @pytest.fixture
+def backend(tmp_path):
+    with isolated_backend(tmp_path) as instance:
+        yield instance
+
+
+@pytest.fixture
 def store(backend):
     instance = MongoStore.create(backend)
     try:
@@ -61,6 +69,28 @@ def store(backend):
 
 def path(row):
     return row["path"].rstrip("/") + "/" + row["id"]
+
+
+async def test_pristine_startup_builds_catalog_indexes_once(
+    backend, tmp_path, monkeypatch
+):
+    from tests.support.app_fixtures import make_settings
+    from tgdrive.recovery.mongo_backup import MongoProtection
+    from tgdrive.storage.mongo import initialize_if_empty
+
+    settings = make_settings(tmp_path)
+    indexes = Mock(wraps=MongoStore._indexes)
+    monkeypatch.setattr(MongoStore, "_indexes", staticmethod(indexes))
+
+    assert initialize_if_empty(settings, backend)
+    store = await MongoProtection(settings, None, backend).restore()
+    try:
+        indexes.assert_called_once_with(backend)
+        folder = store.create_folder("/", "Reopened")
+        assert store.get_directory(path(folder))["name"] == "Reopened"
+        assert "active_sibling_names" in backend.db.nodes.index_information()
+    finally:
+        store.close()
 
 
 def test_pending_deletion_survives_an_unrelated_precommit_receipt_read(
@@ -784,23 +814,28 @@ def test_multiple_independent_share_links_survive_mongo_reopen_and_snapshot(
     target = path(folder)
     first = store.create_share(target, label="Alex", expires_at=None)
     second = store.create_share(target, label="Team")
-    rows = store.list_shares(target)
+    first_id = next(
+        row["id"] for row in store.list_shares(target) if row["label"] == "Alex"
+    )
     store.update_share(
-        rows[0]["id"],
+        first_id,
         label="Alex review",
         expires_at=(datetime.now(UTC) + timedelta(days=30)).isoformat(),
     )
     reopened = MongoStore(backend)
     assert reopened.authorize_directory(target, first) == target
     assert reopened.authorize_directory(target, second) == target
-    assert reopened.list_shares(target)[0]["label"] == "Alex review"
+    assert {row["label"] for row in reopened.list_shares(target)} == {
+        "Alex review",
+        "Team",
+    }
     portable = store_from_payload(reopened.export())
     try:
         assert portable.authorize_directory(target, first) == target
         assert portable.authorize_directory(target, second) == target
     finally:
         portable.close()
-    reopened.revoke_share(rows[0]["id"])
+    reopened.revoke_share(first_id)
     assert not reopened.authorize_directory(target, first)
     assert reopened.authorize_directory(target, second) == target
 
@@ -823,6 +858,54 @@ def test_protected_share_stays_locked_after_mongo_reopen_and_recovery(store, bac
             )
     finally:
         portable.close()
+
+
+def test_shared_file_lookup_revalidates_scope_password_and_expiry(
+    store, backend, monkeypatch
+):
+    from tgdrive.storage import mongo_store
+    from tgdrive.storage.mongo_store import ShareDenied
+    from tgdrive.web.share_links import share_password_hasher
+
+    folder = path(store.create_folder("/", "Shared"))
+    other = path(store.create_folder("/", "Private"))
+    item = store.add_file(folder, "Report.pdf", 42, 100)
+    short_path = "/" + item["id"]
+    original = share_password_hasher.hash("first-fixture-password")
+    replacement = share_password_hasher.hash("second-fixture-password")
+    token = store.create_share(folder, password_hash=original)
+    share_id = store.list_shares(folder)[0]["id"]
+
+    def unlock(value):
+        return value == original
+
+    def separate_share_read(_token):
+        pytest.fail("Shared file delivery should use the joined share document")
+
+    monkeypatch.setattr(store, "_active_share", separate_share_read)
+    assert (
+        store.get_file(short_path, share_token=token, share_unlock=unlock)["id"]
+        == item["id"]
+    )
+    assert "requested_share" not in store.get_file(
+        short_path, share_token=token, share_unlock=unlock
+    )
+    store.update_share(share_id, password_hash=replacement)
+    with pytest.raises(SharePasswordRequired):
+        store.get_file(short_path, share_token=token, share_unlock=unlock)
+
+    store.update_share(share_id, password_hash=None, expires_at="2099-01-01T00:00:00Z")
+    with monkeypatch.context() as expired:
+        expired.setattr(mongo_store, "_utc_now", lambda: "2099-01-01T00:00:00Z")
+        with pytest.raises(ShareDenied):
+            store.get_file(short_path, share_token=token)
+    assert store.get_file(short_path, share_token=token)["message_id"] == 42
+
+    store.move(short_path, other)
+    with pytest.raises(ShareDenied):
+        store.get_file(short_path, share_token=token)
+    assert store.get_file(short_path)["message_id"] == 42
+    assert backend.db.shares.count_documents({}) == 1
 
 
 def test_share_opens_concurrently_deduplicate_and_restore_legacy_counts(store, backend):
@@ -885,3 +968,457 @@ def test_starred_mongo_paths_snapshot_and_restart(store, backend):
 
     check_starred(store)
     assert len(MongoStore(backend).list_starred()) == 1
+
+
+def test_marked_and_share_pages_keep_mongodb_reads_bounded(tmp_path, monkeypatch):
+    from tests.support.mixed_workload_probe import MongoCommands
+    from tgdrive.storage import mongo
+
+    commands = MongoCommands()
+    mongo_client = mongo.MongoClient
+
+    def monitored_client(*args, **kwargs):
+        return mongo_client(*args, event_listeners=[commands], **kwargs)
+
+    monkeypatch.setattr(mongo, "MongoClient", monitored_client)
+
+    def read_page(view, read):
+        before = commands.snapshot()
+        page = read()
+        observed = commands.snapshot() - before
+        queries = sum(
+            count
+            for (_, command), count in observed.items()
+            if command in {"find", "aggregate", "getMore", "count", "distinct"}
+        )
+        assert 0 < queries <= 4, (view, observed)
+        return page
+
+    with (
+        isolated_backend(tmp_path) as backend,
+        closing(MongoStore.create(backend)) as store,
+    ):
+        commands.database = backend.db.name
+        items = []
+        for index in range(26):
+            folder = path(store.create_folder("/", f"Folder {index:02d}"))
+            item = path(store.add_file(folder, f"File {index:02d}.txt", index + 100, 1))
+            items.append(item)
+            store.set_starred(item, True)
+            store.create_share(item)
+
+        starred = read_page(
+            "starred", lambda: store.list_marked_page("starred", limit=25)
+        )
+        first_ids = [item.rsplit("/", 1)[-1] for item in items[:25]]
+        assert list(starred["contents"]) == first_ids
+        assert starred["next_cursor"]
+
+        shares = read_page("shares", lambda: store.list_shares_page(limit=25))
+        shared_paths = {row["path"] for row in shares["shares"]}
+        assert shared_paths.issubset(items)
+        assert len(shared_paths) == 25 and shares["next_cursor"]
+
+        for item in items:
+            store.set_trashed(item, True)
+        trash = read_page("trash", lambda: store.list_marked_page("trash", limit=25))
+        assert list(trash["contents"]) == first_ids
+        assert trash["next_cursor"]
+
+
+def test_legacy_node_migration_survives_restart_and_skips_completed_scans(
+    store, backend, monkeypatch
+):
+    node = store.add_file("/", "legacy.txt", 77, 3)
+    identity = node["_id"] if "_id" in node else node["id"]
+    backend.db.catalog.update_one(
+        {"_id": "catalog"}, {"$unset": {"node_fields_version": ""}}
+    )
+    backend.db.nodes.update_one(
+        {"_id": identity},
+        {
+            "$set": {"id": identity, "fold": "legacy.txt", "grams": ["leg"]},
+            "$unset": {"group": "", "tokens": ""},
+        },
+    )
+
+    # The backfill is safe to repeat if the process dies before marking it done.
+    store._migrate_node_fields(backend)
+    backend.db.catalog.update_one(
+        {"_id": "catalog"}, {"$unset": {"node_fields_version": ""}}
+    )
+    MongoStore(backend).close()
+    migrated = backend.db.nodes.find_one({"_id": identity})
+    assert migrated is not None
+    assert migrated["group"] and "legacy" in migrated["tokens"]
+    assert not {"id", "fold", "grams"} & migrated.keys()
+
+    def unexpected(_backend):
+        pytest.fail("Completed node migration ran again")
+
+    monkeypatch.setattr(MongoStore, "_migrate_node_fields", staticmethod(unexpected))
+    MongoStore(backend).close()
+
+
+@pytest.mark.asyncio
+async def test_indexed_numbered_history_matches_legacy_across_rebuild_and_archive(
+    backend, monkeypatch
+):
+    import time
+
+    from tgdrive.transfers import task_history_index
+    from tgdrive.transfers.task_history_index import HISTORY_INDEX
+
+    monkeypatch.setattr(task_history_index, "_BATCH", 2)
+    folder = {
+        "id": "summer-photos",
+        "name": "Śummer folder",
+        "created_at": 15,
+        "root_path": "/summer",
+    }
+    other = {
+        "id": "older-folder",
+        "name": "Other",
+        "created_at": 1,
+        "root_path": "/older",
+    }
+    members = [
+        ("scan-a", 40, "completed", "report [*.txt]", None),
+        ("scan-b", 36, "completed", "old report", None),
+        ("scan-c", 35, "error", "other error", None),
+        ("scan-d", 33, "completed", "Straße.jpg", folder),
+        ("scan-e", 25, "cancelled", "nested picture", folder),
+        ("scan-f", 8, "completed", "other nested picture", other),
+    ]
+    backend.db.jobs.insert_many(
+        [
+            {
+                "_id": identity,
+                "archived": True,
+                "created_at": at,
+                "status": status,
+                "summary": {
+                    "id": identity,
+                    "kind": "upload",
+                    "created_at": at,
+                    "status": status,
+                    "name": name,
+                    **({"folder_upload": parent} if parent else {}),
+                },
+            }
+            for identity, at, status, name, parent in members
+        ]
+    )
+    registry = TransferRegistry(
+        mongo=backend.db.jobs, mongo_backend=backend, ttl_seconds=1
+    )
+    index = registry._history_index
+    assert index is not None
+    index.ensure_indexes()
+    assert not index.rebuild_step()
+    header = backend.db.runtime.find_one({"_id": HISTORY_INDEX})
+    assert not header["ready"] and header["total_tasks"] == 2
+    # Simulate resuming a partial generation written before totals were stored.
+    backend.db.runtime.update_one(
+        {"_id": HISTORY_INDEX}, {"$unset": {"total_tasks": ""}}
+    )
+    created = await registry.create(
+        "running",
+        total=10,
+        transfer_id="live-child",
+        context={"kind": "upload", "name": "Live photo", "folder_upload": folder},
+    )
+    created.created_at = 18
+    await registry.update(created.id, status=TransferStatus.RUNNING)
+    live = [registry.history_snapshot(record) for record in registry.list()]
+    pending = dict(
+        status="all", page=1, limit=2, query="", offset=None, exclude_folders=()
+    )
+    legacy = registry._numbered_history(live, **pending)
+    assert index.numbered(live, **pending) is None
+    # Reopen on the durable backfill cursor and complete the index.
+    registry.close()
+    registry = TransferRegistry(
+        mongo=backend.db.jobs, mongo_backend=backend, ttl_seconds=1
+    )
+    try:
+        assert await registry.task_history(limit=2) == legacy
+        builder = registry._history_builder
+        if builder is not None:
+            await builder
+        header = backend.db.runtime.find_one({"_id": HISTORY_INDEX})
+        assert header["ready"] and header["total_tasks"] == 5
+        reopened_index = registry._history_index
+        assert reopened_index is not None
+        with monkeypatch.context() as no_count:
+
+            def unexpected_count(*args, **kwargs):
+                raise AssertionError("Unfiltered history recounted archived tasks")
+
+            no_count.setattr(
+                type(reopened_index.tasks), "count_documents", unexpected_count
+            )
+            assert reopened_index.numbered(live, **pending) == legacy
+
+        for status in ("all", "finished", "running", "completed", "error", "cancelled"):
+            for query in ("", "strasse", "[*.txt]", "śummer", "nested", "no matches"):
+                for page, offset in (
+                    (1, None),
+                    (2, None),
+                    (99, None),
+                    (1, 2),
+                    (1, 4),
+                    (1, 99),
+                ):
+                    options = pending | {
+                        "status": status,
+                        "query": query,
+                        "page": page,
+                        "offset": offset,
+                    }
+                    reopened_index = registry._history_index
+                    assert reopened_index is not None
+                    assert reopened_index.numbered(
+                        live, **options
+                    ) == registry._numbered_history(live, **options)
+
+        # The derived collection and members change together when clearing.
+        assert await registry.clear_history(exclude_folders=(other["id"],)) == 3
+        after = await registry.task_history(limit=2)
+        assert after["total_tasks"] == 2
+        assert backend.db.runtime.find_one({"_id": HISTORY_INDEX})["total_tasks"] == 2
+        assert {row["id"] for row in after["jobs"]} == {
+            "scan-d",
+            "scan-e",
+            "scan-f",
+            "live-child",
+        }
+
+        await registry.update("live-child", status=TransferStatus.COMPLETED)
+        await registry.prune(now=time.time() + 2)
+        assert (await registry.task_history(status="cancelled"))["total_tasks"] == 1
+        assert backend.db.runtime.find_one({"_id": HISTORY_INDEX})["total_tasks"] == 2
+
+        separate = await registry.create(
+            "running", total=1, context={"kind": "upload", "name": "Standalone"}
+        )
+        await registry.update(separate.id, status=TransferStatus.COMPLETED)
+        await registry.prune(now=time.time() + 2)
+        assert backend.db.runtime.find_one({"_id": HISTORY_INDEX})["total_tasks"] == 3
+
+        # A source replay of an archived member must retire it from the index.
+        reused = await registry.create(
+            "queued",
+            transfer_id="scan-e",
+            context={"kind": "upload", "name": "Replay"},
+        )
+        assert (await registry.task_history(status="cancelled"))["total_tasks"] == 0
+        assert (await registry.task_history(status="queued"))["jobs"][0][
+            "id"
+        ] == reused.id
+        assert backend.db.runtime.find_one({"_id": HISTORY_INDEX})["total_tasks"] == 3
+        expected = await registry.task_history()
+        assert expected["total_tasks"] == 4
+
+        # A ready generation without a saved total still serves current history.
+        backend.db.runtime.update_one(
+            {"_id": HISTORY_INDEX}, {"$unset": {"total_tasks": ""}}
+        )
+        assert await registry.task_history() == expected
+        builder = registry._history_builder
+        if builder is not None:
+            await builder
+        assert backend.db.runtime.find_one({"_id": HISTORY_INDEX})["total_tasks"] == 3
+    finally:
+        await registry.shutdown()
+        registry.close()
+
+
+def test_large_deletion_manifest_resumes_with_small_buckets(
+    store, backend, monkeypatch
+):
+    from tgdrive.storage import mongo_store
+    from tgdrive.storage.deletion_batches import BUCKET_SIZE
+
+    monkeypatch.setattr(mongo_store, "_BATCH", 2)
+
+    folder = store.create_folder("/", "Delete multipart tree")
+    unrelated = store.add_file("/", "Retain.bin", 77_777, 1)
+    root = path(folder)
+    branch = store.create_folder(root, "Branch")
+    nested = store.create_folder(path(branch), "Nested")
+    empty = store.create_folder(root, "Empty")
+    surviving_share = store.create_share(path(unrelated))
+    store.create_share(root)
+    store.create_share(path(branch))
+    store.create_share(path(nested))
+    store.create_share(path(empty))
+    checksum = "a" * 64
+    count = BUCKET_SIZE + 18
+    parts = [
+        {"index": i, "offset": i, "size": 1, "message_id": i + 1, "sha256": checksum}
+        for i in range(count)
+    ]
+    poster_id = 2 * BUCKET_SIZE + 1
+    file = store.add_file(
+        path(nested),
+        "parts.mkv",
+        1,
+        count,
+        parts=parts,
+        sha256=checksum,
+        poster={"message_id": poster_id, "size": 8, "sha256": checksum},
+    )
+    store.set_trashed(root, True)
+    assert store.authorize_file(path(unrelated), surviving_share)
+    assert backend.db.shares.count_documents({}) == 1
+    intent = store.begin_deletion(root, channel_id=-100123)
+    identity = intent["id"]
+    assert intent["message_count"] == count + 1
+    assert intent["message_ids"] == []
+    batches = backend.db.deletions.find({"intent_id": identity}).sort("bucket", 1)
+    assert [len(part["message_ids"]) for part in batches] == [BUCKET_SIZE, 18, 1]
+    assert store.list_trash() == {}
+
+    # A valid confirmation earlier in the request must roll back when a later
+    # ID is unrelated. Replaying an already confirmed ID must also be safe.
+    with pytest.raises(ValidationError, match="unrelated"):
+        store.confirm_deletion_messages(
+            identity, [1, unrelated.get("message_id", 77_777)]
+        )
+    assert (
+        1
+        in backend.db.deletions.find_one({"_id": identity + ":0"})[
+            "pending_message_ids"
+        ]
+    )
+    store.confirm_deletion_messages(identity, [1, BUCKET_SIZE + 1])
+    store.fail_deletion(identity, "simulated interruption")
+    reopened = MongoStore(backend)
+    try:
+        restored = reopened.deletion_intent(identity)
+        assert restored is not None and restored["state"] == "failed"
+        assert reopened.begin_deletion(root)["id"] == identity
+        reopened.confirm_deletion_messages(identity, [1, BUCKET_SIZE + 1])
+        pending = reopened.export()["deletions"][0]["pending_message_ids"]
+        assert len(pending) == count - 1
+        assert poster_id in pending
+        assert 1 not in pending and BUCKET_SIZE + 1 not in pending
+        assert reopened.finish_deletion(identity, return_messages=False) == []
+        assert reopened.finish_deletion(identity) == []
+        assert reopened.pending_deletions() == []
+        assert reopened.message_ids(path(unrelated)) == [77_777]
+        removed = [row["id"] for row in (folder, branch, nested, empty, file)]
+        assert backend.db.nodes.count_documents({"_id": {"$in": removed}}) == 0
+        assert backend.db.deletions.count_documents({"intent_id": identity}) == 0
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("batched_manifest", [False, True])
+def test_staged_deletion_recovers_with_connected_tree_and_shared_references(
+    store, backend, monkeypatch, batched_manifest
+):
+    from tgdrive.storage import mongo_store
+
+    monkeypatch.setattr(mongo_store, "_BATCH", 2)
+    target = path(store.create_folder("/", "Delete"))
+    first = path(store.create_folder(target, "First"))
+    second = path(store.create_folder(first, "Second"))
+    messages = [41] * 5
+    if batched_manifest:
+        monkeypatch.setattr(mongo_store, "BUCKET_SIZE", 2)
+        messages = [41, 41, 41, 45, 2500]
+    files = [
+        store.add_file(second, f"File {i}", message, 3)
+        for i, message in enumerate(messages)
+    ]
+    unrelated = path(store.add_file("/", "Keep", 41, 3))
+    share = store.create_share(unrelated)
+    store.set_trashed(target, True)
+    intent = store.begin_deletion(target)
+    original = store._remove_nodes
+    committed = 0
+
+    def interrupt_after_first_batch(identities, deadline):
+        nonlocal committed
+        if committed:
+            raise RuntimeError("stopped between committed deletion batches")
+        count = original(identities, deadline)
+        committed += count
+        return count
+
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(store, "_remove_nodes", interrupt_after_first_batch)
+        with pytest.raises(RuntimeError, match="between committed"):
+            store.finish_deletion(intent["id"])
+    assert committed == 2
+    assert store.statistics()["trashed_files"] == 3
+    remaining = sorted(
+        {
+            row["message_id"]
+            for row in backend.db.nodes.find(
+                {"_id": {"$in": [file["id"] for file in files]}}
+            )
+        }
+    )
+    assert 41 in remaining
+    retained = store.deletion_intent(intent["id"])
+    assert retained is not None
+    if batched_manifest:
+        assert retained["message_count"] == len(remaining)
+    else:
+        assert retained["message_ids"] == remaining
+    snapshot = store_from_payload(store.export())
+    try:
+        assert snapshot.statistics()["trashed_bytes"] == 9
+        exported = snapshot.deletion_intent(intent["id"])
+        assert exported is not None
+        assert exported["message_ids"] == remaining
+        assert snapshot.get_file(unrelated, share_token=share)["message_id"] == 41
+    finally:
+        snapshot.close()
+
+    reopened = MongoStore(backend)
+    try:
+        assert reopened.finish_deletion(intent["id"]) == remaining
+        assert reopened.finish_deletion(intent["id"]) == []
+        assert reopened.pending_deletions() == []
+        assert reopened.statistics()["trashed_files"] == 0
+        assert reopened.get_file(unrelated, share_token=share)["message_id"] == 41
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("outside_links", [1, 5])
+def test_trash_revokes_links_across_large_subtree_batches(
+    store, monkeypatch, outside_links
+):
+    from tgdrive.storage import mongo_store
+
+    monkeypatch.setattr(mongo_store, "_BATCH", 3)
+    target = path(store.create_folder("/", "Target"))
+    branch = path(store.create_folder(target, "Branch"))
+    inside = path(store.add_file(branch, "Inside.bin", 1, 1))
+    store.add_file(target, "First.bin", 2, 1)
+    store.add_file(branch, "Second.bin", 3, 1)
+    store.create_share(target)
+    store.create_share(inside)
+    outside = path(store.add_file("/", "Outside.bin", 4, 1))
+    kept = [store.create_share(outside) for _ in range(outside_links)]
+    ancestry_batches = []
+    chains = store._chains
+
+    def track_chains(identities):
+        ancestry_batches.append(len(identities))
+        return chains(identities)
+
+    monkeypatch.setattr(store, "_chains", track_chains)
+    store.set_trashed(target, True)
+    assert ancestry_batches == ([3] if outside_links == 1 else [])
+    store.set_trashed(target, False)
+    assert store.list_shares(target) == []
+    assert store.list_shares(inside) == []
+    assert len(store.list_shares(outside)) == outside_links
+    for token in kept:
+        assert store.get_file(outside, share_token=token)["message_id"] == 4

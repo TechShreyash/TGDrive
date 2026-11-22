@@ -29,6 +29,7 @@ from tgdrive.transfers.manager import (
     TransferEmptyFile,
     TransferError,
     _media_from_message,
+    _worker,
 )
 from tgdrive.transfers.staging import (
     StorageUnavailable,
@@ -266,7 +267,7 @@ async def upload_multipart(manager, record, local_path, destination, file_name, 
         if manager._check_upload_allowed is not None and not context.get(
             "multipart_plan"
         ):
-            manager._check_upload_allowed()
+            await _worker(manager._check_upload_allowed)
         else:
             await manager._verify_lineage(record)
         destination = await manager._check_destination_or_cancel(record, destination)

@@ -66,6 +66,7 @@ async def test_revoking_a_share_stops_cached_http_body_even_with_owner_cookie(
     runtime.pool = pool
     app = app_module.create_app(settings, runtime=runtime)
     headers = [(b"host", b"testserver")]
+    cookie = None
     if owner:
         cookie = app.state.sessions.create()
         headers.append((b"cookie", f"{SESSION_COOKIE}={cookie}".encode()))
@@ -132,11 +133,40 @@ async def test_revoking_a_share_stops_cached_http_body_even_with_owner_cookie(
 
         await app(scope(), receive, collect)
         assert denied[0]["status"] == 403
-        if owner:
+        if cookie is not None:
             denied.clear()
             await app(scope(supplied_token=False), receive, collect)
             assert denied[0]["status"] == 200
             assert b"".join(value.get("body", b"") for value in denied) == payload
+            sent.clear()
+
+            async def replace_on_first_body(value):
+                sent.append(value)
+                if value["type"] == "http.response.body" and value.get("body"):
+                    store.db.nodes.update_one(
+                        {"_id": identity}, {"$set": {"message_id": 78}}
+                    )
+
+            with pytest.raises(
+                RuntimeError, match="response already started"
+            ) as replaced:
+                await app(scope(supplied_token=False), receive, replace_on_first_body)
+            assert getattr(replaced.value.__cause__, "status_code", None) == 409
+            assert b"".join(value.get("body", b"") for value in sent) == payload[:BLOCK]
+            assert all(row.active_leases == 0 for row in await pool.status())
+            store.db.nodes.update_one({"_id": identity}, {"$set": {"message_id": 77}})
+            sent.clear()
+
+            async def logout_on_first_body(value):
+                sent.append(value)
+                if value["type"] == "http.response.body" and value.get("body"):
+                    app.state.sessions.revoke(cookie)
+
+            with pytest.raises(RuntimeError, match="response already started"):
+                await app(scope(supplied_token=False), receive, logout_on_first_body)
+            assert b"".join(value.get("body", b"") for value in sent) == payload[:BLOCK]
+            assert sum(client.native.requests.values()) == reads
+            assert all(row.active_leases == 0 for row in await pool.status())
         assert store.get_file(path)["size"] == len(payload)
     finally:
         await pool._media_read_cache.close()

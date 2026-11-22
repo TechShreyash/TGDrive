@@ -26,10 +26,10 @@ def document(identity, size):
     )
 
 
-def message(identity, size, alternates=()):
+def message(identity, size, alternates=(), *, message_id=77, channel_id=123):
     return types.Message(
-        id=77,
-        peer_id=types.PeerChannel(123),
+        id=message_id,
+        peer_id=types.PeerChannel(channel_id),
         date=datetime.now(UTC),
         message="",
         media=types.MessageMediaDocument(

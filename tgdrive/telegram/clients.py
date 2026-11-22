@@ -527,7 +527,12 @@ class Client:
                 await asyncio.to_thread(Path(session_name).chmod, 0o600)
             if isinstance(self.native, TelegramClient):
                 await self._refresh_main_endpoint()
-            self._start_identity_refresh(seed=me)
+            deadline = None
+            if self._identity_pool is not None:
+                deadline = await self._saved_identity_deadline()
+                if deadline > time.time():
+                    await self._identity_pool.defer_client(self.name, deadline)
+            self._start_identity_refresh(seed=me, deadline=deadline)
             self.connection_error = None
             self._connection_task = asyncio.create_task(
                 self._watch_connection(), name=f"telegram-repair-{self.name}"
@@ -741,16 +746,26 @@ class Client:
         self._identity_next_refresh = time.monotonic() + 5
         self._start_identity_refresh()
 
-    def _start_identity_refresh(self, *, seed: Any = None) -> None:
+    def _start_identity_refresh(
+        self, *, seed: Any = None, deadline: float | None = None
+    ) -> None:
         if not self.identity_refreshing:
-            self._identity_task = asyncio.create_task(self._refresh_identity(seed))
+            self._identity_task = asyncio.create_task(
+                self._refresh_identity(seed, deadline)
+            )
 
-    async def _refresh_identity(self, seed: Any) -> None:
-        delay = 5.0
+    async def _saved_identity_deadline(self) -> float:
         try:
-            deadline = await asyncio.to_thread(self._identity_cache.retry_at, self.name)
+            return await asyncio.to_thread(self._identity_cache.retry_at, self.name)
         except Exception:
-            deadline = 0.0
+            return 0.0
+
+    async def _refresh_identity(self, seed: Any, deadline: float | None) -> None:
+        delay = 5.0
+        if deadline is None:
+            deadline = await self._saved_identity_deadline()
+            if deadline > time.time() and self._identity_pool is not None:
+                await self._identity_pool.defer_client(self.name, deadline)
         if seed is not None:
             try:
                 saved = await asyncio.to_thread(self._identity_cache.read, self.name)
@@ -765,8 +780,6 @@ class Client:
                 saved = None  # The optional cache cannot prevent client startup.
         if deadline > time.time():
             self.identity_retry_at = deadline
-            if self._identity_pool is not None:
-                await self._identity_pool.defer_client(self.name, deadline)
             await self._wait_identity_retry(deadline - time.time())
             seed = None
         while True:
@@ -870,7 +883,7 @@ class Client:
             else:
                 async with scheduler.request():
                     result = await self.native.get_messages(channel, ids=message_ids)
-        except FloodWaitError as error:
+        except (FloodWaitError, FloodPremiumWaitError) as error:
             if scheduler is not None:
                 await scheduler.flood(max(1, error.seconds) + 0.25)
             await self._defer_read(error)

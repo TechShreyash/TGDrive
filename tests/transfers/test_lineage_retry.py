@@ -34,12 +34,25 @@ async def close(manager, pool):
 
 async def wait_phase(record, phase):
     async with asyncio.timeout(2):
-        while record.phase != phase:  # noqa: ASYNC110 - observe durable job state
+        while record.committed.phase != phase:  # noqa: ASYNC110 - observe durable job state
             await asyncio.sleep(0.001)
 
 
-async def test_provider_wait_retries_same_upload_and_exposes_deadline(tmp_path):
+async def test_provider_wait_retries_same_upload_and_exposes_deadline(
+    tmp_path, monkeypatch
+):
     manager, pool, client = await ready_manager(tmp_path)
+    waiting, release = asyncio.Event(), asyncio.Event()
+    update = manager.registry.update
+
+    async def hold_committed_wait(transfer_id, **changes):
+        result = await update(transfer_id, **changes)
+        if changes.get("phase") == "retry_wait" and not waiting.is_set():
+            waiting.set()
+            await release.wait()
+        return result
+
+    monkeypatch.setattr(manager.registry, "update", hold_committed_wait)
     manager._ensure_lineage = AsyncMock(
         side_effect=[
             BackupError("Provider cooldown", retry_after=0.05),
@@ -47,11 +60,15 @@ async def test_provider_wait_retries_same_upload_and_exposes_deadline(tmp_path):
         ]
     )
     source = staged_file(tmp_path)
+    requested_at = time.time()
     record = await manager.enqueue_upload(source, "/", "one.bin", source.stat().st_size)
     try:
-        await wait_phase(record, "retry_wait")
-        assert record.as_dict()["retry_at"] > time.time()
+        await asyncio.wait_for(waiting.wait(), 2)
+        snapshot = record.as_dict()
+        assert snapshot["phase"] == "retry_wait"
+        assert snapshot["retry_at"] > requested_at
         assert not client.sent
+        release.set()
         assert record.task is not None
         await asyncio.wait_for(record.task, 2)
         assert record.status == TransferStatus.COMPLETED
@@ -60,6 +77,7 @@ async def test_provider_wait_retries_same_upload_and_exposes_deadline(tmp_path):
         assert "lineage_retry_at" not in record.context
         assert not source.exists()
     finally:
+        release.set()
         await close(manager, pool)
 
 

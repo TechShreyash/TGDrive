@@ -20,8 +20,9 @@ import secrets
 import threading
 import time
 import unicodedata
-from contextlib import contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from datetime import UTC, datetime, timedelta
+from itertools import batched, chain, islice
 from typing import Any
 
 from pymongo import ASCENDING, DESCENDING, UpdateOne
@@ -38,6 +39,15 @@ from tgdrive.core.errors import (
     TrashedItemError,
     UnsupportedSchemaError,
     ValidationError,
+)
+from tgdrive.storage.deletion_batches import (
+    BUCKET_SIZE,
+    batch_id,
+    batched_count,
+    bucket_messages,
+    deletion_plan,
+    node_messages,
+    validate_batch,
 )
 from tgdrive.storage.demo_files import DEMO_FILES_ID, DEMO_FILES_NAME, check_ids
 from tgdrive.storage.file_parts import validate_parts, validate_poster, validate_sha256
@@ -129,10 +139,6 @@ def _expiry_date(timestamp):
     return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
 
-def _clean(row):
-    return {k: v for k, v in row.items() if k != "_id"}
-
-
 def mongo_nodes(catalog):
     """MongoDB node documents (with search keys) for a portable catalog."""
     stack = [(catalog["root"], None)]
@@ -207,11 +213,11 @@ def _decode_cursor(value, sort):
         if not 0 <= key < 2**63:
             raise ValidationError("Invalid cursor size")
     else:
-        if sort == "name" and len(key) > 3 * MAX_NAME_LENGTH:
+        if sort in {"name", "starred", "trash"} and len(key) > 3 * MAX_NAME_LENGTH:
             raise ValidationError("Invalid cursor name")
         if sort == "type":
             _validate_id(key)
-        if sort == "date":
+        if sort in {"date", "shares"}:
             try:
                 _validate_timestamp(key)
             except OverflowError:
@@ -278,6 +284,8 @@ class MongoStore:
                 raise CorruptStoreError("MongoDB catalog root is missing")
         except (KeyError, TypeError, AttributeError) as error:
             raise CorruptStoreError("Catalog contains a malformed record") from error
+        if metadata.get("node_fields_version", 0) < 1:
+            self._migrate_node_fields(backend)
         self._indexes(backend)
 
     # ----------------------------------------------------------- lifecycle
@@ -290,6 +298,22 @@ class MongoStore:
         storage_channel: int | None = None,
         initial_settings: list[dict[str, Any]] | None = None,
     ) -> MongoStore:
+        cls.initialize_catalog(
+            backend,
+            storage_channel=storage_channel,
+            initial_settings=initial_settings,
+        )
+        return cls(backend)
+
+    @classmethod
+    def initialize_catalog(
+        cls,
+        backend: MongoBackend,
+        *,
+        storage_channel: int | None = None,
+        initial_settings: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Commit a new catalog. Opening the store ensures its indexes."""
         backend.ping()
         if storage_channel is not None:
             storage_channel = _validate_channel_id(storage_channel)
@@ -297,6 +321,7 @@ class MongoStore:
         metadata = {
             "_id": "catalog",
             "schema_version": SCHEMA_VERSION,
+            "node_fields_version": 1,
             "drive_id": secrets.token_urlsafe(16),
             "revision": 2 if bound else 1,
             "backed_up_revision": 2 if bound else 1,
@@ -331,46 +356,15 @@ class MongoStore:
             with backend._settings_lock:
                 backend._settings_cached = False
                 backend._settings_document = None
-        cls._indexes(backend)
-        return cls(backend)
 
     @staticmethod
-    def _indexes(backend):
+    def _migrate_node_fields(backend):
         nodes = backend.db.nodes
-        nodes.create_index(
-            [("parent_id", 1), ("name_key", 1)],
-            unique=True,
-            partialFilterExpression={"trashed": False},
-            name="active_sibling_names",
-        )
-        # Listing and every sort order of a folder page; children of a parent.
-        for field in ("name_key", "size", "upload_date"):
-            nodes.create_index(
-                [("parent_id", 1), ("trashed", 1), ("kind", 1), (field, 1), ("_id", 1)]
-            )
-        # Type-filtered pages ("Photos & videos" and so on). Only the default
-        # name order gets its own index: size and date filters reuse the kind
-        # indexes and skip other types, which keeps free-tier index space down.
-        nodes.create_index(
-            [
-                ("parent_id", 1),
-                ("trashed", 1),
-                ("group", 1),
-                ("name_key", 1),
-                ("_id", 1),
-            ]
-        )
         # Every node used to repeat its ID in "id" and a folded name in "fold";
         # both are derived on read now. Drop them once to save space.
         old_fields = {"$or": [{"id": {"$exists": True}}, {"fold": {"$exists": True}}]}
         if nodes.find_one(old_fields, {"_id": 1}):
             nodes.update_many(old_fields, {"$unset": {"id": "", "fold": ""}})
-        # Recent: files the owner opened or uploaded, newest activity first.
-        nodes.create_index(
-            [("active_at", -1), ("_id", -1)],
-            partialFilterExpression={"active_at": {"$exists": True}},
-            name="recent_activity",
-        )
         # Nodes written before the field existed get it once; later writes set it.
         missing = nodes.find({"group": {"$exists": False}}, {"name": 1, "kind": 1})
         batch = []
@@ -402,6 +396,42 @@ class MongoStore:
             nodes.bulk_write(batch, ordered=False)
         if "grams_1" in nodes.index_information():
             nodes.drop_index("grams_1")
+        backend.db.catalog.update_one(
+            {"_id": "catalog"}, {"$set": {"node_fields_version": 1}}
+        )
+
+    @staticmethod
+    def _indexes(backend):
+        nodes = backend.db.nodes
+        nodes.create_index(
+            [("parent_id", 1), ("name_key", 1)],
+            unique=True,
+            partialFilterExpression={"trashed": False},
+            name="active_sibling_names",
+        )
+        # Listing and every sort order of a folder page; children of a parent.
+        for field in ("name_key", "size", "upload_date"):
+            nodes.create_index(
+                [("parent_id", 1), ("trashed", 1), ("kind", 1), (field, 1), ("_id", 1)]
+            )
+        # Type-filtered pages ("Photos & videos" and so on). Only the default
+        # name order gets its own index: size and date filters reuse the kind
+        # indexes and skip other types, which keeps free-tier index space down.
+        nodes.create_index(
+            [
+                ("parent_id", 1),
+                ("trashed", 1),
+                ("group", 1),
+                ("name_key", 1),
+                ("_id", 1),
+            ]
+        )
+        # Recent: files the owner opened or uploaded, newest activity first.
+        nodes.create_index(
+            [("active_at", -1), ("_id", -1)],
+            partialFilterExpression={"active_at": {"$exists": True}},
+            name="recent_activity",
+        )
         nodes.create_index("tokens")
         nodes.create_index(
             [("trashed", 1), ("name_key", 1)],
@@ -413,6 +443,12 @@ class MongoStore:
             partialFilterExpression={"starred": True},
             name="starred_items",
         )
+        for flag in ("trashed", "starred"):
+            nodes.create_index(
+                [(flag, 1), ("name_key", 1), ("_id", 1)],
+                partialFilterExpression={flag: True},
+            )
+        backend.db.shares.create_index([("created_at", 1), ("_id", 1)])
         backend.db.shares.create_index("token_hash", unique=True)
         backend.db.shares.create_index("node_id")
         backend.db.shares.create_index("expire_at", expireAfterSeconds=0)
@@ -420,6 +456,7 @@ class MongoStore:
         backend.db.operations.create_index("node_id")
         backend.db.operations.create_index("expire_at", expireAfterSeconds=0)
         backend.db.deletions.create_index("root_id")
+        backend.db.deletions.create_index([("intent_id", 1), ("bucket", 1)])
         backend.db.deletions.create_index("state")
         backend.db.deletions.create_index("expire_at", expireAfterSeconds=0)
         backend.db.preparations.create_index("expire_at", expireAfterSeconds=0)
@@ -669,35 +706,53 @@ class MongoStore:
     def _get(self, identity, *, full=False) -> dict[str, Any] | None:
         return self._one("nodes", {"_id": identity}, None if full else _LIGHT)
 
-    def _ancestors(self, identity, *, full=False) -> list[dict[str, Any]]:
+    def _ancestors(
+        self, identity, *, full=False, share_hash=None
+    ) -> list[dict[str, Any]]:
         """Root-first chain ending at ``identity`` in one MongoDB round trip."""
-        rows = list(
-            self.db.nodes.aggregate(
-                [
-                    {"$match": {"_id": identity}},
-                    {
-                        "$graphLookup": {
-                            "from": "nodes",
-                            "startWith": "$parent_id",
-                            "connectFromField": "parent_id",
-                            "connectToField": "_id",
-                            "as": "up",
-                            "depthField": "depth",
-                        }
-                    },
-                    {
-                        "$project": {
-                            "tokens": 0,
-                            "up.tokens": 0,
-                            "up.parts": 0,
-                            "up.poster": 0,
-                            **({} if full else {"parts": 0, "poster": 0}),
-                        }
-                    },
-                ],
-                session=self._session,
+        stages = [
+            {"$match": {"_id": identity}},
+            {
+                "$graphLookup": {
+                    "from": "nodes",
+                    "startWith": "$parent_id",
+                    "connectFromField": "parent_id",
+                    "connectToField": "_id",
+                    "as": "up",
+                    "depthField": "depth",
+                }
+            },
+            {
+                "$project": {
+                    "tokens": 0,
+                    "up.tokens": 0,
+                    "up.parts": 0,
+                    "up.poster": 0,
+                    **({} if full else {"parts": 0, "poster": 0}),
+                }
+            },
+        ]
+        if share_hash is not None:
+            stages.append(
+                {
+                    "$lookup": {
+                        "from": "shares",
+                        "pipeline": [
+                            {"$match": {"token_hash": share_hash}},
+                            {
+                                "$project": {
+                                    "_id": 0,
+                                    "node_id": 1,
+                                    "expires_at": 1,
+                                    "password_hash": 1,  # nosec B105
+                                }
+                            },
+                        ],
+                        "as": "requested_share",
+                    }
+                }
             )
-        )
+        rows = list(self.db.nodes.aggregate(stages, session=self._session))
         if not rows:
             raise NotFoundError("Item not found")
         node = rows[0]
@@ -716,7 +771,7 @@ class MongoStore:
         return "/" + "/".join(row["_id"] for row in chain[1:])
 
     def _resolve(
-        self, path, *, full=False
+        self, path, *, full=False, share_hash=None
     ) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
         parts, path = _normalize_path(path)
         if not parts:
@@ -724,7 +779,7 @@ class MongoStore:
             if root is None:
                 raise CorruptStoreError("MongoDB catalog root is missing")
             return root, "/", [root]
-        chain = self._ancestors(parts[-1], full=full)
+        chain = self._ancestors(parts[-1], full=full, share_hash=share_hash)
         # "/<id>" addresses an item at any depth, so URLs stay short however
         # deep the folder is. A longer path must be the item's exact ID chain;
         # a stale prefix means it moved.
@@ -776,7 +831,9 @@ class MongoStore:
         return [
             row["root_id"]
             for row in self._find(
-                "deletions", {"state": {"$ne": "completed"}}, {"root_id": 1}
+                "deletions",
+                {"state": {"$in": ["pending", "failed"]}},
+                {"root_id": 1},
             )
         ]
 
@@ -1169,15 +1226,21 @@ class MongoStore:
     def get_file(
         self, path, *, include_trashed=False, share_token=None, share_unlock=None
     ):
-        with self._transaction():
-            node, path, chain = self._resolve(path, full=True)
+        share_hash = self._share_hash(share_token)
+        with self._transaction(snapshot=share_hash is not None):
+            node, path, chain = self._resolve(path, full=True, share_hash=share_hash)
             if node["kind"] != "file":
                 raise NotFileError("Not a file")
-            if (
-                share_token is not None
-                and self._authorized(chain, share_token, share_unlock) is None
-            ):
-                raise ShareDenied("Invalid share link")
+            if share_token is not None:
+                matches = (
+                    node.pop("requested_share", []) if share_hash is not None else []
+                )
+                share = self._unexpired_share(matches[0]) if len(matches) == 1 else None
+                if (
+                    self._hidden(chain)
+                    or self._check_share_scope(chain, share, share_unlock) is None
+                ):
+                    raise ShareDenied("Invalid share link")
             self._visible(chain, include_trashed)
             return self._file(node, path)
 
@@ -1389,13 +1452,34 @@ class MongoStore:
             return self._record(node, path)
 
     def _revoke_under(self, identity):
-        """Revoke links on a node or anything inside it, checking only shared items."""
-        removed = []
-        for row in self._find("shares", {}, {"node_id": 1}):
-            if self._contains(identity, row["node_id"]):
-                removed.append(row["_id"])
-        if removed:
-            self.db.shares.delete_many({"_id": {"$in": removed}}, session=self._session)
+        """Revoke subtree links without scanning a large unrelated share catalog."""
+        with closing(self._walk(identity)) as descendants:
+            identities = chain((identity,), (row["_id"] for row in descendants))
+            first = list(islice(identities, _BATCH + 1))
+            if len(first) > _BATCH:
+                with closing(
+                    self._find("shares", {}, {"node_id": 1}).limit(_BATCH + 1)
+                ) as cursor:
+                    shares = list(cursor)
+                if len(shares) <= _BATCH:
+                    chains = self._chains({row["node_id"] for row in shares})
+                    removed = [
+                        row["_id"]
+                        for row in shares
+                        if any(
+                            ancestor["_id"] == identity
+                            for ancestor in chains.get(row["node_id"], ())
+                        )
+                    ]
+                    if removed:
+                        self.db.shares.delete_many(
+                            {"_id": {"$in": removed}}, session=self._session
+                        )
+                    return
+            for batch in batched(chain(first, identities), _BATCH, strict=False):
+                self.db.shares.delete_many(
+                    {"node_id": {"$in": list(batch)}}, session=self._session
+                )
 
     def set_trashed(self, path, trashed):
         with self._transaction(write=True):
@@ -1451,22 +1535,73 @@ class MongoStore:
         }
 
     def list_trash(self, query=""):
-        with self._transaction():
-            deleting = {
-                row["root_id"]
-                for row in self._find("deletions", {"state": "pending"}, {"root_id": 1})
+        return self.list_marked_page("trash", query)["contents"]
+
+    @staticmethod
+    def _listing_filter(query, field, view, after):
+        if after is not None:
+            _, key, identity = _decode_cursor(after, view)
+            return query | {
+                "$or": [
+                    {field: {"$gt": key}},
+                    {field: key, "_id": {"$gt": identity}},
+                ]
             }
-            needle = _fold(query)
-            result = {}
-            for node in self._find("nodes", {"trashed": True}, _LIGHT).sort(
-                "name_key", 1
-            ):
-                if node["_id"] in deleting or needle not in _fold(node["name"]):
-                    continue
-                chain = self._ancestors(node["_id"])
-                if not self._hidden(chain[:-1]):
-                    result[node["_id"]] = self._listed(node, chain)
-            return result
+        return query
+
+    def list_marked_page(self, view, query="", *, limit=None, after=None):
+        flag = {"starred": "starred", "trash": "trashed"}[view]
+        if not isinstance(query, str) or len(query) > MAX_NAME_LENGTH:
+            raise ValidationError("Invalid listing search")
+        if limit is not None and (type(limit) is not int or not 1 <= limit <= 500):
+            raise ValidationError("Invalid listing page size")
+        needle = _fold(query.strip())
+        filters = self._listing_filter({flag: True}, "name_key", view, after)
+        with self._transaction(snapshot=True):
+            deleting = (
+                {
+                    row["root_id"]
+                    for row in self._find(
+                        "deletions", {"state": "pending"}, {"root_id": 1}
+                    )
+                }
+                if view == "trash"
+                else set()
+            )
+            contents = {}
+            last = None
+            cursor = (
+                self._find("nodes", filters, _LIGHT)
+                .sort([("name_key", 1), ("_id", 1)])
+                .batch_size(100)
+            )
+            try:
+                for batch in batched(cursor, 100, strict=False):
+                    matches = [
+                        node
+                        for node in batch
+                        if node["_id"] != ROOT_ID
+                        and node["_id"] not in deleting
+                        and needle in _fold(node["name"])
+                    ]
+                    chains = self._chains({node["parent_id"] for node in matches})
+                    for node in matches:
+                        parents = chains.get(node["parent_id"])
+                        if parents is None:
+                            raise CorruptStoreError("Invalid catalog ancestry")
+                        if self._hidden(parents) or (
+                            view == "starred" and node["trashed"]
+                        ):
+                            continue
+                        if limit is not None and len(contents) == limit:
+                            return {"contents": contents, "next_cursor": last}
+                        contents[node["_id"]] = self._listed(node, [*parents, node])
+                        last = _encode_cursor(
+                            view, ("file", node["name_key"], node["_id"])
+                        )
+            finally:
+                cursor.close()
+            return {"contents": contents, "next_cursor": None}
 
     def set_starred(self, path, starred):
         if type(starred) is not bool:
@@ -1494,20 +1629,7 @@ class MongoStore:
             return self._record(node, path)
 
     def list_starred(self, query=""):
-        if not isinstance(query, str) or len(query) > MAX_NAME_LENGTH:
-            raise ValidationError("invalid starred search")
-        with self._transaction():
-            needle = _fold(query.strip())
-            results = {}
-            for node in self._find("nodes", {"starred": True}, _LIGHT).sort(
-                "name_key", 1
-            ):
-                if node["_id"] == ROOT_ID or needle not in _fold(node["name"]):
-                    continue
-                chain = self._ancestors(node["_id"])
-                if not self._hidden(chain):
-                    results[node["_id"]] = self._listed(node, chain)
-            return results
+        return self.list_marked_page("starred", query)["contents"]
 
     # ---------------------------------------------------- reading progress
 
@@ -2027,6 +2149,8 @@ class MongoStore:
                             "_id": 1,
                             "parent_id": 1,
                             "name": 1,
+                            "kind": 1,
+                            "size": 1,
                             "trashed": 1,
                             "up._id": 1,
                             "up.parent_id": 1,
@@ -2051,26 +2175,22 @@ class MongoStore:
 
     # ------------------------------------------------------ messages/delete
 
-    def _messages(self, identity):
-        result = set()
+    def _iter_messages(self, identity):
         root = self._get(identity, full=True)
         if root is None:
             raise NotFoundError("Catalog item is unavailable")
-        rows = [root] if root["kind"] == "file" else []
-        rows = [
-            *rows,
-            *self._walk(
+        rows = chain(
+            (root,) if root["kind"] == "file" else (),
+            self._walk(
                 identity,
                 {"_id": 1, "kind": 1, "message_id": 1, "parts": 1, "poster": 1},
             ),
-        ]
+        )
         for row in rows:
-            if row["kind"] == "file":
-                result.add(row["message_id"])
-                result.update(part["message_id"] for part in row.get("parts") or [])
-                if row.get("poster"):
-                    result.add(row["poster"]["message_id"])
-        return sorted(result)
+            yield from node_messages(row)
+
+    def _messages(self, identity):
+        return sorted(set(self._iter_messages(identity)))
 
     def message_ids(self, path, *, include_trashed=False):
         with self._transaction():
@@ -2079,35 +2199,26 @@ class MongoStore:
             return self._messages(node["_id"])
 
     def _remove_subtree(self, identity):
-        """Delete a subtree bottom-up in batches; returns every removed id."""
-        levels, removed = [[identity]], [identity]
-        while levels[-1]:
-            following = []
-            for row in self._children(levels[-1]):
-                removed.append(row["_id"])
-                if row["kind"] == "folder":
-                    following.append(row["_id"])
-            levels.append(following)
-        for level in reversed(levels):
-            for start in range(0, len(level), _BATCH):
-                batch = level[start : start + _BATCH]
-                self.db.nodes.delete_many(
-                    {"parent_id": {"$in": batch}}, session=self._session
-                )
-        self.db.nodes.delete_many({"_id": identity}, session=self._session)
-        for start in range(0, len(removed), _BATCH):
-            batch = removed[start : start + _BATCH]
-            self.db.shares.delete_many(
-                {"node_id": {"$in": batch}}, session=self._session
-            )
-            # Keep upload receipts as tombstones so a replayed upload cannot
-            # recreate deleted media; MongoDB expires them later.
-            self.db.operations.update_many(
-                {"node_id": {"$in": batch}},
-                {"$set": {"expire_at": datetime.now(UTC) + _RECORD_RETENTION}},
-                session=self._session,
-            )
-        return removed
+        """Forget catalog rows in batches within the enclosing transaction."""
+        # Child discovery uses parent IDs, so it can continue after their own
+        # documents are deleted. Outside the transaction the tree is atomic.
+        identities = chain((identity,), (row["_id"] for row in self._walk(identity)))
+        deadline = datetime.now(UTC) + _RECORD_RETENTION
+        for batch in batched(identities, _BATCH, strict=False):
+            self._remove_nodes(list(batch), deadline)
+
+    def _remove_nodes(self, identities, deadline):
+        query = {"$in": identities}
+        removed = self.db.nodes.delete_many({"_id": query}, session=self._session)
+        self.db.shares.delete_many({"node_id": query}, session=self._session)
+        # Keep upload receipts as tombstones so replay cannot recreate media.
+        self.db.operations.update_many(
+            {"node_id": query},
+            {"$set": {"expire_at": deadline}},
+            session=self._session,
+        )
+
+        return removed.deleted_count
 
     def delete(self, path):
         with self._transaction(write=True):
@@ -2218,30 +2329,67 @@ class MongoStore:
             return token
 
     def list_shares(self, path=None, *, include_expired=False, token_factory=None):
-        with self._transaction():
+        return self.list_shares_page(
+            path, include_expired=include_expired, token_factory=token_factory
+        )["shares"]
+
+    def list_shares_page(
+        self,
+        path=None,
+        *,
+        include_expired=False,
+        token_factory=None,
+        limit=None,
+        after=None,
+    ):
+        if limit is not None and (type(limit) is not int or not 1 <= limit <= 500):
+            raise ValidationError("Invalid listing page size")
+        with self._transaction(snapshot=True):
             query = {}
             if path is not None:
                 query["node_id"] = self._resolve(path)[0]["_id"]
+            query = self._listing_filter(query, "created_at", "shares", after)
             now = _utc_now()
             result = []
-            for row in self._find("shares", query).sort("created_at", 1):
-                if not include_expired and (
-                    row["expires_at"] is not None and row["expires_at"] <= now
-                ):
-                    continue
-                chain = self._ancestors(row["node_id"])
-                result.append(
-                    {
-                        "id": row["id"],
-                        "label": row.get("label", ""),
-                        "node_id": row["node_id"],
-                        "path": self._chain_path(chain),
-                        **self._share_details(row, chain, token_factory),
-                        "created_at": row["created_at"],
-                        "expires_at": row["expires_at"],
-                    }
-                )
-            return result
+            last = None
+            cursor = (
+                self._find("shares", query)
+                .sort([("created_at", 1), ("_id", 1)])
+                .batch_size(100)
+            )
+            try:
+                for batch in batched(cursor, 100, strict=False):
+                    active = [
+                        row
+                        for row in batch
+                        if include_expired
+                        or row["expires_at"] is None
+                        or row["expires_at"] > now
+                    ]
+                    chains = self._chains({row["node_id"] for row in active})
+                    for row in active:
+                        if limit is not None and len(result) == limit:
+                            return {"shares": result, "next_cursor": last}
+                        chain = chains.get(row["node_id"])
+                        if chain is None:
+                            raise NotFoundError("Item not found")
+                        result.append(
+                            {
+                                "id": row["id"],
+                                "label": row.get("label", ""),
+                                "node_id": row["node_id"],
+                                "path": self._chain_path(chain),
+                                **self._share_details(row, chain, token_factory),
+                                "created_at": row["created_at"],
+                                "expires_at": row["expires_at"],
+                            }
+                        )
+                        last = _encode_cursor(
+                            "shares", ("file", row["created_at"], row["_id"])
+                        )
+            finally:
+                cursor.close()
+            return {"shares": result, "next_cursor": None}
 
     def _share_details(self, row, chain, factory):
         node, path = chain[-1], self._chain_path(chain)
@@ -2306,7 +2454,7 @@ class MongoStore:
                     unset["label"] = ""
             if password_hash is not _SHARE_UNSET:
                 if password_hash is None:
-                    unset["password_hash"] = ""
+                    unset["password_hash"] = ""  # nosec B105 - MongoDB unset placeholder
                 else:
                     change["password_hash"] = password_hash
             update = {"$set": change} if change else {}
@@ -2334,13 +2482,21 @@ class MongoStore:
                 self._bump()
             return bool(removed)
 
-    def _active_share(self, token):
+    @staticmethod
+    def _share_hash(token):
         if not isinstance(token, str) or not token or len(token) > 1024:
             return None
-        # The token's SHA-256 is the indexed lookup key; the token never is.
-        row = self._one(
-            "shares", {"token_hash": hashlib.sha256(token.encode()).hexdigest()}
-        )
+        # The token's SHA-256 is the indexed lookup key.
+        return hashlib.sha256(token.encode()).hexdigest()
+
+    def _active_share(self, token):
+        digest = self._share_hash(token)
+        if digest is None:
+            return None
+        return self._unexpired_share(self._one("shares", {"token_hash": digest}))
+
+    @staticmethod
+    def _unexpired_share(row):
         return (
             None
             if (
@@ -2363,7 +2519,10 @@ class MongoStore:
     def _authorized_share(self, chain, token, unlock):
         if self._hidden(chain):
             return None
-        row = self._active_share(token)
+        return self._check_share_scope(chain, self._active_share(token), unlock)
+
+    @staticmethod
+    def _check_share_scope(chain, row, unlock):
         if row is None or not any(item["_id"] == row["node_id"] for item in chain):
             return None
         if "password_hash" in row and (
@@ -2452,10 +2611,9 @@ class MongoStore:
                 return self._deletion(prior)
             self._mutable(chain, descendants=True)
             identity = secrets.token_urlsafe(16)
-            # shortcut: one document lists every message, so a single deletion is
-            # bound by MongoDB's 16 MB document size (~1.5M messages); store the
-            # ids in their own collection if a drive ever needs a larger one.
-            messages = self._messages(node["_id"])
+            messages = self._iter_messages(node["_id"])
+            initial = list(islice(messages, BUCKET_SIZE + 1))
+            inline = sorted(set(initial)) if len(initial) <= BUCKET_SIZE else []
             row = {
                 "_id": identity,
                 "id": identity,
@@ -2465,13 +2623,55 @@ class MongoStore:
                 "state": "pending",
                 "created_at": _utc_now(),
                 "error": None,
-                "message_ids": messages,
-                "pending_message_ids": messages.copy(),
+                "message_ids": inline,
+                "pending_message_ids": inline.copy(),
             }
+            if len(initial) > BUCKET_SIZE:
+                self._write_deletion_batches(identity, initial, messages)
+                row["message_count"] = sum(
+                    len(batch["message_ids"])
+                    for batch in self._deletion_batches(identity)
+                )
             self.db.deletions.insert_one(row, session=self._session)
             self._revoke_under(node["_id"])
             self._bump()
             return self._deletion(row)
+
+    def _write_deletion_batches(self, identity, initial, messages):
+        for values in batched(chain(initial, messages), BUCKET_SIZE, strict=False):
+            operations = []
+            for bucket, members in bucket_messages(values).items():
+                items = {"$each": sorted(members)}
+                operations.append(
+                    UpdateOne(
+                        {"_id": batch_id(identity, bucket)},
+                        {
+                            "$setOnInsert": {"intent_id": identity, "bucket": bucket},
+                            "$addToSet": {
+                                "message_ids": items,
+                                "pending_message_ids": items,
+                            },
+                        },
+                        upsert=True,
+                    )
+                )
+            self.db.deletions.bulk_write(
+                operations, ordered=False, session=self._session
+            )
+
+    def _deletion_batches(self, identity):
+        cursor = self._find("deletions", {"intent_id": identity}).sort("bucket", 1)
+        try:
+            yield from cursor
+        finally:
+            cursor.close()
+
+    def deletion_intent(self, identity):
+        with self._transaction():
+            row = self._one(
+                "deletions", {"_id": identity, "state": {"$in": ["pending", "failed"]}}
+            )
+            return self._deletion(row) if row is not None else None
 
     @staticmethod
     def _deletion(row):
@@ -2483,7 +2683,9 @@ class MongoStore:
         with self._transaction():
             return [
                 self._deletion(row)
-                for row in self._find("deletions", {"state": {"$ne": "completed"}})
+                for row in self._find(
+                    "deletions", {"state": {"$in": ["pending", "failed"]}}
+                )
             ]
 
     def confirm_deletion_messages(self, intent_id, message_ids):
@@ -2494,20 +2696,28 @@ class MongoStore:
                 raise NotFoundError("Deletion intent not found")
             if row["state"] == "completed":
                 return
-            if not validated <= set(row["message_ids"]):
-                raise ValidationError("Confirmation contains unrelated messages")
+            changes: dict[str, Any] = {"state": "pending", "error": None}
+            if "message_count" in row:
+                for bucket, messages in bucket_messages(validated).items():
+                    identity = batch_id(intent_id, bucket)
+                    batch = self._one("deletions", {"_id": identity})
+                    if batch is None or not messages <= set(batch["message_ids"]):
+                        raise ValidationError(
+                            "Confirmation contains unrelated messages"
+                        )
+                    self.db.deletions.update_one(
+                        {"_id": identity},
+                        {"$pull": {"pending_message_ids": {"$in": sorted(messages)}}},
+                        session=self._session,
+                    )
+            else:
+                if not validated <= set(row["message_ids"]):
+                    raise ValidationError("Confirmation contains unrelated messages")
+                changes["pending_message_ids"] = sorted(
+                    set(row["pending_message_ids"]) - validated
+                )
             self.db.deletions.update_one(
-                {"_id": intent_id},
-                {
-                    "$set": {
-                        "pending_message_ids": sorted(
-                            set(row["pending_message_ids"]) - validated
-                        ),
-                        "state": "pending",
-                        "error": None,
-                    }
-                },
-                session=self._session,
+                {"_id": intent_id}, {"$set": changes}, session=self._session
             )
             self._bump()
 
@@ -2523,22 +2733,145 @@ class MongoStore:
             )
             self._bump()
 
-    def finish_deletion(self, intent_id):
-        """Atomically forget a trashed subtree; retain its Telegram documents."""
+    def finish_deletion(self, intent_id, *, return_messages=True):
+        """Forget a trashed subtree while retaining its Telegram documents."""
+        with self.backend.deletion_lock, ExitStack() as scratch:
+            plan = None
+            messages = []
+            with self._transaction(snapshot=True):
+                row = self._one("deletions", {"_id": intent_id})
+                if row is None:
+                    raise NotFoundError("Deletion intent not found")
+                if row["state"] != "completed":
+                    root = row["root_id"]
+                    with closing(self._walk(root)) as descendants:
+                        count = sum(1 for _ in islice(descendants, _BATCH + 1))
+                    if count > _BATCH:
+                        # Check the root before pruning anything. The pending intent
+                        # excludes moves, restores and new uploads into its subtree.
+                        chain = self._deletion_chain(row)
+                        fields = {
+                            "_id": 1,
+                            "kind": 1,
+                            "size": 1,
+                            "message_id": 1,
+                            "parts": 1,
+                            "poster": 1,
+                        }
+                        plan = scratch.enter_context(
+                            deletion_plan(self._walk(chain[-1]["_id"], fields), _BATCH)
+                        )
+                        if return_messages:
+                            messages = self._deletion_messages(row)
+            if plan is None:
+                return self._finish_deletion_atomic(
+                    intent_id, return_messages=return_messages
+                )
+            deadline = datetime.now(UTC) + _RECORD_RETENTION
+            for identities, files, size, removed in plan:
+                with self._transaction(write=True):
+                    row = self._one("deletions", {"_id": intent_id})
+                    if row is None or row["state"] == "completed":
+                        raise CorruptStoreError(
+                            "Deletion intent changed during cleanup"
+                        )
+                    if self._remove_nodes(identities, deadline) != len(identities):
+                        raise CorruptStoreError(
+                            "Deletion subtree changed during cleanup"
+                        )
+                    self._forget_deletion_messages(row, removed)
+                    self._bump(trashed_files=-files, trashed_bytes=-size)
+            self._finish_deletion_atomic(intent_id, return_messages=False)
+            return messages
+
+    def _forget_deletion_messages(self, row, removed):
+        if not removed:
+            return
+        identity = row["id"]
+        if "message_count" not in row:
+            if not set(removed) <= set(row["message_ids"]):
+                raise CorruptStoreError(
+                    "Deletion messages do not match the retained subtree"
+                )
+            fields = {
+                key: {"$in": removed} for key in ("message_ids", "pending_message_ids")
+            }
+            self.db.deletions.update_one(
+                {"_id": identity}, {"$pull": fields}, session=self._session
+            )
+            return
+        for batches in batched(bucket_messages(removed).items(), _BATCH, strict=False):
+            requested = {batch_id(identity, bucket): ids for bucket, ids in batches}
+            known = {
+                manifest["_id"]: set(manifest["message_ids"])
+                for manifest in self._find(
+                    "deletions", {"_id": {"$in": list(requested)}}, {"message_ids": 1}
+                )
+            }
+            empty = []
+            updates = []
+            for batch, members in requested.items():
+                existing = known.get(batch, set())
+                if not members <= existing:
+                    raise CorruptStoreError(
+                        "Deletion messages do not match the retained subtree"
+                    )
+                if members == existing:
+                    empty.append(batch)
+                else:
+                    fields = {
+                        key: {"$in": sorted(members)}
+                        for key in ("message_ids", "pending_message_ids")
+                    }
+                    updates.append(UpdateOne({"_id": batch}, {"$pull": fields}))
+            if empty:
+                self.db.deletions.delete_many(
+                    {"_id": {"$in": empty}}, session=self._session
+                )
+            if updates:
+                self.db.deletions.bulk_write(
+                    updates, ordered=False, session=self._session
+                )
+        remaining = row["message_count"] - len(removed)
+        if remaining < 0:
+            raise CorruptStoreError("Invalid deletion message count")
+        update = (
+            {"$inc": {"message_count": -len(removed)}}
+            if remaining
+            else {"$unset": {"message_count": ""}}
+        )
+        self.db.deletions.update_one({"_id": identity}, update, session=self._session)
+
+    def _deletion_chain(self, row):
+        chain = self._ancestors(row["root_id"])
+        self._demo_mutable(chain, descendants=True)
+        if not chain[-1]["trashed"] or self._hidden(chain[:-1]):
+            raise TrashedItemError("Permanent deletion requires a top-level trash item")
+        return chain
+
+    def _deletion_messages(self, row):
+        if "message_count" not in row:
+            return row["message_ids"].copy()
+        return [
+            message
+            for batch in self._deletion_batches(row["id"])
+            for message in sorted(batch["message_ids"])
+        ]
+
+    def _finish_deletion_atomic(self, intent_id, *, return_messages):
         with self._transaction(write=True):
             row = self._one("deletions", {"_id": intent_id})
             if row is None:
                 raise NotFoundError("Deletion intent not found")
-            messages = row["message_ids"].copy()
+            messages = self._deletion_messages(row) if return_messages else []
             if row["state"] != "completed":
-                chain = self._ancestors(row["root_id"])
-                self._demo_mutable(chain, descendants=True)
-                if not chain[-1]["trashed"] or self._hidden(chain[:-1]):
-                    raise TrashedItemError(
-                        "Permanent deletion requires a top-level trash item"
-                    )
+                self._deletion_chain(row)
                 files, _folders, size = self._subtree_totals(row["root_id"])
                 self._remove_subtree(row["root_id"])
+                if "message_count" in row:
+                    self.db.deletions.delete_many(
+                        {"intent_id": intent_id}, session=self._session
+                    )
                 self.db.deletions.update_one(
                     {"_id": intent_id},
                     {
@@ -2548,7 +2881,8 @@ class MongoStore:
                             "message_ids": [],
                             "pending_message_ids": [],
                             "expire_at": datetime.now(UTC) + _RECORD_RETENTION,
-                        }
+                        },
+                        "$unset": {"message_count": ""},
                     },
                     session=self._session,
                 )
@@ -2556,6 +2890,32 @@ class MongoStore:
             return messages
 
     # ------------------------------------------------------ export / stats
+
+    @classmethod
+    def _portable_deletions(cls, rows):
+        headers, batches = {}, {}
+        for row in rows:
+            if "intent_id" in row:
+                batch = validate_batch(row)
+                batches.setdefault(batch["intent_id"], []).append(batch)
+            else:
+                identity = row["id"]
+                if row["_id"] != identity or identity in headers:
+                    raise ValidationError("Invalid deletion identity")
+                headers[identity] = cls._deletion(row)
+        for identity, header in headers.items():
+            count = batched_count(header)
+            if count is None:
+                continue
+            del header["message_count"]
+            parts = batches.pop(identity, [])
+            for field in ("message_ids", "pending_message_ids"):
+                header[field] = sorted(value for part in parts for value in part[field])
+            if len(header["message_ids"]) != count:
+                raise ValidationError("Deletion batch count does not match")
+        if batches:
+            raise ValidationError("Deletion batch has no matching intent")
+        return list(headers.values())
 
     @classmethod
     def _portable(cls, metadata, nodes, shares, operations, deletions, preparations):
@@ -2619,7 +2979,7 @@ class MongoStore:
                     {k: v for k, v in row.items() if k not in {"_id", "expire_at"}}
                     for row in operations
                 ],
-                "deletions": [cls._deletion(row) for row in deletions],
+                "deletions": cls._portable_deletions(deletions),
             }
             if metadata.get("storage_channel_id") is not None:
                 result["storage_channel_id"] = metadata["storage_channel_id"]

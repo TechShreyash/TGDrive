@@ -328,6 +328,34 @@ def test_http_login_requires_owner_same_origin_and_hides_validation_secrets(
     assert transport.disconnected
 
 
+def test_owner_can_cancel_pending_premium_login(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from tests.support.app_fixtures import FakeRuntime, login, make_settings
+    from tgdrive.web.app import create_app
+
+    settings = make_settings(tmp_path)
+    runtime = FakeRuntime(new_store(tmp_path / "drive.json"))
+    runtime.mongo = register_test_backend(monkeypatch, settings)
+    app = create_app(settings, runtime=runtime)
+    service, transport, save = login_service()
+    app.state.premium_login_service = service
+
+    with TestClient(app, base_url="https://testserver") as client:
+        login(client)
+        challenge = client.post(
+            "/api/v1/settings/premium-login/start",
+            json={"expected_revision": 1, "phone": PHONE, "label": "Personal"},
+        )
+        assert challenge.status_code == 200
+        identity = challenge.json()["challenge_id"]
+        cancelled = client.delete(f"/api/v1/settings/premium-login/{identity}")
+        assert cancelled.status_code == 200
+        assert cancelled.json() == {"status": "cancelled"}
+        assert transport.disconnected
+        save.assert_not_awaited()
+
+
 def test_new_owner_session_cannot_finish_previous_browser_login(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 

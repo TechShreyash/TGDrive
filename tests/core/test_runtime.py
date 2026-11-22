@@ -964,3 +964,33 @@ async def test_cleanup_drains_transfers_before_pool_even_when_replica_close_fail
         release.set()
         await asyncio.gather(task, return_exceptions=True)
         store.close()
+
+
+async def test_bot_upload_guard_runs_blocking_admission_off_loop():
+    import threading
+
+    loop = asyncio.get_running_loop()
+    event_loop_thread = threading.get_ident()
+    entered = asyncio.Event()
+    release = threading.Event()
+
+    def check():
+        assert threading.get_ident() != event_loop_thread
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(3)
+
+    verify = AsyncMock()
+    runtime = SimpleNamespace(
+        _check_upload_allowed=check, _verify_storage_channel=verify
+    )
+    admission = asyncio.create_task(
+        Runtime._check_bot_upload_allowed(cast(Runtime, runtime))
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert not admission.done()
+        verify.assert_not_awaited()
+    finally:
+        release.set()
+        await admission
+    verify.assert_awaited_once()

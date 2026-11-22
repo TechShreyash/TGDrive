@@ -126,7 +126,15 @@ def legacy_acceptance(configured, path):
     from tgdrive.replication import replica_activation as activation
     from tgdrive.replication.replica_state import read_private
 
-    value = json_util.loads(read_private(path), object_pairs_hook=activation._object)
+    options = json_util.JSONOptions(tz_aware=True)
+
+    def decode_object(pairs):
+        result = dict(pairs)
+        if len(result) != len(pairs):
+            raise ValueError("Duplicate activation field")
+        return json_util.object_hook(result, json_options=options)
+
+    value = json_util.loads(read_private(path), object_pairs_hook=decode_object)
     assert value["version"] == 1 and value["phase"] == "prepared"
     assert value["backend"] == "mongodb" and value["expected"] == {"kind": "missing"}
     assert activation._candidate(configured, value["candidate"]) == value["candidate"]

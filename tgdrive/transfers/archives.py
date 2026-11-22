@@ -457,8 +457,8 @@ async def start_archive(
     if not name.lower().endswith(".zip"):
         name = _normalize_name(name + ".zip")
     if manager._check_upload_allowed is not None:
-        manager._check_upload_allowed()
-    binding = manager.store.upload_destination(destination)
+        await _worker(manager._check_upload_allowed)
+    binding = await _worker(manager.store.upload_destination, destination)
     members = await _worker(archive_members, manager.store, paths)
     if len(json.dumps(members).encode()) > MAX_MANIFEST_BYTES:
         raise ArchiveError(
@@ -515,8 +515,8 @@ async def start_extraction(
 ):
     validate_password(password)
     if manager._check_upload_allowed is not None:
-        manager._check_upload_allowed()
-    file = manager.store.get_file(path)
+        await _worker(manager._check_upload_allowed)
+    file = await _worker(manager.store.get_file, path)
     if password and not file["name"].lower().endswith(".zip"):
         raise ArchiveError("Archive passwords are supported for ZIP files.")
     try:
@@ -525,7 +525,7 @@ async def start_extraction(
         raise ArchiveError(str(error)) from None
     if folder_name is not None:
         folder_name = _normalize_name(folder_name)
-    binding = manager.store.upload_destination(destination)
+    binding = await _worker(manager.store.upload_destination, destination)
     check_staging(manager.settings, manager, file["size"])
     identity = secrets.token_urlsafe(18)
     context = dict(
@@ -577,12 +577,12 @@ async def start_pdf_password(
     except ValueError as error:
         raise ArchiveError(str(error)) from error
     if manager._check_upload_allowed is not None:
-        manager._check_upload_allowed()
-    file = manager.store.get_file(path)
+        await _worker(manager._check_upload_allowed)
+    file = await _worker(manager.store.get_file, path)
     size = file["size"]
     if not file["name"].lower().endswith(".pdf") or not 0 < size <= MAX_SOURCE_BYTES:
         raise ArchiveError("PDF password changes support PDFs up to 256 MiB.")
-    binding = manager.store.upload_destination(destination)
+    binding = await _worker(manager.store.upload_destination, destination)
     output_limit = min(manager.settings.upload_limit, size + 4 * MIB)
     bound = size + output_limit
     name = file["name"][:-4]
@@ -601,7 +601,7 @@ async def start_pdf_password(
                 "source_kind": "pdf_password",
                 "name": name,
                 "archive_source": _member(file),
-                "archive_password_required": True,
+                "archive_password_required": True,  # nosec B105 - boolean job flag
                 "pdf_password_operation": operation,
                 "pdf_output_limit": output_limit,
                 "destination": binding["path"],
@@ -680,9 +680,8 @@ async def _create_zip(manager, record, directory, *, password=None):
                         directory=directory,
                     )
                     if member["type"] == "folder":
-                        manager.store.get_directory(
-                            manager.store.resolve_id(member["id"])
-                        )
+                        folder = await _worker(manager.store.resolve_id, member["id"])
+                        await _worker(manager.store.get_directory, folder)
                         if isinstance(archive, EncryptedZipWriter):
                             await _worker(archive.header, member)
                             await _worker(archive.finish)
@@ -1163,7 +1162,7 @@ async def _upload_extracted(manager, record, directory):
         folders = await _worker(_prepare_folders, manager, record, destination)
         context["archive_folders"] = folders
         if context["folder_name"] is not None:
-            binding = manager.store.upload_destination(folders[""])
+            binding = await _worker(manager.store.upload_destination, folders[""])
             context.update(destination=binding["path"], destination_id=binding["id"])
         await manager.registry.persist(record)
     files = context["archive_plan"]["files"]
@@ -1188,11 +1187,11 @@ async def _upload_extracted(manager, record, directory):
             relative, _, name = file["name"].rpartition("/")
             target = context["archive_folders"][relative]
             target = (
-                manager.store.resolve_id(target.rsplit("/", 1)[-1])
+                await _worker(manager.store.resolve_id, target.rsplit("/", 1)[-1])
                 if target != "/"
                 else "/"
             )
-            binding = manager.store.upload_destination(target)
+            binding = await _worker(manager.store.upload_destination, target)
             child = await manager.registry.create(
                 "queued",
                 total=file["size"],
@@ -1280,7 +1279,7 @@ async def run_archive(manager, record, *, password=None, new_password=None):
             raise TransferCancelled("Transfer cancelled")
         await _destination(manager, record)
         if manager._check_upload_allowed is not None:
-            manager._check_upload_allowed()
+            await _worker(manager._check_upload_allowed)
         await _worker(lambda: directory.mkdir(parents=True, exist_ok=True, mode=0o700))
         if record.context["source_kind"] == "archive":
             await _create_zip(manager, record, directory, password=password)

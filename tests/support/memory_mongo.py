@@ -24,6 +24,15 @@ def _value(row, key):
     return current
 
 
+def _update_parent(document, key):
+    *parents, field = key.split(".")
+    for part in parents:
+        document = document.setdefault(part, {})
+        if not isinstance(document, dict):
+            raise AssertionError(f"Fixture update requires an object at {part}")
+    return document, field
+
+
 def _matches(row, query):
     for key, expected in query.items():
         value = _value(row, key)
@@ -126,7 +135,18 @@ class FixtureCollection:
                 if operator == "$set" or (
                     operator == "$setOnInsert" and current is None
                 ):
-                    document.update(copy.deepcopy(values))
+                    for key, value in values.items():
+                        parent, field = _update_parent(document, key)
+                        parent[field] = copy.deepcopy(value)
+                elif operator == "$push":
+                    for key, value in values.items():
+                        parent, field = _update_parent(document, key)
+                        items = parent.setdefault(field, [])
+                        if not isinstance(items, list):
+                            raise AssertionError(
+                                f"Fixture update requires a list at {key}"
+                            )
+                        items.append(copy.deepcopy(value))
                 elif operator == "$max":
                     for key, value in values.items():
                         document[key] = max(document.get(key, value), value)

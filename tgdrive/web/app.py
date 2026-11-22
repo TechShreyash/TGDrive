@@ -48,7 +48,7 @@ from tgdrive.core.errors import (
     ValidationError as DriveValidationError,
 )
 from tgdrive.core.logging import configure_logging
-from tgdrive.core.runtime import Runtime
+from tgdrive.core.runtime import Runtime, admission_status
 from tgdrive.core.security import (
     SESSION_COOKIE,
     InvalidSession,
@@ -609,10 +609,14 @@ def create_app(
     @app.get("/healthz")
     async def health_ready(request: Request) -> JSONResponse:
         current_runtime = _runtime(request)
-        if getattr(current_runtime, "recovery_only", False):
-            # Proxies drop unhealthy containers, which would hide the recovery UI.
-            return JSONResponse(status_code=200, content={"status": "recovery"})
-        ready = bool(getattr(current_runtime, "ready", False))
+        state = await asyncio.to_thread(admission_status, current_runtime)
+        if state == "recovery":
+            # Keep the owner recovery UI reachable through container health checks.
+            return JSONResponse(
+                status_code=200 if request.scope["route"].path == "/healthz" else 503,
+                content={"status": state},
+            )
+        ready = state == "ok" and bool(getattr(current_runtime, "ready", False))
         pool_health = getattr(getattr(current_runtime, "pool", None), "health", None)
         if ready and callable(pool_health):
             pending_health = pool_health()
@@ -1055,19 +1059,12 @@ def create_app(
     # Recent: at most one write per file per this many seconds, so a long video
     # (many range requests) costs one database write.
     opened_at: dict[str, float] = {}
-    opened_pending: set[str] = set()
+    opened_pending: dict[str, MongoStore] = {}
     opened_tasks: set[asyncio.Task] = set()
 
-    def record_opened(store, item_id):
-        now = time.monotonic()
-        if (
-            item_id in opened_pending
-            or opened_tasks
-            or now - opened_at.get(item_id, -1e9) < RECENT_WRITE_SECONDS
-        ):
-            return
-
-        async def write():
+    async def write_opened():
+        while opened_pending:
+            item_id, store = next(iter(opened_pending.items()))
             try:
                 await asyncio.to_thread(store.mark_opened, item_id)
             except Exception:
@@ -1077,12 +1074,21 @@ def create_app(
                 if len(opened_at) > 10_000:
                     opened_at.pop(next(iter(opened_at)))
             finally:
-                opened_pending.discard(item_id)
+                opened_pending.pop(item_id, None)
 
-        opened_pending.add(item_id)
-        task = asyncio.create_task(write(), name="record-file-open")
-        opened_tasks.add(task)
-        task.add_done_callback(opened_tasks.discard)
+    def record_opened(store, item_id):
+        now = time.monotonic()
+        if (
+            item_id in opened_pending
+            or len(opened_pending) >= 128
+            or now - opened_at.get(item_id, -1e9) < RECENT_WRITE_SECONDS
+        ):
+            return
+        opened_pending[item_id] = store
+        if not any(not task.done() for task in opened_tasks):
+            task = asyncio.create_task(write_opened(), name="record-file-open")
+            opened_tasks.add(task)
+            task.add_done_callback(opened_tasks.discard)
 
     def authorized_file(
         request: Request, path: str, auth: str | None

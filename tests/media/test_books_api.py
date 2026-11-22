@@ -27,6 +27,7 @@ def test_book_owner_share_revocation_and_passive_resources(app_client, monkeypat
     index = client.get("/api/v1/books", params={"path": path})
     assert index.status_code == 200 and index.json()["kind"] == "epub"
     first = store.create_share(path)
+    first_id = store.list_shares(path)[0]["id"]
     second = store.create_share(path)
     chapter = client.get(
         "/api/v1/books", params={"path": path, "auth": first, "entry": "OPS/one.xhtml"}
@@ -39,8 +40,7 @@ def test_book_owner_share_revocation_and_passive_resources(app_client, monkeypat
     )
     assert image.status_code == 200 and image.headers["content-type"] == "image/png"
     assert image.headers["cache-control"] == "private, no-cache"
-    row = store.list_shares(path)[0]
-    store.revoke_share(row["id"])
+    store.revoke_share(first_id)
     assert (
         client.get("/api/v1/books", params={"path": path, "auth": first}).status_code
         == 403

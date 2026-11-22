@@ -905,3 +905,41 @@ def test_back_up_now_does_not_fall_back_when_independent_protection_cannot_run(
             == 409
         )
         assert runtime.store.export() == before
+
+
+def test_owner_configures_replica_under_operation_lock(owner, monkeypatch):
+    client, _, replica = owner
+    login(client)
+
+    async def configure(channel, token, independent):
+        assert replica.control.locked() and replica._operation.locked()
+        assert (channel, token, independent) == (NEW, TOKEN, True)
+        return {"phase": "started"}
+
+    guarded = AsyncMock(side_effect=configure)
+    monkeypatch.setattr(replica, "configure", guarded)
+    response = client.post(
+        "/api/v1/replica/configure",
+        json={"channel_id": NEW, "bot_token": TOKEN, "independent_accounts": True},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"phase": "started"}
+    guarded.assert_awaited_once()
+
+
+def test_discovered_restore_holds_control_and_refuses_demo(owner, monkeypatch):
+    client, _, replica = owner
+    login(client)
+
+    async def restore():
+        assert replica.control.locked()
+        return {"phase": "restart_required"}
+
+    guarded = AsyncMock(side_effect=restore)
+    monkeypatch.setattr(replica, "restore_discovered", guarded)
+    response = client.post("/api/v1/replica/restore")
+    assert response.status_code == 200
+    assert response.json() == {"phase": "restart_required"}
+    replica.settings.demo_mode = True
+    assert client.post("/api/v1/replica/restore").status_code == 403
+    guarded.assert_awaited_once()

@@ -106,7 +106,11 @@ def _project(row, projection):
 
 def _apply(row, update):
     for field, value in update.get("$set", {}).items():
-        row[field] = copy.deepcopy(value)
+        *parents, leaf = field.split(".")
+        target = row
+        for part in parents:
+            target = target.setdefault(part, {})
+        target[leaf] = copy.deepcopy(value)
     for field in update.get("$unset", {}):
         *parents, leaf = field.split(".")
         target = row
@@ -119,7 +123,15 @@ def _apply(row, update):
     for field, value in update.get("$max", {}).items():
         row[field] = max(row.get(field, value), value)
     for field, value in update.get("$push", {}).items():
-        row.setdefault(field, []).append(copy.deepcopy(value))
+        *parents, leaf = field.split(".")
+        target = row
+        for part in parents:
+            target = target.setdefault(part, {})
+        target.setdefault(leaf, []).append(copy.deepcopy(value))
+    for field, value in update.get("$addToSet", {}).items():
+        values = value["$each"] if isinstance(value, dict) else [value]
+        current = row.setdefault(field, [])
+        current.extend(copy.deepcopy(item) for item in values if item not in current)
     for field, value in update.get("$pull", {}).items():
         values = value.get("$in", [value]) if isinstance(value, dict) else [value]
         row[field] = [item for item in row.get(field, []) if item not in values]
@@ -182,7 +194,7 @@ class Collection:
         return None if row is None else _project(row, projection)
 
     def aggregate(self, pipeline, **_kwargs):
-        """Only the ancestor lookup shape the catalog uses: $match + $graphLookup."""
+        """Evaluate the aggregation shapes used by the catalog tests."""
         rows = list(self.rows)
         for stage in pipeline:
             if "$match" in stage:
@@ -212,6 +224,15 @@ class Collection:
                         frontier, depth = following, depth + 1
                     result.append(dict(copy.deepcopy(row), **{spec["as"]: found}))
                 rows = result
+            elif "$lookup" in stage:
+                spec = stage["$lookup"]
+                match, project = spec["pipeline"]
+                joined = [
+                    _project(candidate, project["$project"])
+                    for candidate in self.database[spec["from"]].rows
+                    if _matches(candidate, match["$match"])
+                ]
+                rows = [dict(row, **{spec["as"]: joined}) for row in rows]
             elif "$group" in stage:
                 spec = stage["$group"]
                 key = spec["_id"].removeprefix("$")
@@ -339,6 +360,7 @@ class FakeMongoBackend:
             start_session=lambda **_kwargs: nullcontext(object())
         )
         self._settings_lock = threading.RLock()
+        self.deletion_lock = threading.Lock()
         self._settings_cached = False
         self._settings_document = None
 

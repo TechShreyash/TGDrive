@@ -242,15 +242,15 @@ class TransferManager:
     ) -> TransferRecord:
         """Save an incoming multipart stream, then supervise Telegram upload."""
 
-        binding = self.store.upload_destination(destination)
-        destination = binding["path"]
-        declared_size = getattr(upload, "size", None)
-        admission_limit = await current_upload_limit(self.settings, self.pool)
         try:
+            binding = await _worker(self.store.upload_destination, destination)
+            destination = binding["path"]
+            declared_size = getattr(upload, "size", None)
+            admission_limit = await current_upload_limit(self.settings, self.pool)
             if self._check_upload_allowed is not None:
-                self._check_upload_allowed()
-            binding = self.store.upload_destination(
-                destination, directory_id=binding["id"]
+                await _worker(self._check_upload_allowed)
+            binding = await _worker(
+                self.store.upload_destination, destination, directory_id=binding["id"]
             )
             destination = binding["path"]
         except BaseException:
@@ -448,8 +448,8 @@ class TransferManager:
                 "Install aria2 or update the TGDrive Docker image."
             )
         if self._check_upload_allowed is not None:
-            self._check_upload_allowed()
-        binding = self.store.upload_destination(destination)
+            await _worker(self._check_upload_allowed)
+        binding = await _worker(self.store.upload_destination, destination)
         record = await self.registry.create(
             "torrent_metadata",
             context=dict(
@@ -484,7 +484,7 @@ class TransferManager:
             if record.cancel_event.is_set():
                 raise TransferCancelled("Transfer destination is unavailable")
             if self._check_upload_allowed is not None:
-                self._check_upload_allowed()
+                await _worker(self._check_upload_allowed)
             await self.registry.update(
                 record.id, status=TransferStatus.QUEUED, phase="torrent_metadata"
             )
@@ -692,12 +692,14 @@ class TransferManager:
                     tree["folders"]["/".join(path.parts[1:-1])] if tree else destination
                 )
                 if tree:
-                    target = self.store.resolve_id(target.rsplit("/", 1)[-1])
+                    target = await _worker(
+                        self.store.resolve_id, target.rsplit("/", 1)[-1]
+                    )
                 identity = f"{record.id}_{index}"
                 try:
                     child = self.registry.get(identity)
                 except KeyError:
-                    binding = self.store.upload_destination(target)
+                    binding = await _worker(self.store.upload_destination, target)
                     child = await self.registry.create(
                         "queued",
                         total=file["size"],
@@ -843,8 +845,8 @@ class TransferManager:
         single_threaded: bool = False,
     ) -> TransferRecord:
         if self._check_upload_allowed is not None:
-            self._check_upload_allowed()
-        binding = self.store.upload_destination(destination)
+            await _worker(self._check_upload_allowed)
+        binding = await _worker(self.store.upload_destination, destination)
         destination = binding["path"]
         record = await self.registry.create(
             "checking_source",
@@ -886,7 +888,7 @@ class TransferManager:
 
             admission_limit = await current_upload_limit(self.settings, self.pool)
             if self._check_upload_allowed is not None:
-                self._check_upload_allowed()
+                await _worker(self._check_upload_allowed)
             retry_not_before = record.context.get("source_retry_at", 0)
             record.context["source_attempt"] = 1
             await self.registry.update(
@@ -1072,7 +1074,7 @@ class TransferManager:
         folder_upload: dict[str, Any] | None = None,
     ) -> TransferRecord:
         if self._check_upload_allowed is not None:
-            self._check_upload_allowed()
+            await _worker(self._check_upload_allowed)
         binding = await _worker(self.store.upload_destination, destination)
         destination = binding["path"]
         context: dict[str, Any] = dict(
@@ -1112,7 +1114,7 @@ class TransferManager:
     ) -> TransferRecord:
         """Show a bot download as a transfer, then queue its encrypted upload."""
         if self._check_upload_allowed is not None:
-            self._check_upload_allowed()
+            await _worker(self._check_upload_allowed)
         binding = await _worker(self.store.upload_destination, destination)
         destination = binding["path"]
         reserve = transfer_id not in self._pending_staging and all(
@@ -1291,7 +1293,7 @@ class TransferManager:
         # Failed rows do not spawn automatically, but their provider cooldowns
         # still constrain every new upload after a process restart.
         await restore_telegram_cooldowns(self.pool, self.registry.list())
-        intents = self.store.pending_deletions()
+        intents = await asyncio.to_thread(self.store.pending_deletions)
         restart_jobs = [
             row
             for row in self.registry.list()
@@ -1461,13 +1463,8 @@ class TransferManager:
                 ),
             )
         elif context.get("kind") == "delete":
-            intent = next(
-                (
-                    item
-                    for item in self.store.pending_deletions()
-                    if item["id"] == context["deletion_id"]
-                ),
-                None,
+            intent = await asyncio.to_thread(
+                self.store.deletion_intent, context["deletion_id"]
             )
             if intent is not None and intent["state"] == "failed":
                 await asyncio.to_thread(
@@ -1638,7 +1635,7 @@ class TransferManager:
                 try:
                     record = await self.registry.create(
                         "deleting",
-                        total=len(intent["message_ids"]),
+                        total=intent.get("message_count", len(intent["message_ids"])),
                         transfer_id=intent["id"],
                         context=dict(
                             kind="delete",
@@ -1681,13 +1678,8 @@ class TransferManager:
         *,
         protect: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        intent = next(
-            (
-                item
-                for item in self.store.pending_deletions()
-                if item["id"] == record.context["deletion_id"]
-            ),
-            None,
+        intent = await asyncio.to_thread(
+            self.store.deletion_intent, record.context["deletion_id"]
         )
         if intent is None:
             await self.registry.update(
@@ -1727,7 +1719,8 @@ class TransferManager:
             # documents. This policy applies consistently to every file age.
             await self._verify_lineage(record)
             await self.registry.update(record.id, phase="deleting")
-            await asyncio.to_thread(self.store.finish_deletion, intent["id"])
+            options = {"return_messages": False} if "message_count" in intent else {}
+            await asyncio.to_thread(self.store.finish_deletion, intent["id"], **options)
             await self.registry.update(
                 record.id,
                 status=TransferStatus.COMPLETED,

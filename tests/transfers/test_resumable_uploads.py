@@ -300,22 +300,40 @@ async def test_inspection_expires_and_cleans_receipt_under_its_lock(
     assert not uploads.path(item["id"]).exists()
 
 
-async def test_failed_offset_commit_replays_written_bytes_safely(tmp_path, monkeypatch):
+@pytest.mark.parametrize("committed", [False, True])
+async def test_failed_offset_commit_replays_written_bytes_safely(
+    tmp_path, monkeypatch, committed
+):
     uploads, _ = make(tmp_path)
     item = uploads.create("one.bin", "/", 3)
-    save = uploads._save
+    backend = uploads._mongo_backend
+    write = backend.write
 
-    def fail(_item):
-        raise ConnectionFailure("disk full")
+    def fail(collection, method, *args, **kwargs):
+        if method != "update_one":
+            return write(collection, method, *args, **kwargs)
+        if committed:
+            write(collection, method, *args, **kwargs)
+        raise ConnectionFailure("unknown chunk commit")
 
-    monkeypatch.setattr(uploads, "_save", fail)
-    with pytest.raises(ConnectionFailure, match="disk full"):
+    monkeypatch.setattr(backend, "write", fail)
+    with pytest.raises(ConnectionFailure, match="unknown chunk"):
         await uploads.append(item["id"], 0, b"one")
-    assert uploads.get(item["id"])["offset"] == 0
-    monkeypatch.setattr(uploads, "_save", save)
-    await uploads.append(item["id"], 0, b"two")
-    assert uploads.path(item["id"]).read_bytes() == b"two"
-    assert uploads.get(item["id"])["offset"] == 3
+    assert (await uploads.inspect(item["id"]))["offset"] == (3 if committed else 0)
+    monkeypatch.setattr(backend, "write", write)
+    if committed:
+        with pytest.raises(UploadError) as old_offset:
+            await uploads.append(item["id"], 0, b"two")
+        assert old_offset.value.code == "UPLOAD_OFFSET_CHANGED"
+    else:
+        await uploads.append(item["id"], 0, b"two")
+    expected = b"one" if committed else b"two"
+    assert uploads.path(item["id"]).read_bytes() == expected
+    data = uploads.get(item["id"])
+    assert data["offset"] == 3
+    assert [chunk["sha256"] for chunk in data["checksums"]] == [
+        hashlib.sha256(expected).hexdigest()
+    ]
 
 
 async def test_receipt_cancellation_waits_for_disk_write_then_cannot_resurrect(

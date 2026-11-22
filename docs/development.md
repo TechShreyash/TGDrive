@@ -169,6 +169,12 @@ First start a [disposable MongoDB replica set](#opt-in-mongodb-replica-set-tests
 and export its two test variables. The coverage command below needs that opt-in;
 never point it at your deployment database.
 
+On WSL, check the filesystem with `findmnt -T /tmp` before running full suites
+alongside browser tests. If `/tmp` is a RAM filesystem, point `TMPDIR` at a
+fresh directory on the Linux disk with enough free space for the fixtures.
+Recovery tests use the normal free-space guard, so a shared, nearly full
+temporary filesystem can fail replication and activation cases.
+
 ```bash
 uv lock --check
 npm run typecheck --prefix website

@@ -88,17 +88,6 @@ def _raw(value):
     ).encode()
 
 
-def _object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("Duplicate activation field")
-        result[key] = value
-    return json_util.object_hook(
-        result, json_options=json_util.JSONOptions(tz_aware=True)
-    )
-
-
 def _digest(value):
     return hashlib.sha256(_raw(value)).hexdigest()
 
@@ -905,6 +894,7 @@ def _apply_mongo(settings, value, backend):
         )
 
     from tgdrive.storage.mongo_store import catalog_counters
+    from tgdrive.transfers.task_history_index import HISTORY_INDEX
 
     def replace(session):
         backend.fence(session)
@@ -955,6 +945,7 @@ def _apply_mongo(settings, value, backend):
             _insert_rows(backend.db.settings, rows("settings"), session)
         for name in (*_MONGO_DOMAIN, "jobs", "receipts", "bot_folders", "backups"):
             backend.db[name].delete_many({}, session=session)
+        backend.db.runtime.delete_one({"_id": HISTORY_INDEX}, session=session)
         if full_database:
             for name in ("jobs", "bot_folders"):
                 _insert_rows(backend.db[name], rows(name), session)

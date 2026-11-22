@@ -119,7 +119,9 @@ files-per-tier estimate ([MongoDB setup](setup.md#1-prepare-mongodb)).
 | Old deletions, folder preparations, expired links | TTL indexes remove them after 7 or 30 days |
 
 Trashing or restoring a folder updates that one document; items inside are
-hidden through it. Permanent deletion walks the subtree in batches.
+hidden through it. Trashing also revokes links in the subtree. MongoDB uses
+the linked-node index in batches when the drive has many share links.
+Permanent deletion walks the subtree in batches.
 
 Search hydration and shared-folder pages read one MongoDB snapshot per request,
 so their scope checks and returned records use consistent state. Separate page
@@ -169,15 +171,17 @@ storage is already available. Bot retries reuse the bot instance and registered
 handlers. A failed reconnect attempt waits 30 seconds before the next attempt.
 Automatic initialization runs only under the ownership lock and refuses saved
 drive records or recovery state. The catalog, channel binding and initial
-connection settings commit in one transaction. Those initial connections are
-active in the same process; first setup does not ask for another restart.
+connection settings commit in one transaction. The first catalog open checks the
+indexes. Those initial connections are active in the same process.
 All drive state, including the independent backup journal, lives in MongoDB.
 The same environment and `MONGODB_URI` on another server reopens the same
 drive with its backup channel configuration and copy progress.
 Nothing on the local volume decides whether a drive exists. When MongoDB is
-empty, startup reads the backup pinned in the storage channel: if one is found,
-it opens **Restore drive**; if none is pinned, it creates a new drive. To start
-over on purpose, use **Start new drive** (see
+empty, startup checks the backup pin in the storage channel. It opens
+**Restore drive** while a backup exists or the pin cannot be checked. It
+creates a new drive after confirming there is no backup pin. An existing
+catalog remains available for metadata operations during a Telegram outage.
+To start over on purpose, use **Start new drive** (see
 [backup and recovery](backup-recovery.md#start-a-new-drive)).
 
 Full archive recovery runs from the website. After authentication and archive
@@ -206,6 +210,10 @@ and [performance controls](performance.md#upload-pipeline-and-smaller-splits).
   `0` uses that same cap. Smaller preferences reduce part size.
 - Initial lookup may prefer healthy Premium users. Independent payload windows
   bind the same immutable media through eligible accounts.
+- Telegram's standard and Premium flood waits on metadata reads delay reuse of
+  the reporting account. The pool can lease a different eligible account while
+  the deadline is saved for restart. Startup restores saved deadlines before
+  opening download leases.
 - Stable account IDs survive bot-token reordering. A dispatched part retains its
   sender and request ID on retry; undispatched parts may change sender.
 - Credential/channel failures quarantine the account and wake waiters. Reads try
@@ -497,8 +505,8 @@ and request identity. Saved retry deadlines survive restart. See
 Permanent deletion journals all accepted intents before starting removal. Pending
 roots are hidden from Trash listings; failures return to the listing and retries
 hide them again. A bulk request shares one independent-backup check before any
-of its newly started jobs remove catalog rows. Each subtree/share removal stays
-atomic and independent; retries and restart recovery perform fresh checks.
+of its newly started jobs remove catalog rows. Each subtree is processed
+independently, and retries and restart recovery perform fresh backup checks.
 Completed intents drop their message references. **Original Telegram messages
 remain** for every file age and retry. Reconciliation and lineage checks still
 apply. See [deletion progress and retries](usage.md#trash-and-permanent-deletion).
@@ -533,6 +541,29 @@ recreating completed outputs; cancellation and failures can retain earlier
 committed files and folders. [Archive limits and API](api.md#archive-jobs)
 are the canonical contract.
 
+### Permanent deletion intents
+
+Permanent deletion forgets the selected Trash subtree and retains its original
+Telegram documents. An independent backup checkpoint is verified before catalog
+cleanup when backup protection is enabled. Small and older intents keep their
+inline message lists. Larger intents use companion rows covering up to 512
+distinct IDs each, including multipart pieces and posters. Preparing those rows
+and publishing the intent are one fenced transaction. A retry resumes the
+committed intent. Partial confirmations can update individual companion rows
+without replacing the full manifest.
+
+Recovery snapshots validate companion rows against their parent intent and the
+retained subtree. Same-channel and independent restore continue to discard
+source deletion intents before replacing the destination catalog. Small subtrees
+are removed in a single transaction with the completion marker. For larger
+subtrees, a disposable local plan orders descendants before their parents. Each
+MongoDB transaction removes a bounded batch, expires its linked upload records,
+and updates the trash totals and remaining manifest together. A document leaves
+the manifest when its last reference in the subtree is removed. The pending root
+stays hidden while batches commit, and every committed state remains valid for
+backup. After interruption, retry rebuilds the plan from the remaining catalog.
+The final transaction removes the root and marks the intent complete.
+
 ### Finished history
 
 Resolved jobs stay in a paged history, separate from temporary browser popups.
@@ -556,10 +587,17 @@ Each numbered page holds 20 finished tasks. Browser-owned tasks take slots first
 a server offset fills the remaining slots. Folder-selection metadata keeps
 partially received local folders out of server-only counts.
 
-Exact task totals scan archived summaries in batches on a worker, holding task
-summaries and the selected folders' members rather than every archived job.
-Numbered reads scan the history; an indexed cursor API is also available.
-Startup does not load the full archive. Deletion notices are separate from history.
+Numbered history reads ordered task summaries from a rebuildable MongoDB
+index. An exact archived task total is maintained in the same transactions as
+index changes. Unfiltered pages read that total and adjust it for active jobs
+that belong to archived folders. Filtered pages count matching index rows.
+The reader loads archived members for the selected page and evaluates substring
+search against archive names in MongoDB. Archived jobs remain the backup
+source of truth.
+The first history request after an upgrade or restore starts a restartable
+backfill in fenced batches. The legacy reader serves history until the new
+index is complete. An indexed cursor API is also available. Deletion notices
+are separate from transfer history.
 
 Manual history clearing deletes archived summaries and persists a hidden marker
 on terminal live jobs, preserving their recovery contexts, staged-byte ownership
@@ -613,8 +651,10 @@ replication enumerate both originals and posters. Portable schema 4 reads
 older files without posters. See [poster behavior and limits](thumbnails.md#video-posters).
 
 [Performance](performance.md) defines cache budgets, shared fetches, read-ahead,
-preloading and eviction. Cached bytes still require authorization; later stream
-blocks recheck shared access. Revocation cannot recall sent bytes.
+preloading and eviction. Shared file validation reads catalog ancestry and the
+indexed share token hash in the same MongoDB snapshot. Delivery checks current
+scope, expiry and password authorization during streaming, including when
+serving cached bytes. Revocation cannot recall sent bytes.
 
 The video player's [browser buffer](performance.md#browser-playback-buffer) is
 separate from server cache and decoder memory. Neither cache nor extra bots

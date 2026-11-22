@@ -11,6 +11,8 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pymongo.errors import PyMongoError
+
 from tgdrive.core.config import Settings
 from tgdrive.recovery.backup import RecoveryConflict
 from tgdrive.recovery.mongo_backup import MongoProtection
@@ -34,6 +36,28 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _worker = _journalled(asyncio.to_thread)
+
+
+def recovery_pauses_admission(runtime):
+    replica = getattr(runtime, "replica", None)
+    return (
+        getattr(runtime, "recovery_only", False)
+        or getattr(runtime, "archive_restore_restart_required", False)
+        or getattr(getattr(runtime, "backup", None), "recovery_required", False)
+        or (replica is not None and replica.blocked)
+    )
+
+
+def admission_status(runtime) -> str:
+    try:
+        if recovery_pauses_admission(runtime):
+            return "recovery"
+        check_owner = getattr(getattr(runtime, "mongo", None), "check_owner", None)
+        if check_owner is not None:
+            check_owner()
+    except DatabaseUnavailable, PyMongoError:
+        return "not ready"
+    return "ok"
 
 
 class Runtime:
@@ -174,7 +198,7 @@ class Runtime:
             original_lineage = getattr(self.backup, "verify_lineage", None)
 
             async def protected_lineage(store):
-                if self.replica.blocked:
+                if await _worker(lambda: self.replica.blocked):
                     from tgdrive.settings.managed_settings import SettingsProblem
 
                     raise SettingsProblem(
@@ -399,7 +423,7 @@ class Runtime:
         return True
 
     def _check_upload_allowed(self) -> None:
-        if getattr(self, "replica", None) is not None and self.replica.blocked:
+        if recovery_pauses_admission(self):
             from tgdrive.settings.managed_settings import SettingsProblem
 
             raise SettingsProblem(
@@ -408,7 +432,7 @@ class Runtime:
         self.backup.check_upload_allowed(self.store)
 
     async def _check_bot_upload_allowed(self) -> None:
-        self._check_upload_allowed()
+        await _worker(self._check_upload_allowed)
         await self._verify_storage_channel()
 
     async def _reconnect(self, *, storage_ready: bool = False) -> None:

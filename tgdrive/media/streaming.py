@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.exceptions import HTTPException
 from starlette.types import Receive, Scope, Send
 from telethon.errors import FloodWaitError, RPCError
 
@@ -627,6 +628,11 @@ async def stream_telegram_file(
                         "Telegram stream ended early "
                         f"({emitted}/{plan.requested_length} bytes)"
                     )
+            except HTTPException as error:
+                logger.debug(
+                    "File delivery ended with HTTP status %d", error.status_code
+                )
+                raise
             except Exception:
                 logger.exception("Telegram response stream failed")
                 raise

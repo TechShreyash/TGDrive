@@ -29,9 +29,7 @@ def staging_usage(manager, *, receipts=None, exclude=None):
     seen = set()
     receipts = receipts or getattr(manager, "uploads", None)
     if receipts is not None:
-        for item in receipts._all():
-            if item["state"] not in {"receiving", "queued", "cancelling"}:
-                continue
+        for item in receipts.reservations():
             seen.add(item["id"])
             if item["id"] == exclude:
                 continue

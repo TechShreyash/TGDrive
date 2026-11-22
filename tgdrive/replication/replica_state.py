@@ -230,42 +230,61 @@ class ReplicaJournal:
                 "detail": str(_resource_error(reason)),
             }
 
-    def get(self, key, default=None) -> Any:
+    def _read(self, key, row, default):
         from tgdrive.recovery.staged_snapshot import RecoveryResourceLimit
 
-        with self.lock:
-            if key in self._resource_errors:
-                from tgdrive.replication.replica_activation import _resource_error
-
-                raise _resource_error(self._resource_errors[key]) from None
-            db = self.backend.db
-            row = db.replica_state.find_one({"_id": key})
-            if row is None:
-                return copy.deepcopy(default)
-            chunks = db.replica_chunks.find({"key": key}).sort("index", 1).batch_size(1)
-            try:
-                source = _JournalChunks(chunks, row["length"])
-                return read_legacy_value(
-                    BoundedPrivateReader(source, _private_maximum_bytes())
-                )
-            except PrivateRecoveryFileTooLarge, RecoveryResourceLimit, MemoryError:
-                reason = "Saved recovery journal exceeds provisional decoding limits"
-            finally:
-                close = getattr(chunks, "close", None)
-                if close is not None:
-                    close()
-            # Store only a reason, never the exception/traceback with its partial
-            # decoded private tree. The same owned journal can now report status
-            # without rebuilding a value already rejected by admission.
-            self._resource_errors[key] = reason
+        if key in self._resource_errors:
             from tgdrive.replication.replica_activation import _resource_error
 
-            raise _resource_error(reason) from None
+            raise _resource_error(self._resource_errors[key]) from None
+        if row is None:
+            return copy.deepcopy(default)
+        db = self.backend.db
+        chunks = db.replica_chunks.find({"key": key}).sort("index", 1).batch_size(1)
+        try:
+            source = _JournalChunks(chunks, row["length"])
+            return read_legacy_value(
+                BoundedPrivateReader(source, _private_maximum_bytes())
+            )
+        except PrivateRecoveryFileTooLarge, RecoveryResourceLimit, MemoryError:
+            reason = "Saved recovery journal exceeds provisional decoding limits"
+        finally:
+            close = getattr(chunks, "close", None)
+            if close is not None:
+                close()
+        # Store only a reason, never the exception/traceback with its partial
+        # decoded private tree. The same owned journal can now report status
+        # without rebuilding a value already rejected by admission.
+        self._resource_errors[key] = reason
+        from tgdrive.replication.replica_activation import _resource_error
 
-    def get_many(self, defaults):
+        raise _resource_error(reason) from None
+
+    def get(self, key, default=None) -> Any:
+        with self.lock:
+            row = (
+                None
+                if key in self._resource_errors
+                else self.backend.db.replica_state.find_one({"_id": key})
+            )
+            return self._read(key, row, default)
+
+    def get_many(self, defaults, *, retain=None):
         """Read related keys from one committed journal version."""
         with self.lock:
-            return {key: self.get(key, default) for key, default in defaults.items()}
+            rows = {
+                row["_id"]: row
+                for row in self.backend.db.replica_state.find(
+                    {"_id": {"$in": list(defaults)}}
+                )
+            }
+            result = {}
+            for key, default in defaults.items():
+                value = self._read(key, rows.get(key), default)
+                if retain is None or key in retain:
+                    result[key] = value
+                del value
+            return result
 
     def set(self, key, value):
         self.set_many({key: value})

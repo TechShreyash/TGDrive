@@ -20,10 +20,12 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp import ClientConnectionError, ClientPayloadError
+from pymongo.collection import Collection
 from pymongo.errors import PyMongoError
 from telethon.errors import RpcCallFailError, ServerError, TimedOutError
 
 from tgdrive.storage.mongo import DatabaseUnavailable
+from tgdrive.transfers.task_history_index import TaskHistoryIndex, task_identity
 
 logger = logging.getLogger(__name__)
 _DEFAULT_CANCEL_GRACE_SECONDS = 10.0
@@ -82,6 +84,9 @@ def _journalled(operation):
         return result
 
     return owned
+
+
+_owned_worker = _journalled(asyncio.to_thread)
 
 
 def _retry_after_restart(error: Exception) -> bool:
@@ -415,6 +420,13 @@ class TransferRegistry:
         self._last_progress_commit: dict[str, float] = {}
         self._logged: dict[str, tuple[TransferStatus, str, bool, float]] = {}
         self._history: dict[str, dict[str, Any]] = {}
+        self._history_index = (
+            TaskHistoryIndex(mongo_backend, mongo)
+            if isinstance(mongo, Collection) and mongo_backend is not None
+            else None
+        )
+        self._history_builder: asyncio.Task[None] | None = None
+        self._history_retry_at = 0.0
         if database_path is not None:
             raise ValueError(
                 "Transfer persistence requires MongoDB, not a local database path"
@@ -554,12 +566,13 @@ class TransferRegistry:
                 cancel_event=record.cancel_event,
             )
         try:
-            await self._write(
-                "replace_one",
-                {"_id": record.id},
-                {"_id": record.id, "data": item},
-                upsert=True,
-            )
+            document = {"_id": record.id, "data": item}
+            if previous is None and self._history_index is not None:
+                await _owned_worker(self._history_index.save_new_live, document)
+            else:
+                await self._write(
+                    "replace_one", {"_id": record.id}, document, upsert=True
+                )
         except (
             PyMongoError,
             DatabaseUnavailable,
@@ -779,20 +792,20 @@ class TransferRegistry:
         )
         if self._mongo is not None:
             if summary is not None:
-                args = (
-                    {"_id": transfer_id},
-                    {
-                        "_id": transfer_id,
-                        "archived": True,
-                        "created_at": record.created_at,
-                        "status": record.status.value,
-                        "search_name": unicodedata.normalize(
-                            "NFC", summary["name"]
-                        ).casefold(),
-                        "summary": summary,
-                    },
-                )
-                await self._write("replace_one", *args)
+                archive = {
+                    "_id": transfer_id,
+                    "archived": True,
+                    "created_at": record.created_at,
+                    "status": record.status.value,
+                    "search_name": unicodedata.normalize(
+                        "NFC", summary["name"]
+                    ).casefold(),
+                    "summary": summary,
+                }
+                if self._history_index is not None:
+                    await _owned_worker(self._history_index.archive, archive)
+                else:
+                    await self._write("replace_one", {"_id": transfer_id}, archive)
             else:
                 await self._write("delete_one", {"_id": transfer_id})
         if self._mongo is None and summary is not None:
@@ -890,18 +903,6 @@ class TransferRegistry:
             "next_before_id": page[-1]["id"] if has_more else None,
         }
 
-    @staticmethod
-    def _history_task_id(row):
-        folder = row.get("folder_upload")
-        if (
-            row.get("kind") in {"upload", "receiving"}
-            and isinstance(folder, dict)
-            and isinstance(folder.get("id"), str)
-            and folder["id"]
-        ):
-            return "folder:" + folder["id"]
-        return "job:" + row["id"]
-
     def _task_archive_rows(self, selected=None):
         """Stream summaries; numbered pages never materialize the whole archive."""
         if self._mongo is not None:
@@ -945,7 +946,7 @@ class TransferRegistry:
                 cursor.close()
             return
         for row in list(self._history.values()):
-            if selected is None or self._history_task_id(row) in selected:
+            if selected is None or task_identity(row) in selected:
                 yield copy.deepcopy(row)
 
     @staticmethod
@@ -968,7 +969,7 @@ class TransferRegistry:
         def observe(row, *, archived=False):
             if row.get("kind") == "delete":
                 return
-            identity = self._history_task_id(row)
+            identity = task_identity(row)
             if identity in excluded:
                 return
             folder = row.get("folder_upload")
@@ -1032,19 +1033,16 @@ class TransferRegistry:
         }
         if archived_ids:
             for row in self._task_archive_rows(archived_ids):
-                if (
-                    row["id"] not in live_ids
-                    and self._history_task_id(row) in selected_ids
-                ):
+                if row["id"] not in live_ids and task_identity(row) in selected_ids:
                     members[row["id"]] = row
         for row in live:
-            if self._history_task_id(row) in selected_ids:
+            if task_identity(row) in selected_ids:
                 members[row["id"]] = row
         order = {identity: index for index, identity in enumerate(selected)}
         jobs = sorted(
             members.values(),
             key=lambda row: (
-                order[self._history_task_id(row)],
+                order[task_identity(row)],
                 row["created_at"],
                 row["id"],
             ),
@@ -1097,9 +1095,7 @@ class TransferRegistry:
             for record in self.list()
             if not record.history_hidden
         ]
-        return await asyncio.to_thread(
-            self._numbered_history,
-            live,
+        options = dict(
             status=status,
             page=page,
             limit=limit,
@@ -1107,6 +1103,37 @@ class TransferRegistry:
             offset=offset,
             exclude_folders=tuple(exclude_folders),
         )
+        if self._history_index is not None:
+            result = await asyncio.to_thread(
+                self._history_index.numbered, live, **options
+            )
+            if result is not None:
+                return result
+            if (
+                not self._shutting_down
+                and self._history_builder is None
+                and time.monotonic() >= self._history_retry_at
+            ):
+                self._history_builder = asyncio.create_task(
+                    self._rebuild_history_index(), name="transfer-history-index"
+                )
+        return await asyncio.to_thread(self._numbered_history, live, **options)
+
+    async def _rebuild_history_index(self):
+        index = self._history_index
+        assert index is not None
+        try:
+            await _owned_worker(index.ensure_indexes)
+            for step in (index.rebuild_step, index.clean_step):
+                while not await _owned_worker(step):
+                    pass
+        except (DatabaseUnavailable, PyMongoError, ValueError, KeyError) as error:
+            self._history_retry_at = time.monotonic() + 30
+            logger.warning(
+                "Could not rebuild transfer history index (%s)", type(error).__name__
+            )
+        finally:
+            self._history_builder = None
 
     @_journalled
     async def clear_history(self, *, exclude_folders=()) -> int:
@@ -1124,8 +1151,13 @@ class TransferRegistry:
                     "status": {"$in": [status.value for status in _TERMINAL]},
                     "summary.folder_upload.id": {"$nin": sorted(active_folders)},
                 }
-                result = await self._write("delete_many", query)
-                cleared = result.deleted_count
+                if self._history_index is not None:
+                    cleared = await _owned_worker(
+                        self._history_index.clear, query, active_folders
+                    )
+                else:
+                    result = await self._write("delete_many", query)
+                    cleared = result.deleted_count
             else:
                 removed = [
                     identity
@@ -1572,6 +1604,9 @@ class TransferRegistry:
 
     async def shutdown(self) -> None:
         self._shutting_down = True
+        if self._history_builder is not None:
+            self._history_builder.cancel()
+            await asyncio.gather(self._history_builder, return_exceptions=True)
         if self._mongo is None:
             for record in list(self._records.values()):
                 if not record.terminal:

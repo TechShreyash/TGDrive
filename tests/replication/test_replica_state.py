@@ -377,16 +377,16 @@ def test_related_journal_reads_cannot_mix_a_concurrent_commit(tmp_path, monkeypa
             return original_lock.__exit__(*args)
 
     monkeypatch.setattr(journal, "lock", ObservedLock())
-    original_get = journal.get
+    original_read = journal._read
 
-    def read(key, default=None):
-        value = original_get(key, default)
+    def read(key, row, default):
+        value = original_read(key, row, default)
         if key == "config" and threading.current_thread().name == "journal-reader":
             first_read.set()
             assert writer_attempted.wait(2)
         return value
 
-    monkeypatch.setattr(journal, "get", read)
+    monkeypatch.setattr(journal, "_read", read)
     results, errors = [], []
 
     def run(operation):

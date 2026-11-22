@@ -861,3 +861,52 @@ def test_invalid_saved_reading_metadata_is_rejected_before_activation(
     with pytest.raises(ValueError):
         stage(tmp_path, snapshot)
     assert not (tmp_path / "snapshot.sqlite").exists()
+
+
+@pytest.mark.parametrize("damage", [None, "orphan", "count", "unrelated", "pending"])
+def test_recovery_validates_batched_deletion_membership(tmp_path, snapshot, damage):
+    records = snapshot["database"]
+    folder = next(row for row in records["nodes"] if row["name"] == "Folder")
+    folder["trashed"] = True
+    identity = "batched-deletion"
+    header = {
+        "_id": identity,
+        "id": identity,
+        "root_id": folder["_id"],
+        "path": "/" + folder["_id"],
+        "channel_id": MAIN,
+        "state": "pending",
+        "created_at": snapshot["created_at"],
+        "error": None,
+        "message_ids": [],
+        "pending_message_ids": [],
+        "message_count": 1,
+    }
+    batch = {
+        "_id": identity + ":0",
+        "intent_id": identity,
+        "bucket": 0,
+        "message_ids": [41],
+        "pending_message_ids": [],
+    }
+    records["deletions"] = [batch, header]
+    if damage == "orphan":
+        records["deletions"].remove(header)
+    elif damage == "count":
+        header["message_count"] = 2
+    elif damage == "unrelated":
+        batch["message_ids"] = [99]
+    elif damage == "pending":
+        batch["pending_message_ids"] = [99]
+
+    if damage is not None:
+        with pytest.raises(ValueError, match=r"[Dd]eletion"):
+            stage(tmp_path, snapshot)
+        return
+
+    staged = stage(tmp_path, snapshot)
+    assert staged.file_count == 1
+    assert list(staged.records("deletions")) == [batch, header]
+    portable = snapshot_catalog(records)["deletions"][0]
+    assert portable["message_ids"] == [41]
+    assert portable["pending_message_ids"] == []

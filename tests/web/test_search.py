@@ -475,7 +475,10 @@ def test_folder_type_filter_matches_ui_groups_and_survives_rename(store):
 def test_type_field_is_backfilled_for_existing_nodes(store):
     store.add_file("/", "song.mp3", 1, 1)
     store.db.nodes.update_many({}, {"$unset": {"group": ""}})
-    MongoStore._indexes(store.backend)
+    store.db.catalog.update_one(
+        {"_id": "catalog"}, {"$unset": {"node_fields_version": ""}}
+    )
+    MongoStore(store.backend).close()
     assert [row["name"] for row in store.list_page("/", group="audio")["items"]] == [
         "song.mp3"
     ]
@@ -679,6 +682,8 @@ def test_search_caps_matches_and_reports_the_total(store):
 
 
 def test_search_cap_is_deterministic_and_direct_trash_cannot_consume_it(store):
+    # Equal upload dates make relevance ties use the existing name order.
+    timestamp = datetime(2020, 1, 1, tzinfo=UTC).isoformat()
     rows = []
     for hidden in (True, False):
         prefix = "aaa-hidden" if hidden else "zzz-visible"
@@ -691,6 +696,7 @@ def test_search_cap_is_deterministic_and_direct_trash_cannot_consume_it(store):
                 message_id=index + 1,
                 size=1,
                 trashed=hidden,
+                upload_date=timestamp,
             )
             for index in range(1005)
         )
@@ -742,7 +748,10 @@ def test_old_grams_are_dropped_and_tokens_rebuilt(store):
         {"_id": item["id"]}, {"$set": {"grams": ["fri"], "tokens": ["frieren"]}}
     )
     store.db.nodes.create_index("grams")
-    MongoStore._indexes(store.backend)
+    store.db.catalog.update_one(
+        {"_id": "catalog"}, {"$unset": {"node_fields_version": ""}}
+    )
+    MongoStore(store.backend).close()
     row = store.db.nodes.find_one({"_id": item["id"]})
     assert "grams" not in row and "3" in row["tokens"]
     assert "grams_1" not in store.db.nodes.index_information()

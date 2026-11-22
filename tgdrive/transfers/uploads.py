@@ -59,6 +59,7 @@ class ResumableUploads:
         self._mongo = backend.db.receipts
         self._items: dict[str, dict[str, Any]] = {}
         self._terminal_expiry: dict[str, float] = {}
+        self._uncertain_chunks: set[str] = set()
         for row in self._mongo.find({}):
             self._items[row["_id"]] = row["data"]
             if "purge_at" in row:
@@ -80,6 +81,16 @@ class ResumableUploads:
         items = dict(self._pending)
         items.update(self._items)
         return copy.deepcopy(list(items.values()))
+
+    def reservations(self):
+        self._prune_terminal()
+        items = self._pending.copy()
+        items.update(self._items.copy())
+        return [
+            {key: item[key] for key in ("id", "state", "total_size", "offset")}
+            for item in items.values()
+            if item["state"] in _ACTIVE
+        ]
 
     def _prune_terminal(self, upload_id: str | None = None) -> None:
         """Expire only settled cached receipts, using their durable TTL deadline."""
@@ -175,9 +186,20 @@ class ResumableUploads:
         item.update(parent_node_id=binding["id"], parent_id=binding["path"])
         return binding["path"]
 
+    def _refresh_chunk(self, upload_id: str) -> dict[str, Any]:
+        if upload_id in self._uncertain_chunks:
+            # Fence the read so it follows any unresolved transaction from the
+            # previous chunk before a retry can truncate the staging file.
+            row = self._mongo_backend.write(self._mongo, "find_one", {"_id": upload_id})
+            if row is None:
+                raise UploadError("Upload session not found", 404)
+            self._items[upload_id] = row["data"]
+            self._uncertain_chunks.discard(upload_id)
+        return self.get_unchecked(upload_id)
+
     def get(self, upload_id: str) -> dict[str, Any]:
         # Server callers hold the receipt lock through any expiry cleanup.
-        item = self.get_unchecked(upload_id)
+        item = self._refresh_chunk(upload_id)
         # Inspection remains available when a folder is trashed/deleted, so owners
         # can cancel the receipt; active chunks/complete enforce the binding below.
         with suppress(UploadError):
@@ -354,16 +376,19 @@ class ResumableUploads:
         return result
 
     async def _reconcile_for_creation(self) -> None:
-        for snapshot in self._all():
+        for snapshot in self.reservations():
             upload_id = snapshot["id"]
-            if upload_id in self._pending or snapshot["state"] not in _ACTIVE:
+            if upload_id in self._pending:
                 continue
             lock = self.locks.setdefault(upload_id, asyncio.Lock())
             if lock.locked():
                 # An active append/complete/cancel owns this receipt's state.
                 continue
             async with lock:
-                item = self.get_unchecked(upload_id)
+                if upload_id in self._uncertain_chunks:
+                    item = await self._owned_worker(self._refresh_chunk, upload_id)
+                else:
+                    item = self.get_unchecked(upload_id)
                 record = self._existing_job(upload_id)
                 state = item["state"]
                 if record is not None and str(record.status) in {
@@ -448,7 +473,7 @@ class ResumableUploads:
                 raise UploadError(
                     "Only the last chunk may be smaller than chunk_size", 422
                 )
-            path = self.path(upload_id)
+            path = self.root / (upload_id + ".part")
             # Capture live journals on the event loop; the disk worker receives
             # only immutable future-byte totals, excluding this receipt.
             remaining = staging_usage(self.manager, receipts=self, exclude=upload_id)[1]
@@ -472,14 +497,39 @@ class ResumableUploads:
             await self._owned_worker(preflight)
 
             def commit(checksum: str) -> None:
-                item["checksums"].append(
-                    {"offset": offset, "size": len(body), "sha256": checksum}
+                chunk = {"offset": offset, "size": len(body), "sha256": checksum}
+                updated = {
+                    "offset": offset + len(body),
+                    "expires_at": time.time()
+                    + self.settings.upload_session_ttl_seconds,
+                    "parent_id": item["parent_id"],
+                    "parent_node_id": item["parent_node_id"],
+                }
+                self._uncertain_chunks.add(upload_id)
+                result = self._mongo_backend.write(
+                    self._mongo,
+                    "update_one",
+                    {
+                        "_id": upload_id,
+                        "data.state": "receiving",
+                        "data.offset": offset,
+                    },
+                    {
+                        "$set": {
+                            f"data.{key}": value for key, value in updated.items()
+                        },
+                        "$push": {"data.checksums": chunk},
+                    },
                 )
-                item["offset"] += len(body)
-                item["expires_at"] = (
-                    time.time() + self.settings.upload_session_ttl_seconds
-                )
-                self._save(item)
+                if not result.matched_count:
+                    raise UploadError(
+                        "Upload offset changed. Read the current offset and resume.",
+                        code="UPLOAD_OFFSET_CHANGED",
+                    )
+                item["checksums"].append(chunk)
+                item.update(updated)
+                self._items[upload_id] = copy.deepcopy(item)
+                self._uncertain_chunks.discard(upload_id)
 
             def write() -> str:
                 with path.open("r+b") as handle:
@@ -628,7 +678,7 @@ class ResumableUploads:
 
     async def cancel(self, upload_id: str) -> dict[str, Any]:
         async with self.locks.setdefault(upload_id, asyncio.Lock()):
-            item = self.get_unchecked(upload_id)
+            item = await self._owned_worker(self._refresh_chunk, upload_id)
             if item["state"] in {"finished", "cancelled"}:
                 return item
             if item["state"] == "receiving" and self._existing_job(upload_id) is None:

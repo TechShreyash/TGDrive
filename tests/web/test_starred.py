@@ -77,3 +77,44 @@ def test_starred_api_owner_only_and_strict_boolean(app_client):
         == 200
     )
     assert client.get("/api/v1/starred").json()["data"]["contents"] == {}
+
+
+def test_owner_listings_page_without_losing_tied_rows(app_client):
+    client, store, _, _ = app_client
+    fixtures.login(client)
+    for index in range(3):
+        folder = store.create_folder("/", f"Folder {index}")
+        base = "/" + folder["id"]
+        node = store.add_file(base, "same.txt", index + 1, 3)
+        path = base + "/" + node["id"]
+        store.set_starred(path, True)
+        store.create_share(path)
+        trashed = store.add_file(base, "trashed.txt", index + 10, 3)
+        store.set_trashed(base + "/" + trashed["id"], True)
+
+    for view in ("starred", "trash", "shares"):
+        endpoint = "/api/v1/" + view
+
+        def identifiers(payload, view=view):
+            if view == "shares":
+                return [share["id"] for share in payload["shares"]]
+            return list(payload["data"]["contents"])
+
+        legacy = client.get(endpoint).json()
+        assert "next_cursor" not in legacy
+        params = {"limit": "1"}
+        seen = []
+        for page_number in range(3):
+            response = client.get(endpoint, params=params)
+            assert response.status_code == 200, response.text
+            page = response.json()
+            items = identifiers(page)
+            assert len(items) == 1
+            seen.extend(items)
+            if page_number < 2:
+                assert page["next_cursor"]
+                params["cursor"] = page["next_cursor"]
+            else:
+                assert page["next_cursor"] is None
+        assert seen == identifiers(legacy)
+        assert client.get(endpoint, params={"cursor": "invalid"}).status_code == 422

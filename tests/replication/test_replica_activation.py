@@ -364,6 +364,7 @@ class Backend:
                     "shares",
                     "share_open_events",
                     "catalog",
+                    "runtime",
                     "operations",
                     "deletions",
                     "preparations",
@@ -1434,8 +1435,9 @@ def test_missing_backing_probe_preserves_prepared_activation_and_original_catalo
     import tgdrive.replication.replica_activation as module
 
     backend = cast(Backend, for_settings(settings))
+    proposed = candidate(catalog(settings))
     before = copy.deepcopy(backend.data)
-    prepare_activation(settings, candidate(catalog(settings)))
+    prepare_activation(settings, proposed)
     manifest = settings.resolved_data_dir / MANIFEST
     original = manifest.read_bytes()
     settings.data_backing_capacity_dir = settings.resolved_data_dir / "missing-probe"

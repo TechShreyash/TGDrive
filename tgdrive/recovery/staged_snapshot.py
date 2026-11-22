@@ -23,6 +23,7 @@ from bson.codec_options import CodecOptions
 from bson.errors import InvalidDocument
 
 from tgdrive.storage.capacity import measure_capacity, require_headroom
+from tgdrive.storage.deletion_batches import batched_count, validate_batch
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.storage.store import (
     ROOT_ID,
@@ -75,10 +76,13 @@ CREATE INDEX source_messages ON messages(message);
 CREATE TABLE mappings (source INTEGER PRIMARY KEY, destination INTEGER UNIQUE);
 CREATE TABLE shares (id TEXT PRIMARY KEY, node TEXT NOT NULL, hash TEXT UNIQUE);
 CREATE TABLE operations (id TEXT PRIMARY KEY, node TEXT UNIQUE);
-CREATE TABLE deletions (id TEXT PRIMARY KEY, root TEXT, active INTEGER);
+CREATE TABLE deletions (id TEXT PRIMARY KEY, root TEXT, active INTEGER,
+    batched INTEGER);
 CREATE UNIQUE INDEX deletion_roots ON deletions(root) WHERE active = 1;
 CREATE TABLE deletion_messages (deletion TEXT, message INTEGER,
     PRIMARY KEY(deletion, message));
+CREATE TABLE deletion_batches (deletion TEXT, bucket INTEGER,
+    PRIMARY KEY(deletion, bucket));
 CREATE TABLE preparations (id TEXT PRIMARY KEY);
 CREATE TABLE queue (id TEXT PRIMARY KEY);
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value BLOB NOT NULL);
@@ -443,15 +447,31 @@ def _record(db, collection, row, budget):
             ),
         )
     elif collection == "deletions":
-        intent = MongoStore._validate_deletion_record(_portable_row(row))
-        db.execute(
-            "INSERT INTO deletions VALUES(?,?,?)",
-            (intent["id"], intent["root_id"], int(intent["state"] != "completed")),
-        )
+        if "intent_id" in row:
+            batch = validate_batch(row)
+            intent_id, messages = batch["intent_id"], batch["message_ids"]
+            db.execute(
+                "INSERT INTO deletion_batches VALUES(?,?)", (intent_id, batch["bucket"])
+            )
+        else:
+            intent = _portable_row(row)
+            count = batched_count(intent)
+            intent.pop("message_count", None)
+            intent = MongoStore._validate_deletion_record(intent)
+            intent_id, messages = intent["id"], intent["message_ids"]
+            db.execute(
+                "INSERT INTO deletions VALUES(?,?,?,?)",
+                (
+                    intent_id,
+                    intent["root_id"],
+                    int(intent["state"] != "completed"),
+                    int(count is not None),
+                ),
+            )
         _write_many(
             db,
             "INSERT INTO deletion_messages VALUES(?,?)",
-            ((intent["id"], message) for message in intent["message_ids"]),
+            ((intent_id, message) for message in messages),
             budget,
         )
     elif collection == "preparations":
@@ -569,11 +589,28 @@ def _validate_graph(db, catalog, budget):
 
 
 def _validate_deletions(db, budget):
+    if db.execute(
+        "SELECT 1 FROM deletion_batches b LEFT JOIN deletions d ON d.id=b.deletion "
+        "WHERE d.batched IS NULL OR d.batched=0 LIMIT 1"
+    ).fetchone():
+        raise ValueError("Recovery deletion batch has no matching intent")
     for (raw,) in db.execute(
         "SELECT document FROM documents WHERE collection='deletions'"
     ):
         intent = _portable_row(_unpack(raw))
         budget.check(force=True)
+        if "intent_id" in intent:
+            continue
+        count = batched_count(intent)
+        if (
+            count is not None
+            and db.execute(
+                "SELECT count(*) FROM deletion_messages WHERE deletion=?",
+                (intent["id"],),
+            ).fetchone()[0]
+            != count
+        ):
+            raise ValueError("Recovery deletion batch count does not match")
         node = db.execute(
             "SELECT parent,trashed FROM nodes WHERE id=?", (intent["root_id"],)
         ).fetchone()
