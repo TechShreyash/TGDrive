@@ -19,8 +19,20 @@ def test_office_previews_read_documents_and_switch_sheets(server: Server, deskto
     page.reload()
     page.get_by_role("button", name="Preview samples", exact=True).dblclick()
 
-    page.get_by_role("button", name="Meeting.docx", exact=True).dblclick()
+    held = []
+    page.route("**/assets/OfficePreview-*.js", lambda route: held.append(route))
+    with page.expect_request("**/assets/OfficePreview-*.js"):
+        page.get_by_role("button", name="Meeting.docx", exact=True).dblclick()
     dialog = preview_dialog(page)
+    expect(
+        dialog.get_by_role("status", name="", exact=True).filter(
+            has_text="Loading Office viewer"
+        )
+    ).to_be_visible()
+    expect(dialog.get_by_role("button", name="Close Preview")).to_be_enabled()
+    assert held
+    for route in held:
+        route.continue_()
     expect(dialog.get_by_role("heading", name="Meeting notes")).to_be_visible()
     expect(dialog.get_by_text("Review <draft>", exact=True)).to_be_visible()
     page.keyboard.press("Escape")

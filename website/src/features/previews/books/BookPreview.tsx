@@ -16,8 +16,12 @@ import {
     Settings2,
 } from "lucide-react";
 import { readBoundedResponse } from "../previewIO";
-import { errorMessage } from "../../../shared/api";
+import { ApiError, errorMessage } from "../../../shared/api";
 import { ErrorNotice, Spinner } from "../../../shared/components";
+import {
+    shareLinkUnavailable,
+    SHARE_UNAVAILABLE_MESSAGE,
+} from "../../shares/SharedUnlock";
 import "./BookPreview.css";
 import BookImage from "./BookImage";
 import {
@@ -64,10 +68,11 @@ export async function bookJson(url: string, signal: AbortSignal) {
         ),
     );
     if (!response.ok)
-        throw new Error(
+        throw new ApiError(
             typeof data.detail === "string"
                 ? data.detail
                 : "The book could not be read. Try again.",
+            response.status,
         );
     return data;
 }
@@ -119,7 +124,8 @@ export default function BookPreview({
     const [readyEntry, setReadyEntry] = useState("");
     const [nodes, setNodes] = useState<BookNode[]>([]);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState("");
+    const [loadError, setLoadError] = useState<unknown>(null);
+    const error = loadError ? errorMessage(loadError) : "";
     const [indexAttempt, setIndexAttempt] = useState(0);
     const [attempt, setAttempt] = useState(0);
     const [rtl, setRtl] = useState(false);
@@ -144,7 +150,7 @@ export default function BookPreview({
         const controller = new AbortController();
         setReadyEntry("");
         setLoading(true);
-        setError("");
+        setLoadError(null);
         void bookJson(bookUrl(path, auth), controller.signal)
             .then(validateBook)
             .then((result) => {
@@ -160,7 +166,7 @@ export default function BookPreview({
             })
             .catch((cause) => {
                 if (!controller.signal.aborted) {
-                    setError(errorMessage(cause));
+                    setLoadError(cause);
                     setLoading(false);
                 }
             });
@@ -186,7 +192,7 @@ export default function BookPreview({
         const controller = new AbortController();
         setReadyEntry("");
         setLoading(true);
-        setError("");
+        setLoadError(null);
         setNodes([]);
         const url = bookUrl(path, auth, selected);
         const prefetched = takePrefetched(url);
@@ -209,7 +215,7 @@ export default function BookPreview({
             })
             .catch((cause) => {
                 if (!controller.signal.aborted) {
-                    setError(errorMessage(cause));
+                    setLoadError(cause);
                     setLoading(false);
                 }
             });
@@ -245,7 +251,7 @@ export default function BookPreview({
         if (!book) return;
         const entry = book.entries[index + delta];
         if (entry) {
-            setError("");
+            setLoadError(null);
             setSelected(entry.name);
             setAttempt(0);
         }
@@ -275,6 +281,7 @@ export default function BookPreview({
                     id={id}
                     src={bookUrl(path, auth, node.src)}
                     alt={node.alt || ""}
+                    onAccessLost={auth ? setLoadError : undefined}
                 />
             ) : null;
         if (node.tag === "a")
@@ -440,6 +447,12 @@ export default function BookPreview({
             </details>
         </div>
     );
+    if (auth && shareLinkUnavailable(loadError))
+        return (
+            <div className="book-message">
+                <ErrorNotice message={SHARE_UNAVAILABLE_MESSAGE} />
+            </div>
+        );
     return (
         <div
             className={
@@ -456,7 +469,7 @@ export default function BookPreview({
                         className="secondary-button"
                         onClick={() =>
                             book
-                                ? (setError(""), setAttempt((n) => n + 1))
+                                ? (setLoadError(null), setAttempt((n) => n + 1))
                                 : setIndexAttempt((n) => n + 1)
                         }
                     >
@@ -505,6 +518,7 @@ export default function BookPreview({
                     <BookImage
                         key={selected + attempt}
                         eager
+                        onAccessLost={auth ? setLoadError : undefined}
                         onReady={() =>
                             setReadyEntry(bookUrl(path, auth, selected))
                         }

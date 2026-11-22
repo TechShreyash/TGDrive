@@ -67,6 +67,22 @@ describe("bounded safe previews", () => {
                 ),
             ).toBeNull();
     });
+    it("gives unavailable share guidance without expiring the owner session", async () => {
+        const events = new EventTarget();
+        const expired = vi.fn();
+        events.addEventListener("tgdrive:auth-required", expired);
+        vi.stubGlobal("window", events);
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () =>
+                Response.json({ detail: "private data" }, { status: 401 }),
+            ),
+        );
+        await expect(
+            loadPreview("/id", "share token", new AbortController().signal),
+        ).rejects.toThrow("Ask the owner for a new link.");
+        expect(expired).not.toHaveBeenCalled();
+    });
     it("does not let a delayed preview 401 dismiss a newer login", async () => {
         const events = new EventTarget();
         const expired = vi.fn();

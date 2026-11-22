@@ -7,6 +7,9 @@ to navigate and adjust the display; EPUB/comics also offer **Reading options**.
 If a preview fails,
 **Download** retrieves the unchanged original for another reader.
 
+If access to a shared book is revoked while you are reading, ask the owner for
+a new link. For a temporary load failure, use **Try again**.
+
 ## Choose a format
 
 | Format | Controls | How it loads |

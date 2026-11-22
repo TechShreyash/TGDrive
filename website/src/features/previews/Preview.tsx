@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import {
     api,
+    ApiError,
     request,
     errorMessage,
     sessionExpiryHandler,
@@ -38,6 +39,10 @@ import {
     type PreviewDescriptor,
 } from "../../shared/types";
 import { ErrorNotice, FileIcon, Spinner } from "../../shared/components";
+import {
+    shareLinkUnavailable,
+    SHARE_UNAVAILABLE_MESSAGE,
+} from "../shares/SharedUnlock";
 
 function PreviewFeedback({
     title,
@@ -168,7 +173,14 @@ export async function loadPreview(
         signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
         headers: { Accept: "application/json" },
     });
-    expireSession(response.status);
+    if (!auth) expireSession(response.status);
+    if (auth && !response.ok) {
+        const failure = new ApiError(
+            SHARE_UNAVAILABLE_MESSAGE,
+            response.status,
+        );
+        if (shareLinkUnavailable(failure)) throw failure;
+    }
     let content: string;
     try {
         content = new TextDecoder().decode(
@@ -460,7 +472,8 @@ export default function Preview({
             clearTimeout(timer);
         };
     }, [path, auth, kind, nativeKind, descriptor]);
-    const [error, setError] = useState("");
+    const [loadError, setLoadError] = useState<unknown>(null);
+    const linkUnavailable = Boolean(auth) && shareLinkUnavailable(loadError);
     const [loading, setLoading] = useState(!nativeKind);
     const [attempt, setAttempt] = useState(0);
     const [wrap, setWrap] = useState(true);
@@ -583,14 +596,14 @@ export default function Preview({
         }
         const controller = new AbortController();
         setLoading(true);
-        setError("");
+        setLoadError(null);
         setPreview(null);
         void loadPreview(path, auth, controller.signal)
             .then((value) => {
                 if (!controller.signal.aborted) setPreview({ path, value });
             })
             .catch((error) => {
-                if (!controller.signal.aborted) setError(errorMessage(error));
+                if (!controller.signal.aborted) setLoadError(error);
             })
             .finally(() => {
                 if (!controller.signal.aborted) setLoading(false);
@@ -601,7 +614,7 @@ export default function Preview({
         descriptor?.kind === "pdf" ? safePdfUrl(descriptor.url) : undefined;
     const documentPreview = !!pdf || descriptor?.kind === "book";
     const details =
-        !kind && !error && (loading || descriptor?.kind === "unsupported");
+        !kind && !loadError && (loading || descriptor?.kind === "unsupported");
     const suffix = item.name.includes(".")
         ? item.name.slice(item.name.lastIndexOf(".") + 1)
         : "";
@@ -863,12 +876,20 @@ export default function Preview({
                                 <div className="preview-loading" role="status">
                                     <Spinner /> Loading preview…
                                 </div>
-                            ) : error ? (
+                            ) : loadError ? (
                                 <PreviewFeedback
-                                    title="Preview could not load"
-                                    action={retryAction}
+                                    title={
+                                        linkUnavailable
+                                            ? "Shared Item Unavailable"
+                                            : "Preview could not load"
+                                    }
+                                    action={
+                                        linkUnavailable ? null : retryAction
+                                    }
                                 >
-                                    <ErrorNotice message={error} />
+                                    <ErrorNotice
+                                        message={errorMessage(loadError)}
+                                    />
                                 </PreviewFeedback>
                             ) : failed ? (
                                 <PreviewFeedback
@@ -998,7 +1019,16 @@ export default function Preview({
                                     </pre>
                                 </div>
                             ) : descriptor?.kind === "office" ? (
-                                <Suspense fallback={<Spinner />}>
+                                <Suspense
+                                    fallback={
+                                        <div
+                                            className="preview-loading"
+                                            role="status"
+                                        >
+                                            <Spinner /> Loading Office viewer…
+                                        </div>
+                                    }
+                                >
                                     <OfficePreview
                                         key={path + auth}
                                         path={path}

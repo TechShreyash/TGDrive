@@ -1,3 +1,4 @@
+import { ApiError } from "../../../shared/api";
 import { readBoundedResponse } from "../previewIO";
 
 export const MAX_BOOK_IMAGE = 64 * 1024 * 1024;
@@ -15,13 +16,14 @@ export type ImageProgress = {
     attempt: number;
     retrying: boolean;
 };
-class ImageResponseError extends Error {
+class ImageResponseError extends ApiError {
     constructor(
         message: string,
         readonly retryable: boolean,
         readonly delay = 0,
+        status = 0,
     ) {
-        super(message);
+        super(message, status);
     }
 }
 function pause(ms: number, signal: AbortSignal) {
@@ -79,6 +81,7 @@ export async function loadBookImage(
                     message,
                     transient.has(response.status),
                     Number.isFinite(delay) ? delay : 0,
+                    response.status,
                 );
             }
             const mime =

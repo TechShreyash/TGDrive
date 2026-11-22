@@ -207,7 +207,12 @@ def test_independent_share_ui_and_public_reader_revocation(server, desktop, brow
         page.get_by_role("button", name="Revoke Link", exact=True).click()
         expect(page.locator(".share-row")).to_have_count(1)
         reader.get_by_role("button", name="Next chapter or page", exact=True).click()
-        expect(reader.get_by_text("Invalid share link", exact=True)).to_be_visible()
+        expect(reader.get_by_role("alert")).to_contain_text(
+            "Ask the owner for a new link."
+        )
+        expect(
+            reader.get_by_role("button", name="Try again", exact=True)
+        ).to_have_count(0)
         reader.goto(
             server.url
             + "/?path=/share_"

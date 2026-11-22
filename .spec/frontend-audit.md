@@ -61,7 +61,7 @@ behavior.
 | UI-03 | Implemented, focused checks passed | Backups calls local MongoDB **Cloud Database**. When Telegram is unreachable, recovery can imply a backup was found and show 0 / 0 files, bytes, and parts. Connections repeats the global disconnect banner above its diagnosis. Label MongoDB plainly, distinguish discovery from confirmed restoration, show totals when known, and give each problem one next action. | Compare healthy, unreachable, unconfirmed-pin, confirmed-backup, and restoring states. Verify which data is protected, which actions are paused, and what to do next at phone and desktop widths. |
 | UI-04 | Implemented, measured locally | The direct Docker server sent 1.11 MB JavaScript and 555 KB CSS uncompressed for two entry assets before login. Start by loading Performance, Connections, and Backups on first navigation. Measure deployment compression separately. | Measure matching cold login and My Files runs under the same network profile. Verify no admin chunks before navigation, correct direct links and reloads, and usable retry after a failed chunk. |
 | UI-05 | Implemented, focused checks passed | A single page of phone transfer history showed a full pagination row. Retain the count and show paging controls when another page exists. Give guests with a revoked or expired link a way to understand that they need a current link. Keep retry for transient failures. | Exercise zero, one, and multiple pages at 320px. Check active, expired, revoked, protected, and temporarily unreachable guest links without exposing private file data. |
-| UI-06 | Review and focused refinements pending | Use Settings as the spacing and field-feedback reference. Give the file priority in preview layouts. Keep Performance focused on attention, measured waits, and next actions, with library totals distinct from server capacity. Reuse Mantine and the existing UI SDK interactions. | Check long names and readings, focus return, touch targets, plus loading, empty, and error states in both themes. Close and reopen PDF and video in a fresh context. Check the rendered video position against its stored bookmark and measure frame delivery separately. |
+| UI-06 | Implemented, reviewed and verified locally | Use Settings as the spacing and field-feedback reference. Give the file priority in preview layouts. Keep Performance focused on attention, measured waits, and next actions, with library totals distinct from server capacity. Reuse Mantine and the existing UI SDK interactions. | Check long names and readings, focus return, touch targets, plus loading, empty, and error states in both themes. Close and reopen PDF and video in a fresh context. Check the rendered video position against its stored bookmark and measure frame delivery separately. |
 | UI-07 | First-run failures recorded | Assert settled user-visible states instead of sampling immediate DOM counts or colors. Update the superseded four-column assertion. Diagnose the transfer-action timeout under parallel load. Guard tablet filter hit targets and advancing video frames with focused tests. | Repeat each affected test, then run the integrated suite. Record first-run failures and reruns separately. Preserve per-entry evidence and open gaps. |
 
 Use `npm run build`, `npm test`, and the affected Playwright workflows before
@@ -152,6 +152,23 @@ passed in a focused rerun that includes a temporary 503, a simulated expired
 410, and actual revocation. The history test captured [a single page at
 320px](../cache/frontend-runtime-audit-1122/ui-05/traces/transfer-pagination-single-mobile.png).
 Next is preview and diagnostics polish.
+
+### UI-06 · Readers and diagnostics
+
+The Office viewer announces loading while its module downloads. An unavailable
+shared preview or book explains how to get a new link. This includes an
+illustration fetched after a prefetched chapter, and a rejected share request
+leaves the owner session intact.
+
+The Performance and owner-surface group passed 39 cases. The [phone
+Overview](../cache/frontend-runtime-audit-1122/ui-06/other-traces/performance-overview-390-light.png)
+shows transfer activity and Telegram waits before separate library totals
+and charts. Preview tests exercised fit, focus return and saved positions.
+The reader group passed 51 cases initially and exposed the prefetched
+illustration path. After the fix, the revocation and transient-image cases
+both passed. The build and 824 frontend unit tests passed. See the [phone PDF
+capture](../cache/frontend-runtime-audit-1122/ui-06/reader-traces/pdf-fit-controls-390.png).
+Next is the timing and integration check pass.
 
 ## What remains unverified
 

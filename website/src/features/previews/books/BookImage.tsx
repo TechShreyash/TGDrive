@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage } from "../../../shared/api";
 import { Spinner } from "../../../shared/components";
+import { shareLinkUnavailable } from "../../shares/SharedUnlock";
 import { loadBookImage, takePrefetched, type ImageProgress } from "./bookImage";
 
 export default function BookImage({
@@ -9,12 +10,14 @@ export default function BookImage({
     alt,
     eager = false,
     onReady,
+    onAccessLost,
 }: {
     id?: string;
     src: string;
     alt: string;
     eager?: boolean;
     onReady?: () => void;
+    onAccessLost?: (cause: unknown) => void;
 }) {
     const container = useRef<HTMLSpanElement>(null);
     const [visible, setVisible] = useState(eager);
@@ -70,13 +73,16 @@ export default function BookImage({
                 setUrl(objectUrl);
             })
             .catch((cause) => {
-                if (!controller.signal.aborted) setError(errorMessage(cause));
+                if (controller.signal.aborted) return;
+                if (onAccessLost && shareLinkUnavailable(cause))
+                    onAccessLost(cause);
+                else setError(errorMessage(cause));
             });
         return () => {
             controller.abort();
             if (objectUrl) URL.revokeObjectURL(objectUrl);
         };
-    }, [src, attempt, visible]);
+    }, [src, attempt, visible, onAccessLost]);
     const amount = (progress.received / 1024 / 1024).toFixed(1) + " MiB";
     return (
         <span
