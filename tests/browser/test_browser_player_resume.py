@@ -86,6 +86,10 @@ def _save_seek(page: Any, player: Any, item_id: str, seconds: float = 2.25) -> N
 
 
 def _resumed_paused(page: Any, player: Any, seconds: float) -> None:
+    if seconds > 2:
+        page.wait_for_function(
+            "() => document.querySelector('movi-player')?.duration > 0"
+        )
     duration = player.evaluate("el=>el.duration")
     target = seconds if 2 < seconds < duration - 2 else 0
     page.wait_for_function(
@@ -152,6 +156,7 @@ def test_default_resume_survives_close_reload_and_waits_for_play(server, desktop
     expect(dialog.get_by_text("Resumed at", exact=False)).to_have_count(0)
     expect(dialog.get_by_role("button", name="Start over", exact=True)).to_have_count(0)
     player.locator("button.movi-play-pause").click()
+    page.wait_for_function("() => document.querySelector('movi-player')?.paused")
     timeline = player.get_by_role("slider", name="Seek", exact=True)
     timeline.press("Home")
     _resumed_paused(page, player, 0)

@@ -91,12 +91,11 @@ export function limitCompatibilityBuffers(element: unknown): void {
                     if (video.paused && video.readyState >= 2)
                         render.call(wrapper);
                 };
-                video.addEventListener("loadeddata", paintPaused, {
-                    signal: controller.signal,
-                });
-                video.addEventListener("seeked", paintPaused, {
-                    signal: controller.signal,
-                });
+                for (const event of ["loadeddata", "seeked", "pause"]) {
+                    video.addEventListener(event, paintPaused, {
+                        signal: controller.signal,
+                    });
+                }
                 wrapper.destroy = function () {
                     controller.abort();
                     return destroy.call(this);

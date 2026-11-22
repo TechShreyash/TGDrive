@@ -37,12 +37,16 @@ describe("explicit compatible playback", () => {
         video.dispatchEvent(new Event("seeked"));
         expect(renderFrame).toHaveBeenCalledTimes(2);
         video.paused = false;
+        video.dispatchEvent(new Event("loadeddata"));
         video.dispatchEvent(new Event("seeked"));
         expect(renderFrame).toHaveBeenCalledTimes(2);
-        expect(wrapper.destroy()).toBe(completion);
         video.paused = true;
+        video.dispatchEvent(new Event("pause"));
+        expect(renderFrame).toHaveBeenCalledTimes(3);
+        expect(wrapper.destroy()).toBe(completion);
         video.dispatchEvent(new Event("seeked"));
-        expect(renderFrame).toHaveBeenCalledTimes(2);
+        video.dispatchEvent(new Event("pause"));
+        expect(renderFrame).toHaveBeenCalledTimes(3);
         expect(destroy).toHaveBeenCalledOnce();
         expect(video.play).not.toHaveBeenCalled();
     });

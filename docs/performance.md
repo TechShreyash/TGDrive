@@ -635,6 +635,9 @@ writes and do not grow it during writes. Range requests scale with the byte goal
 8 MiB; one upcoming response can already be in flight when fetching pauses.
 Neither a request size nor the decoded frame queue is the playback buffer goal.
 
+At speeds other than 1×, enhanced playback accounts for the pitch-preserving
+audio processing delay when aligning the picture with the sound.
+
 Seeking inside retained source bytes reuses them while decoding from a suitable
 keyframe. A seek outside the retained window fetches its new range. Closing the
 preview cancels its source requests. This is browser memory, separate from the

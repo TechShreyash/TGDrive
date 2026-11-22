@@ -76,8 +76,37 @@ export function moviPlayerBuild() {
                 throw new Error(
                     "The reviewed Movi refill trim anchor changed.",
                 );
+            const audioClock =
+                "this.firstBufferMediaTime + Math.max(0, A2 * this._playbackRate)";
+            if (patched.split(audioClock).length !== 3)
+                throw new Error(
+                    "The reviewed Movi audio clock anchors changed.",
+                );
+            const pictureClockTolerance = "B2 ? 0.05 : 0.15, 0.15 * C3";
+            if (patched.split(pictureClockTolerance).length !== 2)
+                throw new Error(
+                    "The reviewed Movi picture clock anchor changed.",
+                );
+            const stretchDelay =
+                "(this.preservePitch && this.signalsmith && this.signalsmithSampleRate > 0 " +
+                "&& Math.abs(this._playbackRate - 1) > 0.01 " +
+                "? (this.signalsmith.mod._movi_stretch_input_latency(this.signalsmith.handle) " +
+                "+ this._playbackRate * this.signalsmith.mod._movi_stretch_output_latency(this.signalsmith.handle)) " +
+                "/ this.signalsmithSampleRate : 0)";
             return {
                 code: patched
+                    .replaceAll(
+                        audioClock,
+                        // The stretcher reports input and output delay in frames.
+                        // Convert both to source-media time before comparing clocks.
+                        "this.firstBufferMediaTime + Math.max(0, A2 * this._playbackRate - " +
+                            stretchDelay +
+                            ")",
+                    )
+                    .replace(
+                        pictureClockTolerance,
+                        "B2 ? 0.05 : Math.abs(this.playbackRate - 1) > 0.01 ? 0.04 : 0.15, 0.15 * C3",
+                    )
                     .replace(
                         resumeTrim,
                         // A bound refill can reanchor audio behind the paused wall

@@ -27,6 +27,14 @@ const entry = normalizePath(
 const installed = readFileSync(entry, "utf8");
 const historical = patchMoviSource(installed, VERSION);
 const patched = patchDurationRescan(historical)
+    .replaceAll(
+        "this.firstBufferMediaTime + Math.max(0, A2 * this._playbackRate)",
+        "this.firstBufferMediaTime + Math.max(0, A2 * this._playbackRate - (this.preservePitch && this.signalsmith && this.signalsmithSampleRate > 0 && Math.abs(this._playbackRate - 1) > 0.01 ? (this.signalsmith.mod._movi_stretch_input_latency(this.signalsmith.handle) + this._playbackRate * this.signalsmith.mod._movi_stretch_output_latency(this.signalsmith.handle)) / this.signalsmithSampleRate : 0))",
+    )
+    .replace(
+        "B2 ? 0.05 : 0.15, 0.15 * C3",
+        "B2 ? 0.05 : Math.abs(this.playbackRate - 1) > 0.01 ? 0.04 : 0.15, 0.15 * C3",
+    )
     .replace(
         "this.videoRenderer.dropStaleFrames(this.clock.getTime(), 0.2)",
         "this.videoRenderer.dropStaleFrames(this._resumeToPlayPending && this.getBindAV() && this.videoRenderer.getLastPresentedTime() >= 0 ? Math.min(this.clock.getTime(), this.videoRenderer.getLastPresentedTime() + 0.2) : this.clock.getTime(), 0.2)",

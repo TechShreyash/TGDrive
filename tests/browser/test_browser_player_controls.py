@@ -9,6 +9,7 @@ import shutil
 import struct
 import subprocess
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 import pytest
@@ -467,6 +468,88 @@ def test_sparse_video_frames_do_not_stall_playback(server, desktop, tmp_path):
     expect(page.locator(".advanced-state")).to_have_count(0)
     assert "seeking" not in player.evaluate("()=>window.sparseVideoStates")
     assert not player.evaluate("()=>window.sparseVideoBuffering")
+
+
+def test_pitch_preserving_speed_tracks_presented_picture(server, desktop, tmp_path):
+    _, page = desktop
+    media = tmp_path / "sync-cues.mp4"
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg is not None
+    # Six tones align with matching picture flashes at source seconds 1 to 6.
+    cue = "gte(t,1)*lt(t,7)*lt(mod(t,1),0.16)"
+    subprocess.run(  # noqa: S603 - fixed self-generated local media
+        [
+            ffmpeg,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=320x180:r=30:d=8",
+            "-f",
+            "lavfi",
+            "-i",
+            f"aevalsrc=exprs='if({cue},0.30*sin(2*PI*997*t),0)':s=48000:d=8",
+            "-vf",
+            f"drawbox=color=white:t=fill:enable='{cue}'",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(media),
+        ],
+        check=True,
+    )
+    _serve_media(page, media.read_bytes(), "video/mp4")
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    page.get_by_role("button", name="movtext-subtitles.mp4", exact=True).press("Enter")
+    player = page.locator("movi-player")
+    page.wait_for_function("() => document.querySelector('movi-player')?.duration > 7")
+    player.evaluate("""element => {
+        element.playbackRate = 1.5;
+        const probe = window.cueProbe = { pictures: [], tones: [], ended: false };
+        function frame(time, metadata) {
+            probe.pictures.push({ time, mediaTime: metadata.mediaTime });
+            if (!probe.ended) element.requestVideoFrameCallback(frame);
+        }
+        element.requestVideoFrameCallback(frame);
+        let samples;
+        function sample(time) {
+            if (probe.ended) return;
+            if (!element.paused) {
+                element.player.getAudioLevels(12);
+                const analyser = element.player.audioRenderer?._analyser;
+                if (analyser) {
+                    samples ??= new Float32Array(analyser.fftSize);
+                    analyser.getFloatTimeDomainData(samples);
+                    const rms = Math.sqrt(samples.reduce(
+                        (total, sample) => total + sample ** 2, 0) / samples.length);
+                    if (rms > 0.035 && time - (probe.tones.at(-1) ?? -Infinity) > 420)
+                        probe.tones.push(time);
+                }
+            }
+            requestAnimationFrame(sample);
+        }
+        requestAnimationFrame(sample);
+        element.addEventListener("ended", () => { probe.ended = true; },
+            { once: true });
+    }""")
+    player.locator("button.movi-play-pause").click()
+    page.wait_for_function("() => window.cueProbe.ended", timeout=20000)
+    probe = page.evaluate("() => window.cueProbe")
+    assert len(probe["tones"]) == 6
+    errors = []
+    for cue_time, tone_time in enumerate(probe["tones"], start=1):
+        presented = min(
+            probe["pictures"], key=lambda picture: abs(picture["time"] - tone_time)
+        )
+        errors.append(abs(presented["mediaTime"] - cue_time))
+    assert median(errors) < 0.08, errors
 
 
 @pytest.mark.parametrize("playing", [False, True])
