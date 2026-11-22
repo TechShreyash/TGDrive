@@ -98,6 +98,9 @@ const ArchivePreview = lazy(() =>
     })),
 );
 
+const MarkdownPreview = lazy(() =>
+    import("./MarkdownPreview").catch(() => ({ default: ViewerUnavailable })),
+);
 const OfficePreview = lazy(() =>
     import("./OfficePreview").catch(() => ({ default: ViewerUnavailable })),
 );
@@ -974,6 +977,25 @@ export default function Preview({
                                         onError={mediaFailed}
                                     />
                                 </div>
+                            ) : descriptor?.kind === "text" &&
+                              descriptor.language === "markdown" ? (
+                                <Suspense
+                                    fallback={
+                                        <div
+                                            className="preview-loading"
+                                            role="status"
+                                        >
+                                            <Spinner /> Loading Markdown viewer…
+                                        </div>
+                                    }
+                                >
+                                    <MarkdownPreview
+                                        key={path + auth}
+                                        text={descriptor.text || ""}
+                                        name={item.name}
+                                        truncated={descriptor.truncated}
+                                    />
+                                </Suspense>
                             ) : descriptor?.kind === "text" ? (
                                 <div className="text-preview">
                                     <div className="preview-document-toolbar">

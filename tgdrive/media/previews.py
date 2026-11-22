@@ -213,7 +213,7 @@ async def describe_preview(
     base: dict[str, Any] = {"name": file_name, "size": size}
     if extension == "zip":
         return base | {"kind": "archive"}
-    if extension in {"docx", "xlsx"}:
+    if extension in {"docx", "xlsx", "pptx", "odt", "odp", "ods"}:
         return base | {"kind": "office"}
     if extension in {"epub", "cbz", "cbr"}:
         return base | {"kind": "book", "format": extension}

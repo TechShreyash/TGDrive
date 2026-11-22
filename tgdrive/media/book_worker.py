@@ -28,6 +28,7 @@ MAX_TEXT = 2 * BLOCK
 MAX_ENTRIES = 10000
 MAX_IMAGE_PIXELS = 64_000_000
 MAX_IMAGE_EDGE = 32768
+OFFICE_PREVIEW_FORMATS = frozenset({"docx", "xlsx", "pptx", "odt", "ods", "odp"})
 IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif"}
 
 
@@ -820,10 +821,298 @@ def office_workbook(archive, entry):
     }
 
 
+PRESENTATION_NS = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+DRAWING_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+OFFICE_REL_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+ODF_OFFICE = "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}"
+ODF_TEXT = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
+ODF_PRESENTATION = "{urn:oasis:names:tc:opendocument:xmlns:presentation:1.0}"
+ODF_DRAW = "{urn:oasis:names:tc:opendocument:xmlns:drawing:1.0}"
+ODF_TABLE = "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}"
+XLINK = "{http://www.w3.org/1999/xlink}"
+
+
+def office_entry(entry, count, label):
+    if entry is None:
+        return 0
+    if not re.fullmatch(r"[0-9]{1,3}", entry) or int(entry) >= count:
+        raise BookError(f"This {label} is unavailable.")
+    return int(entry)
+
+
+def office_paragraphs(parts):
+    paragraphs, remaining, truncated = [], 128 * 1024, False
+    for text, heading in parts:
+        if not text.strip():
+            continue
+        if len(paragraphs) == 1000 or not remaining:
+            truncated = True
+            break
+        paragraphs.append({"text": text[:remaining], "heading": heading})
+        if len(text) > remaining:
+            truncated = True
+            break
+        remaining -= len(text)
+    return paragraphs, truncated
+
+
+def office_targets(archive, base, relationship):
+    path = posixpath.join(
+        posixpath.dirname(base), "_rels", posixpath.basename(base) + ".rels"
+    )
+    if path not in archive.namelist():
+        return {}
+    relations = xml(zip_bytes(archive, path))
+    targets = {}
+    for relation in relations:
+        if not relation.get("Type", "").endswith("/" + relationship):
+            continue
+        if relation.get("TargetMode") == "External":
+            continue
+        value = relation.get("Target", "")
+        target = (
+            safe_name(value[1:]) if value.startswith("/") else local_ref(base, value)
+        )
+        if relation.get("Id") and target:
+            targets[relation.get("Id")] = target
+    return targets
+
+
+def office_slide_images(archive, names, prefix):
+    images, remaining = [], 2 * BLOCK
+    pixels_remaining = 16_000_000
+    seen = set()
+    truncated = False
+    for name in names:
+        if name in seen:
+            continue
+        if not name or not name.startswith(prefix):
+            truncated = True
+            continue
+        if len(images) == 8 or remaining == 0:
+            truncated = True
+            break
+        seen.add(name)
+        try:
+            if archive.getinfo(name).file_size > remaining:
+                truncated = True
+                continue
+            data = zip_bytes(archive, name, maximum=remaining)
+            image = image_result(data, raw_images=False)
+            if image["mime"] not in {"image/png", "image/jpeg"}:
+                truncated = True
+                continue
+            pixels = max(
+                width * height
+                for width, height in image_dimensions(data, image["mime"])
+            )
+            if pixels > pixels_remaining:
+                truncated = True
+                continue
+        except BookError, KeyError:
+            truncated = True
+            continue
+        images.append(image)
+        remaining -= len(data)
+        pixels_remaining -= pixels
+    return images, truncated
+
+
+def office_presentation(archive, entry):
+    path = "ppt/presentation.xml"
+    deck = xml(zip_bytes(archive, path))
+    ns = PRESENTATION_NS
+    targets = office_targets(archive, path, "slide")
+    slides = [
+        targets[relation_id]
+        for slide in deck.findall(f"{ns}sldIdLst/{ns}sldId")
+        if (relation_id := slide.get(OFFICE_REL_NS + "id")) in targets
+        and targets[relation_id].startswith("ppt/slides/")
+    ]
+    if not slides:
+        raise BookError("This presentation has no readable slides.")
+    selected = office_entry(entry, min(300, len(slides)), "slide")
+    path = slides[selected]
+    slide = xml(zip_bytes(archive, path))
+    paragraphs, truncated = office_paragraphs(
+        (office_text(node, DRAWING_NS), False) for node in slide.iter(DRAWING_NS + "p")
+    )
+    targets = office_targets(archive, path, "image")
+    images, images_truncated = office_slide_images(
+        archive,
+        (
+            targets.get(node.get(OFFICE_REL_NS + "embed"))
+            for node in slide.iter(DRAWING_NS + "blip")
+            if node.get(OFFICE_REL_NS + "embed") or node.get(OFFICE_REL_NS + "link")
+        ),
+        "ppt/media/",
+    )
+    embedded_visuals = slide.find(f".//{ns}graphicFrame") is not None
+    return {
+        "kind": "presentation",
+        "total": min(300, len(slides)),
+        "selected": selected,
+        "paragraphs": paragraphs,
+        "images": images,
+        "truncated": truncated
+        or images_truncated
+        or embedded_visuals
+        or len(slides) > 300,
+    }
+
+
+def odf_text(root, maximum=128 * 1024 + 1):
+    parts = []
+    remaining = maximum
+    pending = [root]
+    while pending and remaining:
+        part = pending.pop()
+        if isinstance(part, str):
+            parts.append(part[:remaining])
+            remaining -= len(parts[-1])
+            continue
+        if part.tag == ODF_TEXT + "s":
+            count = part.get(ODF_TEXT + "c", "1")
+            spaces = int(count) if re.fullmatch(r"[0-9]{1,10}", count) else 1
+            pending.append(" " * min(max(1, spaces), remaining))
+        elif part.tag == ODF_TEXT + "tab":
+            pending.append("\t")
+        elif part.tag == ODF_TEXT + "line-break":
+            pending.append("\n")
+        else:
+            for child in reversed(part):
+                if child.tail:
+                    pending.append(child.tail)
+                pending.append(child)
+            if part.text:
+                pending.append(part.text)
+    return "".join(parts)
+
+
+def odf_paragraphs(root):
+    return office_paragraphs(
+        (odf_text(node), node.tag == ODF_TEXT + "h")
+        for node in root.iter()
+        if node.tag in {ODF_TEXT + "p", ODF_TEXT + "h"}
+    )
+
+
+def odf_repeat(node, attribute, maximum):
+    value = node.get(ODF_TABLE + attribute, "1")
+    if not re.fullmatch(r"[0-9]{1,10}", value):
+        return maximum
+    return min(maximum, max(1, int(value)))
+
+
+def odf_sheet(body, entry):
+    sheets = [
+        sheet
+        for sheet in body.findall(ODF_TABLE + "table")
+        if sheet.get(ODF_TABLE + "display") != "false"
+    ]
+    if not sheets:
+        raise BookError("This workbook has no supported visible worksheets.")
+    selected = office_entry(entry, min(100, len(sheets)), "worksheet")
+    rows = []
+    columns = 0
+    truncated = len(sheets) > 100
+    table = ODF_TABLE
+    for node in sheets[selected].iter(table + "table-row"):
+        cells = []
+        for cell in node:
+            if cell.tag not in {table + "table-cell", table + "covered-table-cell"}:
+                continue
+            value = "\n".join(odf_text(p, 513) for p in cell.findall(ODF_TEXT + "p"))
+            if not value:
+                value = next(
+                    (
+                        cell.get(ODF_OFFICE + key, "")
+                        for key in (
+                            "string-value",
+                            "value",
+                            "date-value",
+                            "boolean-value",
+                            "time-value",
+                        )
+                        if cell.get(ODF_OFFICE + key) is not None
+                    ),
+                    "",
+                )
+            repeat = odf_repeat(cell, "number-columns-repeated", 21)
+            if value:
+                truncated |= len(value) > 512 or len(cells) + repeat > 20
+            cells.extend([value[:512]] * min(repeat, 20 - len(cells)))
+        while cells and not cells[-1]:
+            cells.pop()
+        repeat = odf_repeat(node, "number-rows-repeated", 101)
+        if cells:
+            columns = max(columns, len(cells))
+            truncated |= len(rows) + repeat > 100
+        rows.extend([cells] * min(repeat, 100 - len(rows)))
+    while rows and not rows[-1]:
+        rows.pop()
+    return {
+        "kind": "spreadsheet",
+        "sheets": [sheet.get(table + "name", "Sheet")[:128] for sheet in sheets[:100]],
+        "selected": selected,
+        "rows": [row + [""] * (columns - len(row)) for row in rows],
+        "truncated": truncated,
+    }
+
+
+def office_opendocument(archive, fmt, entry):
+    root = xml(zip_bytes(archive, "content.xml"))
+    element = {"odt": "text", "ods": "spreadsheet", "odp": "presentation"}[fmt]
+    body = root.find(f"{ODF_OFFICE}body/{ODF_OFFICE}{element}")
+    if body is None:
+        raise BookError("This OpenDocument file has no readable body.")
+    if fmt == "ods":
+        return odf_sheet(body, entry)
+    if fmt == "odt":
+        if entry is not None:
+            raise BookError("Document previews do not have separate entries.")
+        paragraphs, truncated = odf_paragraphs(body)
+        return {"kind": "document", "paragraphs": paragraphs, "truncated": truncated}
+    slides = body.findall(ODF_DRAW + "page")
+    if not slides:
+        raise BookError("This presentation has no readable slides.")
+    selected = office_entry(entry, min(300, len(slides)), "slide")
+    slide = slides[selected]
+    for parent in slide.iter():
+        for notes in parent.findall(ODF_PRESENTATION + "notes"):
+            parent.remove(notes)
+    paragraphs, truncated = odf_paragraphs(slide)
+    images, images_truncated = office_slide_images(
+        archive,
+        (
+            local_ref("content.xml", node.get(XLINK + "href"))
+            for node in slide.iter(ODF_DRAW + "image")
+        ),
+        "Pictures/",
+    )
+    object_tags = {ODF_DRAW + "object", ODF_DRAW + "object-ole"}
+    embedded_visuals = any(node.tag in object_tags for node in slide.iter())
+    return {
+        "kind": "presentation",
+        "total": min(300, len(slides)),
+        "selected": selected,
+        "paragraphs": paragraphs,
+        "images": images,
+        "truncated": truncated
+        or images_truncated
+        or embedded_visuals
+        or len(slides) > 300,
+    }
+
+
 def read_book(source, fmt, entry=None, *, raw_images=False) -> dict[str, Any]:
     image_limit = MAX_PAGE if raw_images else MAX_ENTRY
-    if fmt in {"docx", "xlsx"}:
+    if fmt in OFFICE_PREVIEW_FORMATS:
         with open_zip(source) as archive:
+            if fmt in {"odt", "ods", "odp"}:
+                return office_opendocument(archive, fmt, entry)
+            if fmt == "pptx":
+                return office_presentation(archive, entry)
             if fmt == "xlsx":
                 return office_workbook(archive, entry)
             if entry is not None:

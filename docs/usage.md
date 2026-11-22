@@ -227,11 +227,22 @@ files outside the conversion limits can still require an original download.
 | ZIP | Browse files and nested folders without extracting; file sizes and password-protected entries are shown |
 | Unsupported formats | Original download |
 
-DOCX previews show headings and body text. XLSX previews let you switch between
-visible worksheets and show up to the first 100 rows and 20 columns per sheet.
-Swipe horizontally or focus the worksheet and use the arrow keys to see more
-columns. Row numbers stay visible while scrolling. Download the original for
-formatting, charts, or the rest of a larger file.
+DOCX and ODT previews show headings and body text. XLSX and ODS previews let
+you switch between visible worksheets and show up to the first 100 rows and
+20 columns per sheet. Swipe horizontally or focus the worksheet and use
+the arrow keys to see more columns.
+
+PPTX and ODP previews show slide text and supported embedded images in
+presentation order. Use Previous slide and Next slide to browse.
+Presenter notes stay in the original. The viewer marks the preview as partial
+and offers Download original when it skips an image or embedded object such
+as a chart. Use the original for the full layout, animations, and media.
+Older binary Office formats (.doc, .xls and .ppt) are available as original
+downloads.
+
+Markdown previews render headings, lists, emphasis and code. Use Show source
+to read the original markup. The preview displays external image captions and
+link text without loading external resources.
 
 To add, change, or remove a PDF password, choose **PDF password** from the
 file's actions. Enter the current password when changing or removing it.

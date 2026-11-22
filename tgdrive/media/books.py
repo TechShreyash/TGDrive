@@ -114,7 +114,7 @@ async def parse_book(data, fetch, entry=None, *, thumbnail=False, raw_images=Fal
     if fmt not in (
         {"epub", "cbz", "cbr", "docx", "pptx", "xlsx", "odt", "odp", "ods"}
         if thumbnail
-        else {"epub", "cbz", "cbr", "zip", "docx", "xlsx"}
+        else {"epub", "cbz", "cbr", "zip", "docx", "xlsx", "pptx", "odt", "odp", "ods"}
     ):
         raise HTTPException(415, "This file has no document or archive preview.")
     # Deliberately do not pass Telegram credentials, owner secrets or inherited

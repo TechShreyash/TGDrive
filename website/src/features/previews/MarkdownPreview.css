@@ -1,0 +1,52 @@
+.markdown-preview {
+    max-width: 72ch;
+    width: 100%;
+    margin-inline: auto;
+    padding: clamp(16px, 4vw, 36px);
+    color: var(--ink);
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+.markdown-preview :is(h1, h2, h3, h4, h5, h6, p, blockquote, pre, ul, ol) {
+    margin-block: 0 0.8em;
+}
+.markdown-preview blockquote {
+    border-inline-start: 2px solid var(--line);
+    margin-inline: 0;
+    padding-inline-start: 14px;
+}
+.text-preview .markdown-preview pre {
+    white-space: pre-wrap;
+}
+
+.text-preview.markdown-reader {
+    background: var(--canvas);
+    color: var(--ink);
+    color-scheme: inherit;
+}
+.markdown-reader pre,
+.markdown-reader .markdown-source-toggle {
+    color: inherit;
+}
+.markdown-reader .markdown-source-toggle {
+    min-height: 32px;
+}
+.markdown-reader .markdown-source-toggle[aria-pressed="true"] {
+    background: #ffffff26;
+}
+@media (pointer: coarse) {
+    .markdown-reader .markdown-source-toggle {
+        min-height: 44px;
+    }
+}
+.markdown-reader .markdown-preview {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+.markdown-reader .markdown-preview pre {
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface-raised);
+}

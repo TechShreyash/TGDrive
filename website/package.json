@@ -25,7 +25,8 @@
         "movi-player": "https://github.com/TechShreyash/TGDrive/releases/download/viewer-movi-player-0.4.1-tgdrive.3/movi-player-0.4.1-tgdrive.3.tgz",
         "pdfjs-dist": "https://github.com/TechShreyash/TGDrive/releases/download/viewer-pdfjs-dist-6.4.299-tgdrive.1/pdfjs-dist-6.4.299-tgdrive.1.tgz",
         "react": "19.3.1",
-        "react-dom": "19.3.1"
+        "react-dom": "19.3.1",
+        "react-markdown": "10.1.0"
     },
     "devDependencies": {
         "@types/node": "24.19.2",
