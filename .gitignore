@@ -51,5 +51,6 @@ testfiles/
 !.agents/skills/*/scripts/data/
 .impeccable/
 
-# Private local request tracking
+# Private local planning and request tracking
+/.spec/
 /docs/request-tracker.md

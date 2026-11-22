@@ -53,4 +53,5 @@ website/.impeccable
 **/.codex
 skills-lock.json
 **/skills-lock.json
+.spec
 docs/request-tracker.md
