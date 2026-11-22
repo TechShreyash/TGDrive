@@ -370,8 +370,17 @@ def test_grid_views_preserve_selection_actions_and_bounded_thumbnails(
         for button in (list_button, grid_button):
             box = button.bounding_box()
             assert 24 <= box["height"] <= 36 and box["width"] >= 24
+        active_color = list_button.evaluate(
+            "button => getComputedStyle(button).backgroundColor"
+        )
+        inactive_color = grid_button.evaluate(
+            "button => getComputedStyle(button).backgroundColor"
+        )
+        assert active_color != inactive_color
         grid_button.click()
         expect(grid_button).to_have_attribute("aria-pressed", "true")
+        expect(grid_button).to_have_css("background-color", active_color)
+        expect(list_button).to_have_css("background-color", inactive_color)
         expect(page.get_by_role("list", name="Files and folders")).to_be_visible()
         list_button.click()
         expect(list_button).to_have_attribute("aria-pressed", "true")
@@ -1414,7 +1423,9 @@ def test_tablet_type_filters_stay_reachable(server, desktop, width):
     page.screenshot(path=ARTIFACTS / f"tablet-files-{width}.png", animations="disabled")
     select.press("Enter")
     expect(listbox).to_be_visible()
-    page.screenshot(path=ARTIFACTS / f"tablet-filters-{width}.png", animations="disabled")
+    page.screenshot(
+        path=ARTIFACTS / f"tablet-filters-{width}.png", animations="disabled"
+    )
     names = listbox.get_by_role("option").all_text_contents()
     assert "Other" in names
     page.keyboard.press("End")

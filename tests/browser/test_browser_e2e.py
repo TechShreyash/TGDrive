@@ -463,12 +463,12 @@ def test_resumable_multiple_files_navigation_and_mobile_layout(
     assert_layout(page)
     page.screenshot(path=ARTIFACTS / "react-desktop.png", full_page=True)
     page.set_viewport_size({"width": 390, "height": 844})
-    assert_layout(page)
-    page.screenshot(path=ARTIFACTS / "react-mobile.png", full_page=True)
     expect(
         page.get_by_role("button", name="Open transfer progress", exact=True)
     ).to_be_visible()
     expect(page.locator(".transfer-center")).to_have_count(0)
+    assert_layout(page)
+    page.screenshot(path=ARTIFACTS / "react-mobile.png", full_page=True)
     page.set_viewport_size({"width": 1440, "height": 900})
     server.finish(started["first.txt"])
     expect(row(page, "first.txt")).to_have_attribute("data-status", "completed")
@@ -1004,9 +1004,9 @@ def test_safe_document_previews_download_and_pdf_canvas(
     page.get_by_role("button", name="Preview samples", exact=True).dblclick()
     page.get_by_role("button", name="sample.json", exact=True).dblclick()
     dialog = preview_dialog(page)
-    expect(dialog.locator("pre")).to_contain_text(
-        '"message": "<img src=x onerror=alert(1)>"'
-    )
+    source = dialog.get_by_role("region", name="Contents of sample.json", exact=True)
+    expect(source).to_be_visible()
+    expect(source).to_contain_text('"message": "<img src=x onerror=alert(1)>"')
     assert dialog.locator("img").count() == 0
     page.get_by_label("Wrap Lines", exact=True).uncheck()
     expect(dialog.locator("pre")).not_to_have_class("wrap-lines")
