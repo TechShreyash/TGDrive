@@ -2427,10 +2427,22 @@ async def test_empty_database_finds_pinned_backup_and_restores_in_one_click(
         runtime = SimpleNamespace(
             store=fresh_store, mongo=replica.runtime.mongo, recovery_only=True
         )
+        active_tokens = {}
+
+        class ExclusiveDiscoveryTransport(DiscoveryTransport):
+            async def start(self):
+                assert self.token not in active_tokens
+                active_tokens[self.token] = self
+
+            async def close(self):
+                if active_tokens.get(self.token) is self:
+                    del active_tokens[self.token]
+                await super().close()
+
         found = ChannelReplica(
             configured,
             runtime,
-            transport_factory=lambda settings, token: DiscoveryTransport(
+            transport_factory=lambda settings, token: ExclusiveDiscoveryTransport(
                 remote, settings, token
             ),
         )

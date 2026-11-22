@@ -2216,7 +2216,8 @@ class ChannelReplica:
         try:
             await transport.start()
             await transport.inspect(source)
-            await transport.inspect(recovery["target"])
+            if recovery["target"] != source:
+                await transport.inspect(recovery["target"])
             target_pin = await transport.pinned_message(recovery["target"])
             if (await _worker(self.journal.get, "status", {})).get("phase") in {
                 "paused",
@@ -2240,15 +2241,17 @@ class ChannelReplica:
                         status=409,
                     )
                 await _worker(self.journal.set, "recovery_destination", reservation)
-            # Separately authenticate the replacement main bot before copying.
-            probe = self._recovery_transport(
-                recovery["target_token"], candidate["credentials"]
-            )
-            try:
-                await probe.start()
-                await probe.inspect(recovery["target"])
-            finally:
-                await probe.close()
+            if recovery["target_token"] != candidate["token"]:
+                # The source was already authenticated. A second connection for
+                # the same bot would contend for its SQLite session.
+                probe = self._recovery_transport(
+                    recovery["target_token"], candidate["credentials"]
+                )
+                try:
+                    await probe.start()
+                    await probe.inspect(recovery["target"])
+                finally:
+                    await probe.close()
             if (await _worker(self.journal.get, "status", {})).get("phase") in {
                 "paused",
                 "disabled",
