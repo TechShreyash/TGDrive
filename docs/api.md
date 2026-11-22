@@ -80,7 +80,7 @@ verification are in [architecture](architecture.md#independent-backup-pacing-and
 
 | Method and route | Purpose | Notes and errors |
 | --- | --- | --- |
-| `GET /api/v1/replica` | Configuration, phase, revisions, progress, retry guidance and any recovery candidate | Never returns tokens or the key |
+| `GET /api/v1/replica` | Configuration, phase, revisions, progress, retry guidance and any recovery candidate | In recovery mode, the backup_discovery_unconfirmed flag means the startup channel check failed before a candidate was found. Never returns tokens or the key |
 | `POST /api/v1/replica/configure` | `channel_id`, `bot_token`, `independent_accounts: true`: set up a backup channel | Needs a separate private channel and bot |
 | `POST /api/v1/replica/action` | `action`: `sync`, `pause`, `resume`, `retry` or `disable` | |
 | `GET /api/v1/replica/file` | Download a locally retained confirmed or unverified `tgdrive-backup.tgdb` | `404` if no local archive is eligible or it disappears before opening; `409` for symlinks, unsafe permissions/file types, other unsafe opens or selected-file hash mismatch; denied in demo mode |

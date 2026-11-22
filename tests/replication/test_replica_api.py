@@ -291,6 +291,36 @@ def test_missing_catalog_starts_authenticated_recovery_shell_without_telegram_wr
         assert client.post("/api/getDirectory", json={"path": "/"}).status_code == 409
 
 
+def test_unconfirmed_pin_reports_discovery_instead_of_running_restore(
+    tmp_path, mongo_backend, monkeypatch
+):
+    from tgdrive.replication.replica_transport import ReplicaTransportError
+    from tgdrive.storage import mongo
+
+    monkeypatch.setattr(mongo, "database_is_empty", lambda backend: True)
+    discovery = AsyncMock(
+        side_effect=ReplicaTransportError(
+            "Telegram channel could not be checked.",
+            "REPLICA_UNAVAILABLE",
+            retryable=True,
+        )
+    )
+    monkeypatch.setattr(ChannelReplica, "discover_backup", discovery)
+    settings = make_settings(tmp_path)
+    runtime = Runtime(settings)
+    with TestClient(
+        create_app(settings, runtime=runtime), base_url="https://testserver"
+    ) as client:
+        login(client)
+        status = client.get("/api/v1/replica").json()
+        assert status["recovery_only"] is True
+        assert status["backup_discovery_unconfirmed"] is True
+        assert status.get("recovery_candidate") is None
+        assert status["total_files"] == status["total_parts"] == 0
+        assert runtime.store is None
+    discovery.assert_awaited_once()
+
+
 def test_mongo_ownership_unavailable_rejects_startup_without_local_fallback(
     tmp_path, mongo_backend
 ):

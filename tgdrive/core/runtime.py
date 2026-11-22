@@ -87,6 +87,7 @@ class Runtime:
         self._channel_check_lock = asyncio.Lock()
         self._channel_verified_until = 0.0
         self.storage_channel_error: str | None = None
+        self.backup_discovery_unconfirmed = False
 
     def _remaining_staging_bytes(self):
         from tgdrive.transfers.staging import staging_usage
@@ -633,6 +634,7 @@ class Runtime:
         from tgdrive.replication.replica import ChannelReplica
         from tgdrive.storage.mongo import database_is_empty
 
+        self.backup_discovery_unconfirmed = False
         if not await _worker(database_is_empty, self.mongo):
             return False
         replica = getattr(self, "replica", None)
@@ -651,6 +653,7 @@ class Runtime:
                 # Never initialize over a backup we could not read.
                 logger.warning("A pinned backup could not be checked; opening recovery")
                 await _worker(replica._record_failure, error)
+                self.backup_discovery_unconfirmed = True
                 found = True
         if not found:
             if created:
@@ -659,7 +662,8 @@ class Runtime:
         self.recovery_only = True
         self.replica = replica
         replica.start()
-        logger.warning("MongoDB is empty and a backup exists: opening Restore drive")
+        if not self.backup_discovery_unconfirmed:
+            logger.warning("MongoDB is empty and a backup exists: opening Restore drive")
         return True
 
     def _prepare_runtime_directories(self) -> None:

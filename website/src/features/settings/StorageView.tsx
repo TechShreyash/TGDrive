@@ -217,7 +217,7 @@ export default function StorageView({
                             )}
                         </div>
                         <div>
-                            <h2 id="drive-backup-heading">Cloud Database</h2>
+                            <h2 id="drive-backup-heading">MongoDB catalog</h2>
                             <p
                                 className={
                                     "drive-backup-state " +

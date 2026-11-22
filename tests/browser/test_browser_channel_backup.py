@@ -87,7 +87,7 @@ def test_database_protection_does_not_claim_a_telegram_backup(
     )
     login(page, server.url)
     open_storage(page)
-    database = page.get_by_role("region", name="Cloud Database", exact=True)
+    database = page.get_by_role("region", name="MongoDB catalog", exact=True)
     expect(database.get_by_role("status")).to_have_text("Saved to MongoDB")
     expect(database).to_contain_text(
         "Last Confirmed Telegram Backup: Not confirmed yet"
@@ -141,7 +141,7 @@ def test_unverified_discovery_preserves_local_backup_access(
     page.route("**/api/v1/replica", replica)
     login(page, server.url)
     section = open_storage(page)
-    database = page.get_by_role("region", name="Cloud Database", exact=True)
+    database = page.get_by_role("region", name="MongoDB catalog", exact=True)
     expect(database).to_contain_text("Backup discovery unverified")
     expect(database).to_contain_text("does not establish that the archive is corrupt")
     expect(database).to_contain_text("Not confirmed yet")
@@ -203,7 +203,7 @@ def test_standalone_backup_shows_confirmation_during_retry(
     page.route("**/api/v1/status", status)
     login(page, server.url)
     open_storage(page)
-    database = page.get_by_role("region", name="Cloud Database", exact=True)
+    database = page.get_by_role("region", name="MongoDB catalog", exact=True)
     expect(database).to_contain_text("Started by Back Up Now")
     expect(database).not_to_contain_text("Not confirmed yet")
     expect(database).to_contain_text("Retry pending")
@@ -229,7 +229,7 @@ def test_channel_backup_setup_progress_pause_errors_and_private_exports(
     page.add_init_script("localStorage.setItem('tgdrive.appearance','" + theme + "')")
     login(page, server.url)
     section = open_storage(page)
-    database = page.get_by_role("region", name="Cloud Database", exact=True)
+    database = page.get_by_role("region", name="MongoDB catalog", exact=True)
     expect(database).to_be_visible()
     expect(
         database.get_by_role("button", name="Back Up Now", exact=True)
@@ -315,6 +315,49 @@ def test_channel_backup_setup_progress_pause_errors_and_private_exports(
     expect(section.locator(".channel-backup-phase")).to_contain_text("not enabled")
     section.get_by_role("button", name="Enable backup", exact=True).click()
     expect(section.locator(".channel-backup-phase")).to_contain_text("Copying")
+
+
+@pytest.mark.parametrize("width", [390, 1536])
+def test_unconfirmed_telegram_backup_explains_how_to_check_again(
+    server, desktop, width
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    assert page.request.post(
+        server.url + "/__test__/replica/recovery-only", headers=CONTROL
+    ).ok
+
+    def unconfirmed(route):
+        response = route.fetch()
+        status = response.json()
+        status.update(
+            backup_discovery_unconfirmed=True,
+            phase="waiting",
+            total_files=0,
+            total_parts=0,
+            total_bytes=0,
+            error={"code": "REPLICA_UNAVAILABLE", "retry_at": 1},
+        )
+        route.fulfill(response=response, json=status)
+
+    page.route("**/api/v1/replica", unconfirmed)
+    login(page, server.url)
+    section = page.get_by_role("region", name="Recover your drive", exact=True)
+    expect(
+        section.get_by_text("Telegram backup not confirmed", exact=True)
+    ).to_be_visible()
+    expect(
+        section.get_by_text("restart TGDrive to check again", exact=False)
+    ).to_be_visible()
+    expect(section.get_by_label("Recovery file (required)", exact=True)).to_be_enabled()
+    expect(section.get_by_role("progressbar")).to_have_count(0)
+    expect(
+        section.get_by_role("button", name="Pause recovery", exact=True)
+    ).to_have_count(0)
+    expect(
+        section.get_by_role("button", name="Restore drive", exact=True)
+    ).to_have_count(0)
+    capture(page, f"recovery-unconfirmed-{width}.png")
 
 
 @pytest.mark.parametrize(
@@ -534,7 +577,7 @@ def test_demo_file_restore_is_disabled_without_disabling_private_backup_exports(
         section.get_by_label("Replacement bot token (optional)", exact=True)
     ).to_be_disabled()
     expect(
-        page.get_by_role("region", name="Cloud Database", exact=True).get_by_role(
+        page.get_by_role("region", name="MongoDB catalog", exact=True).get_by_role(
             "button", name="Back Up Now", exact=True
         )
     ).to_be_enabled()
@@ -678,7 +721,7 @@ def test_independent_backup_scopes_standalone_history(
         ),
     )
     login(page, server.url + "/?view=storage")
-    database = page.get_by_role("region", name="Cloud Database", exact=True)
+    database = page.get_by_role("region", name="MongoDB catalog", exact=True)
     expect(database).to_contain_text("Saved to MongoDB")
     expect(
         database.get_by_text("Backup discovery unverified", exact=True)

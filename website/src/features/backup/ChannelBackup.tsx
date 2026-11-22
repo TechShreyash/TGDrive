@@ -35,6 +35,7 @@ export interface ReplicaState {
     enabled: boolean;
     configured: boolean;
     recovery_only: boolean;
+    backup_discovery_unconfirmed?: boolean;
     phase: ReplicaPhase;
     source_channel?: number | null;
     backup_channel?: number | null;
@@ -491,13 +492,19 @@ export default function ChannelBackup({
     const phase = state?.phase || "disabled";
     const fileRestoreBlocked =
         demoMode || state?.file_restore_allowed === false;
-    const active = ACTIVE.has(phase);
+    const discoveryUnconfirmed =
+        recoveryOnly && state?.backup_discovery_unconfirmed;
+    const active = !discoveryUnconfirmed && ACTIVE.has(phase);
     const blocked =
         demoMode || Boolean(busy) || active || phase === "restart_required";
     const candidate = state?.recovery_candidate;
     const pending = !!state && state.revision > state.protected_revision;
     const showProgress =
         !!state &&
+        !discoveryUnconfirmed &&
+        (state.total_files > 0 ||
+            state.total_parts > 0 ||
+            state.total_bytes > 0) &&
         (active ||
             phase === "paused" ||
             phase === "ready_to_activate" ||
@@ -528,7 +535,7 @@ export default function ChannelBackup({
                     </h2>
                     <p>
                         {recoveryOnly
-                            ? "Restore your drive from the backup in your Telegram channel. Keep the channel intact while TGDrive restores it."
+                            ? "Check your recovery status or inspect a saved backup. Keep your Telegram channels intact."
                             : "Backups are encrypted with your ENCRYPTION_KEY and pinned in your channels. Add a second channel to protect your files if a channel is lost."}
                         <SettingHelp label="Independent backup">
                             <p>
@@ -585,11 +592,28 @@ export default function ChannelBackup({
                             <ShieldCheck size={18} aria-hidden="true" />
                         ) : null}
                         <strong>
-                            {recoveryOnly && phase === "disabled"
-                                ? "Choose a surviving recovery copy"
-                                : PHASE_LABEL[phase]}
+                            {discoveryUnconfirmed
+                                ? "Telegram backup not confirmed"
+                                : recoveryOnly && phase === "disabled"
+                                  ? "Choose a surviving recovery copy"
+                                  : PHASE_LABEL[phase]}
                         </strong>
                     </p>
+                    {discoveryUnconfirmed && (
+                        <div className="channel-backup-feedback">
+                            {state.error?.code ===
+                            "LEGACY_BACKUP_REQUIRES_UPGRADE" ? (
+                                <ErrorNotice message={state.error.detail} />
+                            ) : (
+                                <p>
+                                    Check access to the Telegram storage channel
+                                    and your original ENCRYPTION_KEY, then
+                                    restart TGDrive to check again. You can also
+                                    inspect a saved recovery file below.
+                                </p>
+                            )}
+                        </div>
+                    )}
                     {!recoveryOnly && state.configured && (
                         <dl className="channel-backup-channels">
                             <div>
@@ -636,14 +660,19 @@ export default function ChannelBackup({
                                 </p>
                             )}
                             <div className="channel-backup-progress-label">
-                                <span>
-                                    {state.done_files.toLocaleString()} /{" "}
-                                    {state.total_files.toLocaleString()} files
-                                </span>
-                                <span>
-                                    {formatBytes(state.done_bytes)} /{" "}
-                                    {formatBytes(state.total_bytes)}
-                                </span>
+                                {state.total_files > 0 && (
+                                    <span>
+                                        {state.done_files.toLocaleString()} /{" "}
+                                        {state.total_files.toLocaleString()}{" "}
+                                        files
+                                    </span>
+                                )}
+                                {state.total_bytes > 0 && (
+                                    <span>
+                                        {formatBytes(state.done_bytes)} /{" "}
+                                        {formatBytes(state.total_bytes)}
+                                    </span>
+                                )}
                             </div>
                             <progress
                                 aria-label="Channel copy progress"
@@ -657,15 +686,27 @@ export default function ChannelBackup({
                                         : undefined
                                 }
                             />
-                            <p className="channel-backup-progress-detail">
-                                {state.done_parts.toLocaleString()} /{" "}
-                                {state.total_parts.toLocaleString()} parts
-                                confirmed
-                                {rate ? ` · ${formatBytes(rate)}/s` : ""}
-                                {rate && remaining > 0
-                                    ? ` · About ${formatDuration(remaining / rate)} remaining at this rate`
-                                    : ""}
-                            </p>
+                            {(state.total_parts > 0 || rate) && (
+                                <p className="channel-backup-progress-detail">
+                                    {state.total_parts > 0 && (
+                                        <>
+                                            {state.done_parts.toLocaleString()}{" "}
+                                            /{" "}
+                                            {state.total_parts.toLocaleString()}{" "}
+                                            parts confirmed
+                                        </>
+                                    )}
+                                    {rate && (
+                                        <>
+                                            {state.total_parts > 0 && " · "}
+                                            {formatBytes(rate)}/s
+                                        </>
+                                    )}
+                                    {rate && remaining > 0
+                                        ? ` · About ${formatDuration(remaining / rate)} remaining at this rate`
+                                        : ""}
+                                </p>
+                            )}
                             {phase === "paused" && (
                                 <p>
                                     The saved checkpoint will be used when you
@@ -680,7 +721,7 @@ export default function ChannelBackup({
                             )}
                         </div>
                     )}
-                    {state.error && (
+                    {state.error && !discoveryUnconfirmed && (
                         <div className="channel-backup-feedback">
                             <ErrorNotice message={state.error.detail} />
                             {state.error.action && <p>{state.error.action}</p>}
@@ -786,6 +827,7 @@ export default function ChannelBackup({
                         </div>
                     )}
                     {recoveryOnly &&
+                        !discoveryUnconfirmed &&
                         ["paused", "error", "waiting", "recovering"].includes(
                             phase,
                         ) && (

@@ -2426,7 +2426,7 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
     login(page, server.url)
     open_admin(page)
     page.get_by_role("link", name="Backups", exact=True).click()
-    section = page.get_by_role("region", name="Cloud Database", exact=True)
+    section = page.get_by_role("region", name="MongoDB catalog", exact=True)
     status = section.get_by_role("status")
     expect(page.locator(".drive-protection")).to_have_count(0)
     expect(status).to_have_text("Saved to MongoDB", timeout=10000)
@@ -2773,6 +2773,7 @@ def test_revoked_account_warning_links_to_connections_and_clears(
         page.get_by_role("heading", name="Storage Clients", exact=True)
     ).to_be_visible()
     expect(page.locator(".managed-client-state").first).to_contain_text(client_label)
+    expect(page.locator(".restart-required-banner")).to_have_count(0)
     expect(page.locator(".connection-editor")).to_have_count(0)
     state.update(telegram_ready=True, telegram_issues=[])
     expect(warning).not_to_be_visible(timeout=10000)
@@ -3452,18 +3453,18 @@ def test_ui_polish_batched_visual_states(
                     page.get_by_role("progressbar", name="Reserved Upload Staging")
                 ).to_have_count(0)
                 expect(
-                    page.get_by_role("region", name="Cloud Database", exact=True)
+                    page.get_by_role("region", name="MongoDB catalog", exact=True)
                 ).to_be_visible()
             capture(mode.lower() + "-" + route + "-desktop")
             page.set_viewport_size({"width": 390, "height": 844})
             if route == "storage":
                 backup_title = page.get_by_role(
-                    "heading", name="Cloud Database", exact=True
+                    "heading", name="MongoDB catalog", exact=True
                 )
                 expect(backup_title).to_be_visible()
                 expect(
                     page.get_by_role(
-                        "region", name="Cloud Database", exact=True
+                        "region", name="MongoDB catalog", exact=True
                     ).get_by_role("button", name="Back Up Now", exact=True)
                 ).to_be_enabled()
                 assert backup_title.bounding_box()["height"] <= 28

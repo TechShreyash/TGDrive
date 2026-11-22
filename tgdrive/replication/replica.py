@@ -243,6 +243,10 @@ class ChannelReplica:
             "done_bytes": 0,
             "error": None,
             **state,
+            "backup_discovery_unconfirmed": bool(
+                getattr(self.runtime, "backup_discovery_unconfirmed", False)
+                and not saved["candidate"]
+            ),
             "report": saved["report"],
             "restore_point": saved["restore_point"],
         }

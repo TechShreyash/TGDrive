@@ -1377,7 +1377,7 @@ def test_overview_library_and_server_resources_are_separate(
     page.route("**/api/v1/settings", lambda route: route.fulfill(json=management))
     page.goto(server.url + "/?view=storage")
     expect(
-        page.get_by_role("heading", name="Cloud Database", exact=True)
+        page.get_by_role("heading", name="MongoDB catalog", exact=True)
     ).to_be_visible()
     for label in [
         "Temporary upload storage",

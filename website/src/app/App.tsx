@@ -1889,7 +1889,9 @@ export default function App() {
                 <aside
                     id="drive-navigation"
                     role={navigationDrawer && mobileNav ? "dialog" : undefined}
-                    aria-modal={navigationDrawer && mobileNav ? true : undefined}
+                    aria-modal={
+                        navigationDrawer && mobileNav ? true : undefined
+                    }
                     className={"sidebar " + (mobileNav ? "nav-open" : "")}
                     aria-label="Drive navigation"
                     inert={navigationDrawer && !mobileNav}
@@ -2090,7 +2092,10 @@ export default function App() {
                     addFiles(Array.from(event.dataTransfer.files));
                 }}
             >
-                <header className="topbar" hidden={!navigationDrawer && !isPublic}>
+                <header
+                    className="topbar"
+                    hidden={!navigationDrawer && !isPublic}
+                >
                     {isPublic ? (
                         <a href="/" className="brand">
                             <BrandLogo />
@@ -2140,7 +2145,9 @@ export default function App() {
                             )}
                         </>
                     )}
-                    {(mobile || (navigationDrawer && !isPublic)) && <ThemeControl />}
+                    {(mobile || (navigationDrawer && !isPublic)) && (
+                        <ThemeControl />
+                    )}
                     {isPublic && (
                         <span className="public-label">
                             <Globe size={16} /> Read-Only Shared Folder
@@ -2173,7 +2180,7 @@ export default function App() {
                             )}
                         </div>
                     )}
-                    {!isPublic && telegramWarning && (
+                    {!isPublic && telegramWarning && view !== "connections" && (
                         <div className="restart-required-banner" role="status">
                             <ShieldAlert size={20} />
                             <div>
@@ -2184,15 +2191,13 @@ export default function App() {
                                 </strong>
                                 <p>{telegramWarning.detail}</p>
                             </div>
-                            {view !== "connections" && (
-                                <button
-                                    type="button"
-                                    className="text-button"
-                                    onClick={() => navigate("/", "connections")}
-                                >
-                                    Open Connections
-                                </button>
-                            )}
+                            <button
+                                type="button"
+                                className="text-button"
+                                onClick={() => navigate("/", "connections")}
+                            >
+                                Open Connections
+                            </button>
                         </div>
                     )}
                     {!isFiles && pageHeading}

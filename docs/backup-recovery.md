@@ -182,6 +182,11 @@ establish corruption. Older archives need
 the drive to clear the error. A wrong key on a surviving database stops startup
 before serving files.
 
+If TGDrive reports **Telegram backup not confirmed**, it could not verify the
+pinned backup during startup. File changes stay paused. Check the bot's channel
+access and the original encryption key, then restart TGDrive to check again.
+You can also inspect a saved recovery file from the same page.
+
 A known historical `drive.json` pin stops fresh initialization and directs
 version-compatible recovery. Recognizing its name does not validate its contents.
 
