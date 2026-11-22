@@ -275,6 +275,9 @@ async def test_restart_replays_ambiguous_poster_from_owned_staging(tmp_path, ima
     try:
         await recovered.recover()
         record = recovered.registry.get(record_id)
+        assert record.status == TransferStatus.ERROR
+        assert record.task is None
+        record = await recovered.retry_job(record_id)
         assert record.task is not None
         await record.task
         assert record.status is TransferStatus.COMPLETED

@@ -1,5 +1,4 @@
-import { useState, type FormEvent } from "react";
-import { ShieldCheck } from "lucide-react";
+import { useRef, useState, type FormEvent } from "react";
 import BrandLogo from "../shared/BrandLogo";
 import { api, errorMessage } from "../shared/api";
 import { ErrorNotice, Spinner } from "../shared/components";
@@ -9,8 +8,10 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
     const [shown, setShown] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
+    const field = useRef<HTMLInputElement>(null);
     const submit = async (event: FormEvent) => {
         event.preventDefault();
+        if (busy) return;
         setBusy(true);
         setError("");
         try {
@@ -19,6 +20,7 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
             onSuccess();
         } catch (error) {
             setError(errorMessage(error));
+            field.current?.focus();
         } finally {
             setBusy(false);
         }
@@ -33,37 +35,52 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
                 className="login-form"
                 aria-labelledby="login-title"
             >
-                <ShieldCheck className="login-symbol" size={36} />
-                <h1 id="login-title">Your files, your space.</h1>
-                <p>Log in to your private drive.</p>
+                <h1 id="login-title">Log in to TGDrive</h1>
+                <p className="login-intro">
+                    Use the owner password for this drive.
+                </p>
                 <form onSubmit={(event) => void submit(event)}>
                     <label htmlFor="owner-password">Password</label>
                     <div className="password-field">
                         <input
+                            ref={field}
                             id="owner-password"
                             autoFocus
                             type={shown ? "text" : "password"}
                             autoComplete="current-password"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
                             required
                             value={password}
-                            onChange={(event) =>
-                                setPassword(event.target.value)
+                            readOnly={busy}
+                            aria-describedby={
+                                error ? "owner-password-error" : undefined
                             }
+                            onChange={(event) => {
+                                setPassword(event.target.value);
+                                if (error) setError("");
+                            }}
                             maxLength={512}
                         />
                         <button
                             type="button"
                             className="text-button"
-                            aria-pressed={shown}
+                            aria-label={
+                                shown ? "Hide password" : "Show password"
+                            }
+                            aria-controls="owner-password"
                             onClick={() => setShown(!shown)}
                         >
                             {shown ? "Hide" : "Show"}
                         </button>
                     </div>
-                    <ErrorNotice message={error} />
+                    <ErrorNotice id="owner-password-error" message={error} />
                     <button
+                        type="submit"
                         className="primary-button full-width"
                         disabled={busy}
+                        aria-busy={busy}
                     >
                         {busy ? (
                             <>
@@ -74,13 +91,7 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
                         )}
                     </button>
                 </form>
-                <p className="login-note">
-                    Use the owner password configured for this installation.
-                </p>
             </section>
-            <p className="login-footer">
-                Private by default. Share only what you choose.
-            </p>
         </main>
     );
 }

@@ -44,7 +44,7 @@ def keep_console_errors(desktop, request):
 
 def open_storage(page):
     open_admin(page)
-    page.get_by_role("link", name="Storage and Backups", exact=True).click()
+    page.get_by_role("link", name="Backups", exact=True).click()
     section = page.get_by_role("region", name="Backups and recovery", exact=True)
     expect(section).to_be_visible()
     return section
@@ -96,7 +96,10 @@ def test_database_protection_does_not_claim_a_telegram_backup(
     if backup_error:
         expect(database.get_by_role("alert")).to_have_text(backup_error)
     expect(page.locator(".start-new-drive")).to_have_count(0)
-    for heading in ["Files in This Drive", "Temporary Storage", "Current Transfers"]:
+    expect(
+        page.get_by_role("region", name="TGDrive library", exact=True)
+    ).to_have_count(0)
+    for heading in ["Temporary upload storage", "Current Transfers"]:
         expect(page.get_by_role("heading", name=heading, exact=True)).to_have_count(0)
 
 
@@ -163,6 +166,56 @@ def test_unverified_discovery_preserves_local_backup_access(
     expect(database.locator(".backup-confirmation-date")).not_to_contain_text(
         "Not confirmed yet"
     )
+
+
+@pytest.mark.parametrize(
+    "width,height,theme",
+    [(1536, 695, "dark"), (820, 1180, "dark"), (390, 844, "light")],
+)
+def test_standalone_backup_shows_confirmation_during_retry(
+    server, desktop, width, height, theme
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": height})
+    page.add_init_script(f"localStorage.setItem('tgdrive.appearance','{theme}')")
+    pending = True
+
+    def status(route):
+        route.fulfill(
+            json={
+                "telegram_ready": True,
+                "backup": [{"status": "pending" if pending else "confirmed"}],
+                "recovery": {
+                    "state": "protected",
+                    "metadata_revision": 5,
+                    "protected_revision": 5,
+                    "last_success_at": "2026-11-01T08:00:00Z",
+                    "standalone_backup": {
+                        "last_trigger": "manual" if pending else "scheduled",
+                        "next_eligible_at": None if pending else 4102444800,
+                        "retry_pending": pending,
+                        "retry_after": 4102441200 if pending else None,
+                    },
+                },
+            }
+        )
+
+    page.route("**/api/v1/status", status)
+    login(page, server.url)
+    open_storage(page)
+    database = page.get_by_role("region", name="Cloud Database", exact=True)
+    expect(database).to_contain_text("Started by Back Up Now")
+    expect(database).not_to_contain_text("Not confirmed yet")
+    expect(database).to_contain_text("Retry pending")
+    expect(database).to_contain_text("Retry after")
+    expect(database).not_to_contain_text("Next scheduled backup")
+    capture(page, f"backup-retry-{width}.png")
+    pending = False
+    database.get_by_role("button", name="Check Again", exact=True).click()
+    expect(database).to_contain_text("Started on schedule")
+    expect(database).to_contain_text("Next scheduled backup")
+    expect(database).not_to_contain_text("Retry pending")
+    capture(page, f"backup-schedule-{width}.png")
 
 
 @pytest.mark.parametrize(

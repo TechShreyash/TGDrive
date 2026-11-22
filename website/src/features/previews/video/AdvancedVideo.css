@@ -101,15 +101,6 @@
     font-size: 13px;
     line-height: 1.5;
 }
-.advanced-resumed {
-    width: fit-content;
-    max-width: calc(100% - 32px);
-    align-items: center;
-    padding: 8px 12px;
-    border-radius: 6px;
-    color: #eef1f5;
-    background: #15171be6;
-}
 .advanced-progress-notice button {
     margin-inline-start: 8px;
     color: inherit;

@@ -158,7 +158,7 @@ class Account:
 
 
 async def manager_for(
-    tmp_path, *, ledger=None, users=False, callback=None, flood=False
+    tmp_path, *, ledger=None, users=False, callback=None, flood=False, backend=None
 ):
     ledger = ledger or Ledger()
     bots = [Account("bot-one", ledger, flood=flood), Account("bot-two", ledger)]
@@ -176,7 +176,7 @@ async def manager_for(
     manager = TransferManager(
         settings=cast(Settings, settings),
         pool=pool,
-        store=new_store(tmp_path / "drive"),
+        store=new_store(tmp_path / "drive", backend=backend),
         registry=registry_for(tmp_path),
         remote=cast(RemoteClient, SimpleNamespace(close=AsyncMock())),
         ensure_backup=callback,
@@ -333,6 +333,9 @@ async def test_process_restart_reconciles_ambiguous_part_and_reuses_plan(tmp_pat
     try:
         await recovered.recover()
         row = recovered.registry.get(identity)
+        assert row.status == TransferStatus.ERROR
+        assert row.task is None
+        row = await recovered.retry_job(identity)
         assert row.task is not None
         await row.task
         assert row.status == TransferStatus.COMPLETED

@@ -56,8 +56,8 @@ behavior.
 
 | ID | Status | Change | Acceptance |
 | --- | --- | --- | --- |
-| UI-01 | Reproduced | **Play compatible version** returns an HTTP 200 segment and renders its first frame, then remains paused at 0:00. Carry explicit play intent through the source change. If the browser needs another gesture, surface one clearly named Play action. Keep ordinary bookmark reopening paused. | Click once on the dedicated-channel WMV. Assert advancing time and changing frames. Hold and release a refill, check audio waits for video, and verify explicit Pause is honored. |
-| UI-02 | Reproduced | At 820px the sidebar consumed 248px, search measured 146px, the heading wrapped, and the Other filter was clipped. Switch to the compact Type control based on available space, prioritize filenames over secondary metadata, and reuse the existing drawer where the full sidebar crowds the workspace. | At 768, 820, and 1024px, hit-test every filter and reach it with a keyboard. Check Name → Date Added and List → Grid toolbar stability. Recheck five columns at 1536px and touch selection at 390px. |
+| UI-01 | Implemented, focused checks passed | **Play compatible version** returns an HTTP 200 segment and renders its first frame, then remains paused at 0:00. Carry explicit play intent through the source change. If the browser needs another gesture, surface one clearly named Play action. Keep ordinary bookmark reopening paused. | Click once on the dedicated-channel WMV. Assert advancing time and changing frames. Hold and release a refill, check audio waits for video, and verify explicit Pause is honored. |
+| UI-02 | Implemented, focused checks passed | At 820px the sidebar consumed 248px, search measured 146px, the heading wrapped, and the Other filter was clipped. Switch to the compact Type control based on available space, prioritize filenames over secondary metadata, and reuse the existing drawer where the full sidebar crowds the workspace. | At 768, 820, and 1024px, hit-test every filter and reach it with a keyboard. Check Name → Date Added and List → Grid toolbar stability. Recheck five columns at 1536px and touch selection at 390px. |
 | UI-03 | Reproduced | Backups calls local MongoDB **Cloud Database**. When Telegram is unreachable, recovery can imply a backup was found and show 0 / 0 files, bytes, and parts. Connections repeats the global disconnect banner above its diagnosis. Label MongoDB plainly, distinguish discovery from confirmed restoration, show totals when known, and give each problem one next action. | Compare healthy, unreachable, unconfirmed-pin, confirmed-backup, and restoring states. Verify which data is protected, which actions are paused, and what to do next at phone and desktop widths. |
 | UI-04 | Measured | The direct Docker server sent 1.11 MB JavaScript and 555 KB CSS uncompressed for two entry assets before login. Start by loading Performance, Connections, and Backups on first navigation. Measure deployment compression separately. | Measure matching cold login and My Files runs under the same network profile. Verify no admin chunks before navigation, correct direct links and reloads, and usable retry after a failed chunk. |
 | UI-05 | Reproduced | A single page of phone transfer history showed a full pagination row. Retain the count and show paging controls when another page exists. Give guests with a revoked or expired link a way to understand that they need a current link. Keep retry for transient failures. | Exercise zero, one, and multiple pages at 320px. Check active, expired, revoked, protected, and temporarily unreachable guest links without exposing private file data. |
@@ -68,6 +68,41 @@ Use `npm run build`, `npm test`, and the affected Playwright workflows before
 the integrated browser suite. For updates to reader behavior, also use the
 dedicated Telegram test channel and document browser and codec. Keep the
 fixture results distinct from the live workflow.
+
+## Implementation evidence
+
+### UI-01 · Compatible video playback
+
+The outgoing player recorded a paused state during cleanup and replaced the
+intent set by **Play compatible version**. The replacement now consumes the
+explicit play intent once. Until the viewer has started watching, the start
+position comes from saved progress or zero. The timestamp used to generate a
+thumbnail cannot become the start position.
+
+The new advancing-time and changing-frame regression failed on the audit
+build and passed on the updated build. The dedicated-channel WMV produced
+changing frames after one action at 1536×695 and 390×844. Explicit Pause held
+at both sizes. The five compatible-playback fixture cases and three forced
+MKV refill cases passed, including the user-pause case. The build and all 823
+frontend tests passed. The [local logs](../cache/frontend-runtime-audit-1122/ui-01/)
+record the focused runs. The full targeted playback run passed all 39
+compatible-playback, refill, and bookmark cases.
+
+### UI-02 · Tablet Explorer
+
+File filters now switch to the existing Type selector when the file area is
+narrow. The navigation drawer frees the workspace on smaller tablets. The
+shorter tablet columns keep file sizes on one line and give filenames more
+space. Existing browser layout preferences continue to apply.
+
+The Explorer and mobile shell run passed 85 cases. After reviewing captured
+screens, I widened the tablet title and kept sizes on one line. The final
+build passed all 15 focused checks for filter hit targets, keyboard selection,
+drawer focus return, toolbar stability, and grid density. See the [820px
+Explorer](../cache/frontend-runtime-audit-1122/ui-02/final/tablet-files-820.png)
+and [1024px Explorer](../cache/frontend-runtime-audit-1122/ui-02/final/tablet-files-1024.png).
+The live audit container had stopped, so this pass used the built frontend and
+browser fixture. Next is backup and connection status.
 
 ## What remains unverified
 

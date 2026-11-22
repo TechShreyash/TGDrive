@@ -25,16 +25,16 @@ raising limits just to fill a meter can add contention and speculative reads.
 
 1. Find the slow stage in **Transfers**: device intake, URL downloading, Telegram
    waiting/uploading or publishing. A full device bar still needs server confirmation.
-2. Open **Monitor → Performance** and select the **Performance** tab while the
-   problem is happening. Read **Current activity**, **What is waiting** and
-   **Server network**; history and time ranges are on the same tab. Use
-   **Accounts** for queues and cooldowns. Compare the same interval; missing
+2. Open **Performance → Overview** while the
+   problem is happening. Read **Transfer activity** and **Current waits**,
+   then use **Charts and history** for the server network and time ranges.
+   Use **Accounts** for queues and cooldowns. Compare the same interval. Missing
    samples are not zero activity.
 3. Open the same file again. A slow first access followed by a fast cached repeat
    points toward Telegram or cache coverage. If both are slow, also inspect
    server-to-viewer delivery and the viewer's device.
-4. Open **Monitor → Preloads** to inspect actual retained coverage. For upload
-   space problems, check **Temporary Storage** on the **Performance** tab. Keep
+4. Open **Preloads** to inspect actual retained coverage. For upload space
+   problems, check **Performance → Server resources → Temporary upload storage**. Keep
    unfinished upload files; they are not disposable cache.
 5. Change one thing and repeat the same workload. Keep it only if results improve.
    Respect Telegram cooldowns before trying more concurrent work.
@@ -50,7 +50,7 @@ raising limits just to fill a meter can add contention and speculative reads.
 | Server network | **Download to server** is incoming traffic; **Upload from server** includes delivery to viewers and Telegram uploads. Compare with the bandwidth included in your server plan. |
 | Telegram accounts and queues | Look for busy upload/download slots, active and queued part requests, reduced effective limits and provider waits. A queue estimate is not a promised start time. |
 | RAM cache lookups | Hits and misses count block lookups, including preloading. A RAM miss can still hit disk; this is not a percentage of bandwidth saved. |
-| Cache filesystem / Temporary Storage | Cache and unfinished uploads can live on different volumes. Check the relevant free-space reading before changing either budget. |
+| Cache filesystem / Temporary upload storage | Cache and unfinished uploads can live on different volumes. Check the relevant free-space reading before changing either budget. |
 | MongoDB size | Allocated document-plus-index bytes use the reported total, or reported storage plus index sizes. Filesystem capacity appears only when available. Missing readings are unavailable; these are not Atlas's logical quota. Use the [provider's quota monitoring](https://www.mongodb.com/docs/atlas/reference/free-shared-limitations/) for plan capacity. |
 
 </details>
@@ -61,8 +61,10 @@ totals together**. For history, measurement scopes and retention, see
 
 ## Read the Performance page
 
-The **Performance** tab combines current activity, waits, resource readings and
-history. **Server network** shows measured traffic on the reported server
+The **Overview** tab combines current activity, waits, measured rates and
+history. On wide screens the network chart sits beside the CPU and RAM
+charts. On smaller screens the charts stack, with one time range for all
+three. **Server network** shows measured traffic on the reported server
 interface. **Upload from server** is outgoing; **Download to server** is
 incoming. Network readouts and history use decimal **Mbps**, with **Upload** blue
 and solid and **Download** ink and dashed. Readouts show at most two decimals;
@@ -71,28 +73,32 @@ change saved speed-limit precision. History preserves real sample gaps. These re
 than managed file payloads and do not establish the physical host's total
 traffic or link capacity.
 
-**What is waiting** shows reported waits and useful actions, including waits for
-configured speed limits. Open **Transfers** when work needs attention. An absence
-of reported waits does not establish spare capacity or identify a bottleneck.
+**Transfer activity** shows whether any work needs attention and links to
+**Transfers**. **Current waits** groups observed waits by source. Use **View
+Accounts** for Telegram queues, **Transfer limits** for waits at a configured
+speed limit, and **Server resources** for read buffer waits. Active, collecting,
+and unavailable readings appear separately from a reading with no observed waits.
 
-**Accounts** retains account availability, active requests, queues and cooldowns.
-The **Performance** tab also holds time ranges, history charts, memory/cache facts,
-**Automatic tuning**, **All-time totals**, **Files in This Drive** and
-**Temporary Storage**. Drive statistics show file, folder and Trash counts;
-temporary storage shows the staging budget and sampled reservations, not bytes
-on disk or total process RAM. These drive/staging figures load initially and on
-manual **Refresh**, with their update time shown; file changes mark the drive
-figures as needing refresh. Current transfer counts update separately through
-the live transfer view. Memory/cache details, applied limits and totals
-start visible and can be collapsed. Measurement help explains scope without
-adding another monitoring service. Unknown values remain unavailable; a disabled
-cache is not inferred from a missing capacity.
+**Accounts** shows account availability, active requests, queues and cooldowns.
+**Server resources** shows host disk, RAM, cache, and temporary upload storage.
+Temporary upload storage shows the staging budget and sampled reservations.
+Live readings update every five seconds while Performance is visible. Upload space updates while Server resources is open. Returning to the page requests a fresh reading.
+**TGDrive library**, above the Overview charts, shows file and folder counts,
+the stored size in Telegram, and Trash totals. It updates with the live
+Performance snapshot. Open Trash to review deleted items.
+**Tuning** shows applied rules, links to the relevant settings, and
+**All-time totals** when recorded history is available.
+Hover or tap a chart to inspect a sample. With keyboard focus on a chart, use Left or Right to step between samples, Home or End to jump and Escape to clear. Rolling history updates every minute. A custom range keeps its selected dates.
+Current transfer counts update separately through the live transfer view.
+Memory and cache details, applied limits, and totals appear directly in their
+sections. Use the info button beside a chart title for its measurement scope.
+Unknown values remain unavailable. A missing capacity leaves cache status
+unknown.
 
 Server interface, HTTP file and Telegram totals overlap: **do not add them
 together**.
 
-**Backing storage free** uses the verified configured backing-storage envelope;
-it remains **Unavailable** when backing storage is not verified. Headroom after
+**Verified free disk space** combines the filesystem reading with the configured disk check. Without a successful check, TGDrive displays **Unavailable**. Headroom after
 the reserve is shown separately. Filesystem measurement details retain visible
 kernel/VM readings; these do not establish physical laptop capacity. Free space
 after the reserve is an observation, not space allocated to your next upload or
@@ -156,7 +162,7 @@ metadata checks still apply, so even cached access can make Telegram requests.
   both may hold the same bytes.
 - Ordinary playback may cache only part of a file. Before a busy share, choose
   **Preload file** and wait for **Fully cached** with full coverage on the
-  original's row in **Monitor → Preloads**. **Poster cached** covers only the
+  original's row in **Preloads**. **Poster cached** covers only the
   preview image, not the original video.
 
 Expiry, capacity pressure, disk loss or a failed integrity check can remove
@@ -168,7 +174,7 @@ not keep a sleeping host available. [Cache defaults and retention](performance.m
 1. Measure upload and download speed on the machine running TGDrive, using its
    real hosting connection. A test on a remote viewing device measures a different
    connection. TGDrive does not run a speed test automatically.
-2. In **Configuration → Transfer limits → File transfer speeds**, start custom
+2. In **Settings → Transfer limits → File transfer speeds**, start custom
    limits around **80%** of each measured direction. Adjust while checking
    uploads, browsing and playback; this is conservative headroom, not a latency fix.
 3. Match units: speed tests commonly use **Mbps**, meaning millions of bits per

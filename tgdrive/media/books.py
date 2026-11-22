@@ -114,9 +114,9 @@ async def parse_book(data, fetch, entry=None, *, thumbnail=False, raw_images=Fal
     if fmt not in (
         {"epub", "cbz", "cbr", "docx", "pptx", "xlsx", "odt", "odp", "ods"}
         if thumbnail
-        else {"epub", "cbz", "cbr"}
+        else {"epub", "cbz", "cbr", "zip", "docx", "xlsx"}
     ):
-        raise HTTPException(415, "This file is not an EPUB, CBZ or CBR book.")
+        raise HTTPException(415, "This file has no document or archive preview.")
     # Deliberately do not pass Telegram credentials, owner secrets or inherited
     # application environment into a parser handling untrusted archive bytes.
     environment = {

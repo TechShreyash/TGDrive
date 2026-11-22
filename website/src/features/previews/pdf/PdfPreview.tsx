@@ -24,6 +24,12 @@ import {
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import {
+    Popover,
+    PopoverContent,
+    PopoverTitle,
+    PopoverTrigger,
+} from "@ui-sdk/react/popover";
+import {
     getDocument,
     PDFDataRangeTransport,
     GlobalWorkerOptions,
@@ -142,6 +148,13 @@ function pageAt(pages: PageFrame[], position: number): number {
         else high = middle - 1;
     }
     return low;
+}
+
+function readingPage(layout: Layout, top: number, height: number): number {
+    // The final page can be fully visible before its top reaches the viewport.
+    if (layout.pages.length > 1 && top > 0 && top + height >= layout.height - 1)
+        return layout.pages.length - 1;
+    return pageAt(layout.pages, top + PAGE_GAP);
 }
 
 function PdfPage({
@@ -349,22 +362,7 @@ export default function PdfPreview({
     const compact = useMediaQuery(COMPACT_PDF_QUERY, false, {
         getInitialValueInEffect: false,
     });
-    const tools = useRef<HTMLDivElement>(null);
-    const toolsToggle = useRef<HTMLButtonElement>(null);
     const toolsId = useId();
-    useEffect(() => {
-        if (!toolsOpen) return;
-        const dismiss = (event: PointerEvent) => {
-            if (
-                event.target instanceof Node &&
-                !tools.current?.contains(event.target)
-            )
-                setToolsOpen(false);
-        };
-        window.document.addEventListener("pointerdown", dismiss);
-        return () =>
-            window.document.removeEventListener("pointerdown", dismiss);
-    }, [toolsOpen]);
     const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
     const documentRef = useRef(document);
     documentRef.current = document;
@@ -443,15 +441,19 @@ export default function PdfPreview({
         const close = () => {
             const currentWriter = progressWriter.current;
             const count = documentRef.current?.numPages;
-            const pages = layoutRef.current.pages;
+            const layout = layoutRef.current;
             if (
                 navigated.current &&
                 restored.current &&
                 count &&
-                pages.length === count
+                layout.pages.length === count
             ) {
                 const page = scroll.current
-                    ? pageAt(pages, scroll.current.scrollTop + 24) + 1
+                    ? readingPage(
+                          layout,
+                          scroll.current.scrollTop,
+                          scroll.current.clientHeight,
+                      ) + 1
                     : currentPage.current;
                 currentPage.current = page;
                 if (currentWriter) {
@@ -732,9 +734,7 @@ export default function PdfPreview({
         };
     }, [rememberAnchor, syncView]);
 
-    const current = layout.pages.length
-        ? pageAt(layout.pages, view.top + 24)
-        : 0;
+    const current = readingPage(layout, view.top, view.height);
     currentPage.current = current + 1;
     useLayoutEffect(() => {
         if (
@@ -830,7 +830,6 @@ export default function PdfPreview({
         // The phone options sheet stays open for repeated changes; the desktop menu closes.
         if (compact) return;
         setToolsOpen(false);
-        toolsToggle.current?.focus();
     }
     let firstVisible = layout.pages.length ? pageAt(layout.pages, view.top) : 0;
     if (
@@ -887,36 +886,39 @@ export default function PdfPreview({
         scroll.current?.scrollTo({ top: layout.pages[page - 1]?.top ?? 0 });
         syncView();
     }
+    const zoomText = document ? Math.round(scale * 100) + "%" : "—";
     const zoomLabel = (
-        <span className="pdf-zoom" id={toolsId + "-zoom"} aria-label="PDF zoom">
-            {document ? Math.round(scale * 100) + "%" : "—"}
+        <span className="pdf-zoom" aria-hidden="true">
+            {zoomText}
         </span>
+    );
+    const zoomOut = (
+        <button
+            className="icon-button"
+            aria-label="Zoom Out"
+            title="Zoom out"
+            disabled={!document || scale <= MIN_ZOOM}
+            onClick={() => setScale(scale - 0.25)}
+        >
+            <Minus size={18} aria-hidden="true" />
+        </button>
+    );
+    const zoomIn = (
+        <button
+            className="icon-button"
+            aria-label="Zoom in"
+            title="Zoom in"
+            disabled={!document || scale >= MAX_ZOOM}
+            onClick={() => setScale(scale + 0.25)}
+        >
+            <Plus size={18} aria-hidden="true" />
+        </button>
     );
     return (
         <div className="pdf-preview">
             {toolbarTarget &&
                 createPortal(
-                    <div
-                        ref={tools}
-                        className="pdf-controls"
-                        data-open={toolsOpen}
-                        onKeyDown={(event) => {
-                            if (event.key === "Escape" && toolsOpen) {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setToolsOpen(false);
-                                toolsToggle.current?.focus();
-                            }
-                        }}
-                        onBlur={(event) => {
-                            if (
-                                !event.currentTarget.contains(
-                                    event.relatedTarget,
-                                )
-                            )
-                                setToolsOpen(false);
-                        }}
-                    >
+                    <div className="pdf-controls">
                         <div
                             className="reader-navigation"
                             role="group"
@@ -966,122 +968,120 @@ export default function PdfPreview({
                                 <ChevronRight size={20} />
                             </button>
                         </div>
-                        {progressNotice && (
-                            <span className="pdf-progress-notice" role="status">
-                                {progressNotice}
-                            </span>
-                        )}
-                        {compact && (
-                            <button
-                                ref={toolsToggle}
-                                type="button"
-                                className="icon-button pdf-options-toggle"
-                                aria-label="PDF View Options"
-                                title="Zoom and fit"
-                                aria-expanded={toolsOpen}
-                                aria-controls={toolsId}
-                                onClick={() => setToolsOpen((open) => !open)}
-                            >
-                                <ZoomIn size={20} />
-                            </button>
-                        )}
-                        <div
-                            className="pdf-toolbar"
-                            id={toolsId}
-                            role="group"
-                            aria-label="PDF View Controls"
-                            hidden={compact && !toolsOpen}
+                        <span
+                            className="sr-only"
+                            id={toolsId + "-zoom"}
+                            role="status"
+                            aria-label="PDF zoom"
                         >
-                            <div className="inline-actions">
-                                <button
-                                    className="icon-button"
-                                    aria-label="Zoom Out"
-                                    title="Zoom out"
-                                    disabled={!document || scale <= MIN_ZOOM}
-                                    onClick={() => setScale(scale - 0.25)}
-                                >
-                                    <Minus size={18} />
-                                </button>
-                                {compact ? (
-                                    zoomLabel
-                                ) : (
-                                    <button
-                                        ref={toolsToggle}
-                                        type="button"
-                                        className="pdf-zoom-toggle"
+                            {zoomText}
+                        </span>
+                        <Popover open={toolsOpen} onOpenChange={setToolsOpen}>
+                            <div className="pdf-toolbar">
+                                <div className="inline-actions">
+                                    {!compact && zoomOut}
+                                    <PopoverTrigger
+                                        className={
+                                            compact
+                                                ? "icon-button pdf-options-toggle"
+                                                : "pdf-zoom-toggle"
+                                        }
                                         aria-label="PDF View Options"
                                         aria-describedby={toolsId + "-zoom"}
                                         title="Zoom and fit"
-                                        aria-expanded={toolsOpen}
-                                        aria-controls={toolsId + "-menu"}
-                                        onClick={() =>
-                                            setToolsOpen((open) => !open)
-                                        }
                                     >
-                                        {zoomLabel}
-                                        <ChevronDown size={14} />
-                                    </button>
-                                )}
-                                <button
-                                    className="icon-button"
-                                    aria-label="Zoom in"
-                                    title="Zoom in"
-                                    disabled={!document || scale >= MAX_ZOOM}
-                                    onClick={() => setScale(scale + 0.25)}
-                                >
-                                    <Plus size={18} />
-                                </button>
+                                        {compact ? (
+                                            <ZoomIn
+                                                size={20}
+                                                aria-hidden="true"
+                                            />
+                                        ) : (
+                                            <>
+                                                {zoomLabel}
+                                                <ChevronDown
+                                                    size={14}
+                                                    aria-hidden="true"
+                                                />
+                                            </>
+                                        )}
+                                    </PopoverTrigger>
+                                    {!compact && zoomIn}
+                                </div>
                             </div>
-                            <div
-                                className="view-menu"
-                                id={toolsId + "-menu"}
-                                role="group"
-                                aria-label="Zoom presets"
-                                hidden={!compact && !toolsOpen}
+                            <PopoverContent
+                                className="pdf-view-options"
+                                data-compact={compact || undefined}
+                                align="end"
+                                sideOffset={8}
+                                collisionPadding={12}
+                                keepMounted
                             >
-                                {(
-                                    [
-                                        ["width", "Fit Width", "Fit width"],
-                                        ["page", "Fit Page", "Fit page"],
-                                    ] as const
-                                ).map(([mode, label, text]) => (
-                                    <button
-                                        key={mode}
-                                        type="button"
-                                        className="view-menu-item pdf-fit"
-                                        aria-label={label}
-                                        aria-pressed={
-                                            zoom === null && fit === mode
-                                        }
-                                        disabled={!document}
-                                        onClick={() => fitView(mode)}
-                                    >
-                                        <Check size={16} aria-hidden="true" />
-                                        {text}
-                                    </button>
-                                ))}
-                                <hr />
-                                {ZOOM_PRESETS.map((value) => (
-                                    <button
-                                        key={value}
-                                        type="button"
-                                        className="view-menu-item"
-                                        aria-pressed={zoom === value}
-                                        disabled={!document}
-                                        onClick={() => {
-                                            setScale(value);
-                                            closeMenu();
-                                        }}
-                                    >
-                                        <Check size={16} aria-hidden="true" />
-                                        {value * 100}%
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
+                                <PopoverTitle className="sr-only">
+                                    PDF View Options
+                                </PopoverTitle>
+                                {compact && (
+                                    <div className="inline-actions">
+                                        {zoomOut}
+                                        {zoomLabel}
+                                        {zoomIn}
+                                    </div>
+                                )}
+                                <div className="pdf-view-presets">
+                                    {(
+                                        [
+                                            ["width", "Fit Width", "Fit width"],
+                                            ["page", "Fit Page", "Fit page"],
+                                        ] as const
+                                    ).map(([mode, label, text]) => (
+                                        <button
+                                            key={mode}
+                                            type="button"
+                                            className="view-menu-item pdf-fit"
+                                            aria-label={label}
+                                            aria-pressed={
+                                                zoom === null && fit === mode
+                                            }
+                                            disabled={!document}
+                                            onClick={() => fitView(mode)}
+                                        >
+                                            <Check
+                                                size={16}
+                                                aria-hidden="true"
+                                            />
+                                            {text}
+                                        </button>
+                                    ))}
+                                    <hr />
+                                    {ZOOM_PRESETS.map((value) => (
+                                        <button
+                                            key={value}
+                                            type="button"
+                                            className="view-menu-item"
+                                            aria-pressed={zoom === value}
+                                            disabled={!document}
+                                            onClick={() => {
+                                                setScale(value);
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <Check
+                                                size={16}
+                                                aria-hidden="true"
+                                            />
+                                            {value * 100}%
+                                        </button>
+                                    ))}
+                                </div>
+                            </PopoverContent>
+                        </Popover>
                     </div>,
                     toolbarTarget,
                 )}
+            {progressNotice && (
+                <p className="pdf-progress-notice" role="status">
+                    {progressNotice}
+                </p>
+            )}
             {passwordReason && (
                 <form
                     className="pdf-password"

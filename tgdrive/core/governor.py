@@ -226,48 +226,31 @@ class Governor:
             }.items()
             if value is not None
         }
-        self.measurements = await asyncio.to_thread(
+        measurements = await asyncio.to_thread(
             measure, directory, media_directory, **probes
         )
-        self.measurements["sampled_at"] = time.time()
+        measurements["sampled_at"] = time.time()
         manager = getattr(self.runtime, "transfers", None)
         if manager is not None:
             from tgdrive.transfers.staging import staging_usage
 
             reserved, remaining = staging_usage(manager)
-            self.measurements["staging_allocated_bytes"] = reserved - remaining
+            measurements["staging_allocated_bytes"] = reserved - remaining
         async with service._lock:
-            if self.state is None:
-                self.state = dict(
-                    values={
-                        k: getattr(service.value, k, None) or getattr(self.settings, k)
-                        for k in CONCURRENCY + BYTES
-                    },
-                )
-            before = self.state["values"]
+            previous = self.state or {
+                "values": {
+                    k: getattr(service.value, k, None) or getattr(self.settings, k)
+                    for k in CONCURRENCY + BYTES
+                },
+            }
+            before = previous["values"]
             policy = {
                 key: getattr(service.value, key, None)
                 for key in (*AUTO_RESOURCE_LIMITS, "protected_free_bytes")
             }
-            self.state = decide(self.measurements, self.state, policy)
-            values = dict(self.state["values"])
+            report = decide(measurements, previous, policy)
+            values = dict(report["values"])
             changed = sorted(k for k, v in values.items() if before.get(k) != v)
-            if changed:
-                # Summarize disk/memory budgets and concurrency changes.
-                parts = []
-                for k in changed:
-                    reason = str(self.state["reasons"].get(k, ""))
-                    if k in BYTES and "(" in reason:
-                        # Keep the measured amount, without the tooltip formula.
-                        val_str = reason.rsplit("(", 1)[-1].rstrip(")")
-                        parts.append(f"{k}: {val_str}")
-                    else:
-                        parts.append(f"{k}: {reason}")
-                logger.log(
-                    logging.INFO,
-                    "Automatic tuning: %s",
-                    "; ".join(parts),
-                )
             uploads = values.pop("telegram_uploads_per_bot")
             if any(
                 getattr(self.settings, k, None) != v
@@ -285,7 +268,24 @@ class Governor:
             cache = getattr(pool, "_media_read_cache", None)
             update = getattr(cache, "update_stream_capacity", None)
             if callable(update):
-                update(self.measurements)
+                update(measurements)
+            self.state, self.measurements = report, measurements
+            if changed:
+                # Summarize disk/memory budgets and concurrency changes.
+                parts = []
+                for k in changed:
+                    reason = str(report["reasons"].get(k, ""))
+                    if k in BYTES and "(" in reason:
+                        # Keep the measured amount, without the tooltip formula.
+                        val_str = reason.rsplit("(", 1)[-1].rstrip(")")
+                        parts.append(f"{k}: {val_str}")
+                    else:
+                        parts.append(f"{k}: {reason}")
+                logger.log(
+                    logging.INFO,
+                    "Automatic tuning: %s",
+                    "; ".join(parts),
+                )
 
     async def _run(self) -> None:
         while True:

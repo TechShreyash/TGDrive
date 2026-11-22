@@ -20,3 +20,37 @@
     margin-top: -8px;
     overflow-wrap: anywhere;
 }
+
+.move-source {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    margin: 0 0 12px;
+}
+
+.move-source dt,
+.move-destination-label {
+    font-size: var(--mantine-font-size-sm);
+    font-weight: 600;
+}
+
+.move-source dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+.move-destination-label {
+    margin-bottom: 4px;
+}
+
+.move-breadcrumbs .text-button {
+    min-width: 0;
+    max-width: 100%;
+    text-align: start;
+}
+
+.move-breadcrumbs .text-button span {
+    overflow-wrap: anywhere;
+}

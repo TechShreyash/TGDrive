@@ -37,6 +37,7 @@ import {
     performanceDraft,
     performanceCategoryDraft,
     performanceCategoryKeys,
+    InvalidTimezoneError,
     type PerformanceDraft,
     type PerformancePreferences,
     type ResourceLimitDraft,
@@ -66,11 +67,13 @@ export default function PerformanceSettings({
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
+    const [timezoneError, setTimezoneError] = useState("");
     const [notice, setNotice] = useState("");
     const [conflict, setConflict] = useState(false);
     const [retentionUnit, setRetentionUnit] =
         useState<keyof typeof RETENTION_UNITS>("hours");
     const latestLoad = useRef(0);
+    const timezoneField = useRef<HTMLInputElement>(null);
     const steppers = useRef<
         Partial<Record<string, NumberInputHandlers | undefined>>
     >({});
@@ -85,6 +88,7 @@ export default function PerformanceSettings({
         const request = ++latestLoad.current;
         if (!manual) setLoading(true);
         setError("");
+        setTimezoneError("");
         try {
             const value = await performanceApi.settings(signal);
             if (signal?.aborted || request !== latestLoad.current) return false;
@@ -116,6 +120,68 @@ export default function PerformanceSettings({
     useEffect(() => {
         setNotice("");
         setError("");
+        setTimezoneError("");
+    }, [category]);
+    useEffect(() => {
+        if (category === "regional" && timezoneError && !busy)
+            timezoneField.current?.focus();
+    }, [category, timezoneError, busy]);
+    useEffect(() => {
+        const viewport = window.visualViewport;
+        if (
+            category !== "regional" ||
+            !viewport ||
+            !matchMedia("(pointer: coarse)").matches
+        )
+            return;
+
+        let { width, height } = viewport;
+        let form: HTMLFormElement | null = null;
+        let frame = 0;
+        const onResize = () => {
+            cancelAnimationFrame(frame);
+            frame = requestAnimationFrame(() => {
+                const sameWidth = Math.abs(viewport.width - width) < 1;
+                const shrinking = sameWidth && viewport.height < height;
+                ({ width, height } = viewport);
+
+                const field = timezoneField.current;
+                if (!sameWidth || !field || field !== document.activeElement) {
+                    form?.style.removeProperty("margin-block-end");
+                    form = null;
+                    return;
+                }
+                if (!shrinking && !form) return;
+                const workspace = field.closest<HTMLElement>(".workspace");
+                if (!workspace) return;
+
+                const bounds = workspace.getBoundingClientRect();
+                const top = Math.max(bounds.top, viewport.offsetTop);
+                const bottom = Math.min(
+                    bounds.bottom,
+                    viewport.offsetTop + height,
+                );
+                form = field.form;
+                // A keyboard that covers the layout can obscure the end of the form.
+                form?.style.setProperty(
+                    "margin-block-end",
+                    `${bounds.bottom - bottom}px`,
+                );
+                if (!shrinking) return;
+
+                const input = field.getBoundingClientRect();
+                if (input.bottom > bottom - 8)
+                    workspace.scrollTop += input.bottom - bottom + 8;
+                else if (input.top < top + 8)
+                    workspace.scrollTop += input.top - top - 8;
+            });
+        };
+        viewport.addEventListener("resize", onResize);
+        return () => {
+            viewport.removeEventListener("resize", onResize);
+            cancelAnimationFrame(frame);
+            form?.style.removeProperty("margin-block-end");
+        };
     }, [category]);
     let changed = false;
     if (saved && draft) {
@@ -136,6 +202,7 @@ export default function PerformanceSettings({
         if (demoMode || !saved || !draft) return;
         setBusy(true);
         setError("");
+        setTimezoneError("");
         setNotice("");
         try {
             const value = await performanceApi.save(
@@ -171,7 +238,23 @@ export default function PerformanceSettings({
                 new Event("tgdrive:performance-settings-changed"),
             );
         } catch (cause) {
-            setError(errorMessage(cause));
+            if (
+                category === "regional" &&
+                cause instanceof InvalidTimezoneError
+            ) {
+                setTimezoneError(cause.message);
+                timezoneField.current?.focus();
+            } else if (
+                category === "regional" &&
+                cause instanceof ApiError &&
+                cause.status === 422
+            ) {
+                setTimezoneError(
+                    "Choose an IANA timezone supported by this server, such as UTC.",
+                );
+            } else {
+                setError(errorMessage(cause));
+            }
             setConflict(cause instanceof ApiError && cause.status === 409);
         } finally {
             setBusy(false);
@@ -381,12 +464,12 @@ export default function PerformanceSettings({
             {demoMode && <DemoModeNotice />}
             <div className="performance-section-heading">
                 <div>
-                    <h2 id="performance-settings-heading" className="sr-only">
+                    <h2 id="performance-settings-heading">
                         {
                             {
-                                cache: "Cache storage and playback preparation",
-                                transfers: "Telegram transfer policy",
-                                regional: "Instance timezone",
+                                cache: "Cache and preloading",
+                                transfers: "Uploads and Telegram",
+                                regional: "Regional settings",
                             }[category]
                         }
                     </h2>
@@ -589,6 +672,7 @@ export default function PerformanceSettings({
                                 <Switch
                                     className="configuration-auto-preload"
                                     label="Preload during playback"
+                                    aria-label="Preload during playback"
                                     description="Adapts extra server caching to media playback. Downloads fetch their requested ranges. Requested chunks and adaptive read-ahead still work when off; manual whole-file preloads stay available."
                                     checked={draft.auto_preload}
                                     onLabel="ON"
@@ -786,30 +870,41 @@ export default function PerformanceSettings({
                                         expiry uses this installation timezone.
                                     </p>
                                 </SettingHelp>
-                                <p id="performance-timezone-help">
-                                    Used for dates and share expiry. Examples:
-                                    Asia/Kolkata, Europe/London or UTC.
-                                </p>
                             </div>
                             <TextInput
                                 id="performance-timezone"
+                                ref={timezoneField}
                                 value={draft.timezone}
                                 required
                                 disabled={demoMode || busy}
-                                aria-describedby="performance-timezone-help"
+                                description="Used for dates and share expiry. Examples: Asia/Kolkata, Europe/London or UTC."
+                                inputWrapperOrder={[
+                                    "label",
+                                    "input",
+                                    "error",
+                                    "description",
+                                ]}
+                                error={
+                                    timezoneError && (
+                                        <span role="alert">
+                                            {timezoneError}
+                                        </span>
+                                    )
+                                }
                                 onChange={(event) => {
                                     setDraft({
                                         ...draft,
                                         timezone: event.target.value,
                                     });
+                                    setTimezoneError("");
                                     setNotice("");
                                 }}
                             />
                         </div>
                     </Fieldset>
                     <p className="settings-help performance-save-scope">
-                        Save applies to this page. Restore defaults loads values
-                        for review before saving.
+                        Save applies to this section. Restore defaults loads
+                        values for review before saving.
                     </p>
                     <div
                         className="performance-actions"
@@ -818,7 +913,7 @@ export default function PerformanceSettings({
                         <span className="performance-save-state">
                             {changed
                                 ? "Unsaved changes"
-                                : "Settings are up to date"}
+                                : "This section is up to date"}
                         </span>
                         <Button
                             className="primary-button"
@@ -849,6 +944,7 @@ export default function PerformanceSettings({
                                     });
                                 setDraft(next);
                                 setError("");
+                                setTimezoneError("");
                                 setNotice("");
                             }}
                         >
@@ -880,8 +976,9 @@ export default function PerformanceSettings({
                                     });
                                 setDraft(next);
                                 setError("");
+                                setTimezoneError("");
                                 setNotice(
-                                    "Default values loaded for this page. Review and save to apply.",
+                                    "Default values loaded for this section. Review and save to apply.",
                                 );
                             }}
                         >

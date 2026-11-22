@@ -49,16 +49,20 @@ def test_media_playback_identifies_preview_but_original_download_does_not(
 
 def open_preload(page):
     page.get_by_label("Actions for archive.bin", exact=True).click()
-    action = page.get_by_role("menuitem", name="Preload file", exact=True)
+    action = page.get_by_role("button", name="Preload file", exact=True)
     expect(action).to_be_visible()
     action.click()
     return page.get_by_role("dialog", name="Preload file", exact=True)
 
 
-@pytest.mark.parametrize("width", [1440, 390])
-def test_file_menu_preloads_whole_file_and_reuses_cached_bytes(server, desktop, width):
+@pytest.mark.parametrize(
+    "width,height", [(1440, 844), (785, 844), (390, 844), (320, 640), (740, 360)]
+)
+def test_file_menu_preloads_whole_file_and_reuses_cached_bytes(
+    server, desktop, width, height
+):
     _, page = desktop
-    page.set_viewport_size({"width": width, "height": 844})
+    page.set_viewport_size({"width": width, "height": height})
     login(page, server.url)
     page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
     directory_url = page.url
@@ -98,6 +102,14 @@ def test_file_menu_preloads_whole_file_and_reuses_cached_bytes(server, desktop, 
     )
     expect(cached.locator(".cache-coverage")).to_contain_text("256 B")
     expect(cached.locator(".cache-coverage-ready")).to_have_attribute("width", "1000")
+    clear_cache = page.get_by_role("button", name="Clear Cache", exact=True)
+    expect(clear_cache).to_be_enabled()
+    assert clear_cache.evaluate("""button => {
+        const bounds = button.getBoundingClientRect();
+        const toolbar = button.closest('.preload-inventory-toolbar')
+            .getBoundingClientRect();
+        return bounds.left >= toolbar.left - 1 && bounds.right <= toolbar.right + 1;
+    }""")
     page.screenshot(path=ARTIFACTS / f"preload-file-ready-{width}.png")
     page.goto(directory_url)
     dialog = open_preload(page)
@@ -108,6 +120,20 @@ def test_file_menu_preloads_whole_file_and_reuses_cached_bytes(server, desktop, 
     expect(dialog).not_to_be_visible()
     page.goto(server.url + "/?view=preloads")
     expect(cached.locator(".cache-ready-state")).to_have_text("Fully cached")
+
+    evict = cached.get_by_role(
+        "button", name="Evict cached bytes for archive.bin", exact=True
+    )
+    evict.click()
+    confirm = page.get_by_role("dialog", name="Clear cached entry?", exact=True)
+    expect(confirm.get_by_role("button", name="Keep Cache", exact=True)).to_be_focused()
+    confirm.get_by_role("button", name="Clear Cached Entry", exact=True).click()
+    expect(
+        page.get_by_text("Cached bytes evicted. The original is unchanged.", exact=True)
+    ).to_be_visible()
+    expect(cached).to_have_count(0)
+    page.goto(directory_url)
+    expect(page.get_by_role("button", name="archive.bin", exact=True)).to_be_visible()
 
 
 def test_preload_capacity_error_keeps_dialog_open_and_allows_retry(server, desktop):

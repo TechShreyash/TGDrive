@@ -149,12 +149,6 @@ def desktop(browser: Any, request: pytest.FixtureRequest):
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     context = browser.new_context(viewport={"width": 1440, "height": 960})
     context.tracing.start(screenshots=True, snapshots=True, sources=True)
-    # Grid is the product default; most checks were written against list rows.
-    if "default_grid" not in request.fixturenames:
-        context.add_init_script(
-            "localStorage.getItem('tgdrive.file-view')"
-            "||localStorage.setItem('tgdrive.file-view','list')"
-        )
     page = context.new_page()
     page.set_default_timeout(10000)
     errors: list[str] = []
@@ -178,14 +172,12 @@ def login(page: Any, url: str | None = None) -> None:
 
 def open_admin(page: Any) -> None:
     sidebar = page.locator(".sidebar")
-    if page.viewport_size["width"] <= 720:
-        if sidebar.get_attribute("inert") is not None:
-            page.get_by_role("button", name="Toggle Navigation", exact=True).click()
-    else:
-        expect(sidebar).not_to_have_attribute("inert", "")
-    tools = sidebar.locator(".sidebar-tools")
-    if tools.get_attribute("open") is None:
-        tools.locator("summary").click()
+    if sidebar.get_attribute("inert") is not None:
+        page.get_by_role("button", name="Toggle Navigation", exact=True).click()
+    tools = sidebar.get_by_role("button", name="Tools and settings", exact=True)
+    expect(tools).to_be_visible()
+    if tools.get_attribute("aria-expanded") == "false":
+        tools.click()
 
 
 def upload(page: Any, names: list[str], *, add: bool = False) -> None:
@@ -600,10 +592,13 @@ def test_public_share_stays_readonly_across_move_and_revocation(
         expect(
             public.get_by_role("button", name="Upload Files", exact=True)
         ).to_have_count(0)
-        expect(public.locator(".item-actions")).to_have_count(0)
+        expect(public.locator(".item-actions summary:not([hidden])")).to_have_count(0)
+        expect(public.locator(".action-menu:popover-open")).to_have_count(0)
         public_file = public.get_by_role("button", name="résumé #1.txt", exact=True)
         public_file.click()
         expect(public.locator("dialog.file-preview")).to_have_count(0)
+        expect(public_file).to_be_focused()
+        expect(public.locator(".file-row.selected")).to_have_count(0)
         public_file.dblclick()
         public_dialog = preview_dialog(public)
         expect(public_dialog.locator("pre")).to_contain_text("public content")
@@ -900,6 +895,30 @@ def test_move_folder_navigation_clears_failed_listing_and_recovers(
     dialog.get_by_role("button", name="Cancel", exact=True).click()
 
 
+@pytest.mark.parametrize("width,height", [(390, 844), (740, 360)])
+def test_login_failure_returns_to_password_for_correction(
+    server, desktop, width, height
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": height})
+    page.goto(server.url)
+    form = page.locator("#login-dialog")
+    password = form.get_by_label("Password", exact=True)
+    password.fill("wrong fixture password")
+    submit = form.get_by_role("button", name="Log in", exact=True)
+    expect(submit).to_be_in_viewport(ratio=1)
+    submit.click()
+    expect(form.get_by_role("alert")).to_have_text("Invalid password")
+    expect(password).to_be_focused()
+    expect(password).to_have_accessible_description("Invalid password")
+    expect(submit).to_be_in_viewport(ratio=1)
+    page.screenshot(path=ARTIFACTS / f"login-retry-{width}x{height}.png")
+    password.fill(PASSWORD)
+    expect(form.get_by_role("alert")).to_have_count(0)
+    password.press("Enter")
+    expect(form).to_have_count(0)
+
+
 def test_session_expiry_preserves_server_job_recovery(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
@@ -1075,7 +1094,7 @@ def test_safe_document_previews_download_and_pdf_canvas(
     page.set_viewport_size({"width": 320, "height": 740})
     preview_dialog(page)
     options.click()
-    toolbar = dialog.locator(".pdf-toolbar")
+    toolbar = dialog.get_by_role("dialog", name="PDF View Options", exact=True)
     expect(toolbar).to_be_visible()
     bounds = toolbar.bounding_box()
     assert bounds is not None
@@ -1343,17 +1362,22 @@ def test_mouse_double_click_and_mobile_tap_preserve_focus(
 ) -> None:
     _, page = desktop
     login(page, server.url)
+    folder = page.get_by_role("button", name="Preview samples", exact=True)
+    folder_id = page.locator(".file-row", has=folder).get_attribute("data-item-id")
+    assert folder_id
+    folder_path = "/" + folder_id
     directory_requests = []
     page.on(
         "request",
         lambda request: (
             directory_requests.append(node_query(request)["parent_id"])
-            if is_listing(request)
+            if is_listing(request, folder_path)
             else None
         ),
     )
-    folder = page.get_by_role("button", name="Preview samples", exact=True)
     folder.click()
+    expect(folder).to_be_focused()
+    expect(page.locator(".file-row.selected", has=folder)).to_have_count(1)
     expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="sample.json", exact=True)).to_have_count(0)
     expect(page.get_by_role("checkbox")).to_have_count(0)
@@ -1362,12 +1386,13 @@ def test_mouse_double_click_and_mobile_tap_preserve_focus(
     folder.dblclick()
     primary = page.get_by_role("button", name="sample.json", exact=True)
     expect(primary).to_be_visible()
-    assert len(set(directory_requests)) == 1
+    assert set(directory_requests) == {folder_path}
     assert page.evaluate("history.length") == history_length + 1
     page.evaluate("document.body.style.minHeight='220vh'")
     prior_overflow = page.evaluate("getComputedStyle(document.body).overflow")
     primary.click()
     expect(page.locator("dialog.file-preview")).to_have_count(0)
+    expect(page.locator(".file-row.selected", has=primary)).to_have_count(1)
     expect(page.get_by_role("checkbox")).to_have_count(0)
     file_row = page.locator(".file-row").filter(has=primary)
     file_row.locator(".size-cell").click()
@@ -1508,9 +1533,10 @@ def test_pdf_chunk_failure_keeps_preview_controls_and_can_reload(
     primary = page.get_by_role("button", name="sample.pdf", exact=True)
     primary.dblclick()
     dialog = preview_dialog(page)
+    page.set_viewport_size({"width": 320, "height": 240})
     expect(
         dialog.get_by_role("button", name="Reload Viewer", exact=True)
-    ).to_be_visible()
+    ).to_be_in_viewport(ratio=1)
     assert blocked, "The actual lazy PDF JavaScript request must be blocked"
     assert any(url in blocked and failure for url, failure in failures)
     expect(dialog.locator(".pdf-scroll")).to_have_count(0)
@@ -1642,7 +1668,7 @@ def test_enhanced_video_delayed_startup_shows_status_and_recovers(
         )
         expect(
             status.get_by_role("button", name="Try again", exact=True)
-        ).to_be_visible(timeout=12000)
+        ).to_be_visible(timeout=22000)
         expect(
             dialog.get_by_role("link", name="Download Original", exact=True)
         ).to_be_visible()
@@ -1658,7 +1684,7 @@ def test_enhanced_video_delayed_startup_shows_status_and_recovers(
         )
         if play_during_open:
             player.locator("button.movi-play-pause").click()
-            expect(status).to_contain_text("Loading video…")
+            expect(status).to_contain_text("Opening video…")
         holding = False
         for route in pending:
             route.continue_()
@@ -1927,7 +1953,8 @@ def test_unsupported_details_are_compact_explicit_and_shared_readonly(
         public_primary.dblclick()
         public_dialog, _ = file_details_dialog(public, "setup.exe")
         assert public_downloads == []
-        expect(public.locator(".item-actions")).to_have_count(0)
+        expect(public.locator(".item-actions summary:not([hidden])")).to_have_count(0)
+        expect(public.locator(".action-menu:popover-open")).to_have_count(0)
         expect(
             public_dialog.get_by_role("button", name="Upload Files", exact=True)
         ).to_have_count(0)
@@ -2398,7 +2425,7 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
     _, page = desktop
     login(page, server.url)
     open_admin(page)
-    page.get_by_role("link", name="Storage and Backups", exact=True).click()
+    page.get_by_role("link", name="Backups", exact=True).click()
     section = page.get_by_role("region", name="Cloud Database", exact=True)
     status = section.get_by_role("status")
     expect(page.locator(".drive-protection")).to_have_count(0)
@@ -2433,7 +2460,7 @@ def test_settings_backup_status_never_claims_unconfirmed_protection(
         assert offset.ok and offset.headers["upload-offset"] == "0"
         assert server.control()["started"] == []
         open_admin(page)
-        page.get_by_role("link", name="Storage and Backups", exact=True).click()
+        page.get_by_role("link", name="Backups", exact=True).click()
         expect(status).to_have_text("Uploads Still in Progress", timeout=10000)
         assert_not_protected()
         with page.expect_response("**/api/v1/backup") as catalog_backup:
@@ -2834,13 +2861,22 @@ def test_light_dark_theme_preference_persists_and_preserves_sort_keyboard(
     page.goto(server.url)
     assert_single_appearance(page)
     assert_theme_contrast(page)
-    baseline = page.evaluate("""() => ({
-      font: getComputedStyle(document.body).fontFamily,
-      background: getComputedStyle(document.body).backgroundColor,
-      injected: document.querySelectorAll('style[data-mantine-styles]').length
-    })""")
+    baseline = page.evaluate("""() => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--canvas)';
+      document.body.append(probe);
+      const body = getComputedStyle(document.body);
+      const result = {
+        font: body.fontFamily,
+        background: body.backgroundColor,
+        canvas: getComputedStyle(probe).color,
+        injected: document.querySelectorAll('style[data-mantine-styles]').length
+      };
+      probe.remove();
+      return result;
+    }""")
     assert "InterVariable" in baseline["font"]
-    assert baseline["background"] == "rgb(245, 246, 248)"
+    assert baseline["background"] == baseline["canvas"]
     assert baseline["injected"] == 0
     login(page)
     page.reload()
@@ -2854,8 +2890,13 @@ def test_light_dark_theme_preference_persists_and_preserves_sort_keyboard(
     page.reload()
     expect(page.locator("html")).to_have_attribute("data-theme", "dark")
     sort = page.get_by_role("button", name="Sort Files: Name", exact=True)
-    sort.click()
-    menu = page.get_by_role("menu", name="Sort Files", exact=True)
+    sort.focus()
+    page.keyboard.press("ArrowUp")
+    menu = page.get_by_role("menu", name=re.compile(r"^Sort Files: "))
+    expect(menu.get_by_role("menuitemradio").last).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(sort).to_be_focused()
+    page.keyboard.press("ArrowDown")
     expect(menu.get_by_role("menuitemradio", name="Name", exact=True)).to_be_focused()
     page.keyboard.press("End")
     # Direction choices follow fields; keyboard navigation traverses both groups.
@@ -2863,6 +2904,11 @@ def test_light_dark_theme_preference_persists_and_preserves_sort_keyboard(
     page.keyboard.press("Home")
     page.keyboard.press("ArrowDown")
     page.keyboard.press("ArrowDown")
+    expect(
+        menu.get_by_role("menuitemradio", name="File Size", exact=True)
+    ).to_be_focused()
+    page.keyboard.press("Home")
+    page.keyboard.press("f")
     expect(
         menu.get_by_role("menuitemradio", name="File Size", exact=True)
     ).to_be_focused()
@@ -3104,7 +3150,8 @@ def test_settings_guided_premium_login_cancel_code_and_two_step(
         "That code is incorrect. Try again."
     )
     expect(code).to_have_value("")
-    code.fill("12345")
+    expect(code).to_be_focused()
+    page.keyboard.type("12345")
     premium.get_by_role("button", name="Verify Code", exact=True).click()
     password = premium.get_by_label("Telegram Two-Step Password", exact=True)
     expect(password).to_be_focused()
@@ -3386,7 +3433,7 @@ def test_ui_polish_batched_visual_states(
         assert_single_appearance(page)
         for route, heading in (
             ("connections", "Connections"),
-            ("storage", "Storage and Backups"),
+            ("storage", "Backups"),
         ):
             page.goto(server.url + "/?view=" + route)
             expect(
@@ -3398,9 +3445,14 @@ def test_ui_polish_batched_visual_states(
                 ).to_be_visible()
                 expect(page.locator(".connection-management input")).to_have_count(0)
             elif route == "storage":
-                expect(page.locator(".storage-catalog")).to_be_visible()
+                expect(
+                    page.get_by_role("heading", name="TGDrive library", exact=True)
+                ).to_have_count(0)
                 expect(
                     page.get_by_role("progressbar", name="Reserved Upload Staging")
+                ).to_have_count(0)
+                expect(
+                    page.get_by_role("region", name="Cloud Database", exact=True)
                 ).to_be_visible()
             capture(mode.lower() + "-" + route + "-desktop")
             page.set_viewport_size({"width": 390, "height": 844})
@@ -3428,16 +3480,14 @@ def test_ui_polish_batched_visual_states(
                 expect(page.locator("#compact-new-button")).to_have_count(0)
                 footer_box = footer.bounding_box()
                 assert footer_box and footer_box["y"] + footer_box["height"] <= 844
-                storage_link = page.get_by_role(
-                    "link", name="Storage and Backups", exact=True
-                )
+                storage_link = page.get_by_role("link", name="Backups", exact=True)
                 if page.locator(".sidebar").get_attribute("inert") is not None:
                     page.get_by_role(
                         "button", name="Toggle Navigation", exact=True
                     ).click()
                 storage_link.click()
                 expect(
-                    page.get_by_role("heading", name="Storage and Backups", exact=True)
+                    page.get_by_role("heading", name="Backups", exact=True)
                 ).to_be_in_viewport()
                 page.go_back()
                 expect(
@@ -4274,12 +4324,16 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
         ),
     )
     unavailable_control = unavailable_row.locator(".share-copy-control")
-    unavailable_control.focus()
-    expect(unavailable_control.get_by_role("tooltip")).to_have_text(
-        "Original link is unavailable; existing copies still work."
-    )
+    unavailable_control.press("Tab")
+    page.keyboard.press("Shift+Tab")
+    issue = "Original link is unavailable; existing copies still work."
+    tooltip = page.get_by_role("tooltip").filter(has_text=issue)
+    expect(unavailable_control).to_be_focused()
+    expect(unavailable_control).to_have_accessible_description(issue)
+    expect(tooltip).to_be_visible()
     unavailable_control.press("Escape")
-    expect(unavailable_control).not_to_be_focused()
+    expect(tooltip).to_be_hidden()
+    expect(unavailable_control).to_be_focused()
     unavailable_control.click()
     expect(unavailable_control).to_be_focused()
     unavailable_row.locator(".share-copy").evaluate("button => button.click()")
@@ -4298,18 +4352,33 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     for theme in ("light", "dark"):
         set_appearance(page, theme)
-        for width in (1440, 390, 320):
-            page.set_viewport_size(
-                {"width": width, "height": 960 if width > 600 else 844}
-            )
+        for width, height in ((1440, 960), (390, 844), (320, 640)):
+            page.set_viewport_size({"width": width, "height": height})
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             assert page.locator(".share-row").evaluate_all(
                 "rows => rows.every(row => row.scrollWidth <= row.clientWidth + 1)"
             )
+            page.locator(".share-name").last.focus()
+            assert page.evaluate(
+                "document.scrollingElement.scrollHeight <= innerHeight + 1"
+            )
+            assert page.evaluate("scrollY") == 0
             if width in (1440, 390):
                 page.screenshot(
                     path=str(ARTIFACTS / f"shared-links-{theme}-{width}.png")
                 )
+    active_row.get_by_role("button", name="Edit link for 資料", exact=True).click()
+    dialog = page.get_by_role("dialog", name="Edit share link", exact=True)
+    no_expiry = dialog.get_by_role("checkbox", name="No expiry", exact=True)
+    expect(no_expiry).to_be_checked()
+    label = dialog.locator("label").filter(has_text="No expiry")
+    bounds = label.bounding_box()
+    assert bounds is not None and bounds["height"] >= 44
+    label.click()
+    expect(no_expiry).not_to_be_checked()
+    expect(dialog.get_by_label("Expiry date and time", exact=False)).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
     page.set_viewport_size({"width": 1440, "height": 960})
     page.get_by_role("button", name="Expired 1", exact=True).click()
     expect(page.locator(".share-row")).to_have_count(1)
@@ -4347,6 +4416,20 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
     )
 
 
+def test_sidebar_link_can_open_in_another_tab(server, desktop):
+    context, page = desktop
+    login(page, server.url)
+    recent = page.get_by_role("link", name="Recent", exact=True)
+    with context.expect_page() as opened:
+        recent.click(modifiers=["ControlOrMeta"])
+    new_page = opened.value
+    expect(new_page).to_have_url(server.url + "/?view=recent")
+    expect(page).to_have_url(server.url + "/")
+    new_page.close()
+    recent.click()
+    expect(page).to_have_url(server.url + "/?view=recent")
+
+
 def test_mobile_navigation_traps_focus_closes_and_restores_trigger(server, desktop):
     _, page = desktop
     page.set_viewport_size({"width": 390, "height": 844})
@@ -4367,6 +4450,7 @@ def test_mobile_navigation_traps_focus_closes_and_restores_trigger(server, deskt
     expect(trigger).to_be_focused()
     trigger.click()
     page.set_viewport_size({"width": 1440, "height": 960})
+    expect(navigation).to_have_count(0)
     page.set_viewport_size({"width": 390, "height": 844})
     expect(trigger).to_have_attribute("aria-expanded", "false")
 

@@ -35,10 +35,10 @@ Keep diagnostics enabled and use the shared Pyright configuration in
 `assets` group used by standalone asset scripts. Node 24.22 or newer (below 25)
 is required; CI uses Node 24.22.0 for Pyright.
 
-Native development needs `aria2c` on `PATH` to perform real torrent imports
-(`sudo apt-get install aria2` on Ubuntu). Docker includes it. Torrent unit tests
-use synthetic metadata and engine responses; passing them does not establish
-live swarm reachability or real Telegram upload behavior.
+Native development needs `aria2c` on `PATH` for torrent imports and `qpdf` and
+`prlimit` for PDF password changes. Ubuntu packages are `aria2`, `qpdf`, and
+`util-linux`. Docker includes these tools. Torrent unit tests use synthetic
+metadata and engine responses.
 
 ## Run while editing
 
@@ -72,7 +72,9 @@ TGDRIVE_UI_SHOWCASE=1 uv run --frozen --group e2e python -m uvicorn \
 
 Open [localhost:18767](http://localhost:18767/) with `offline browser test password`.
 The fixture seeds files, transfers, shares, caches, performance and reading samples
-without Telegram credentials. Restart resets it. CBR needs
+without Telegram credentials. The sample Automatic tuning report uses the
+production sizing rules with example disk, CPU and memory readings. Restart
+resets the fixture. CBR needs
 [libarchive](reading.md), included in Docker. Showcase uses the production
 16 GiB file cap; ordinary browser tests use 32 MiB. Never publicly deploy the
 fixture or its `/__test__` endpoints.
@@ -242,9 +244,11 @@ thumbnail rendering tests require FFmpeg and Poppler.
 <summary>Opt-in MongoDB replica-set tests</summary>
 
 Use a disposable local replica set or a dedicated test URI:
+The higher open-file limit accommodates the suite's many temporary collections.
 
 ```bash
 docker run -d --name tgdrive-test-mongo -p 127.0.0.1:27017:27017 \
+  --ulimit nofile=64000:64000 \
   mongo:8.0 --replSet tgdrive-test --bind_ip_all
 until docker exec -e HOME=/tmp tgdrive-test-mongo mongosh --quiet --eval 'db.adminCommand({ping:1})'; do sleep 1; done
 docker exec -e HOME=/tmp tgdrive-test-mongo mongosh --quiet --eval \
@@ -674,11 +678,12 @@ guide's **Contents** links when adding, renaming or moving sections.
 
 ## Agent skills
 
-AI agents load project skills from `.agents/skills/`; `skills-lock.json` pins
-their sources. Restore them with `npx skills experimental_install` and update
-them with `npx skills update -p`. `tgdrive-release` is TGDrive's own release
-checklist; the rest are third-party. UI work reads [PRODUCT.md](../PRODUCT.md).
-Release archives exclude `.agents`.
+Project skills ship in `.agents/skills/` in a Git checkout. List them with
+`npx skills list --agent codex`. `skills-lock.json` records upstream sources.
+Update third-party skills individually and review the diff for TGDrive-specific
+instructions and reference fixes. `tgdrive-release` is maintained in this repo.
+Follow [AGENTS.md](../AGENTS.md) for skill routing and approval rules. Release
+archives exclude `.agents`.
 
 ## Independent channel backup contracts
 

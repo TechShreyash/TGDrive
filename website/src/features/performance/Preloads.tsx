@@ -154,7 +154,9 @@ export function CacheCapacity({
     icon?: ReactNode;
 }) {
     const available = !disabled && !unavailable && limit > 0;
-    const percent = available ? Math.round((used / limit) * 100) : 0;
+    const percent = available ? (used / limit) * 100 : 0;
+    const underOnePercent = percent > 0 && percent < 1;
+    const percentLabel = underOnePercent ? "<1%" : Math.round(percent) + "%";
     return (
         <div className="preload-capacity-tier" role="group" aria-label={label}>
             <h4>
@@ -170,7 +172,7 @@ export function CacheCapacity({
                     <>
                         <strong>{resourceBytes(used)}</strong>
                         <span>of {resourceBytes(limit)}</span>
-                        <span>{percent}%</span>
+                        <span>{percentLabel}</span>
                     </>
                 ) : (
                     <strong>{disabled ? "Disabled" : "Unavailable"}</strong>
@@ -179,7 +181,7 @@ export function CacheCapacity({
             {available ? (
                 <progress
                     aria-label={label + " usage"}
-                    aria-valuetext={`${resourceBytes(used)} of ${resourceBytes(limit)} used (${percent}%)`}
+                    aria-valuetext={`${resourceBytes(used)} of ${resourceBytes(limit)} used (${underOnePercent ? "less than 1%" : percentLabel})`}
                     max={limit}
                     value={Math.min(used, limit)}
                 />

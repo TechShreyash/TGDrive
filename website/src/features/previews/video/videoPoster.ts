@@ -52,7 +52,8 @@ export async function loadVideoPoster(
     url: string,
     signal: AbortSignal,
 ): Promise<Blob | null> {
-    const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(10000)]);
+    // Give stored posters time to arrive without gating player startup on a slow request.
+    const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(350)]);
     try {
         const response = await fetch(url, {
             credentials: "same-origin",

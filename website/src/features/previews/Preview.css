@@ -12,16 +12,48 @@
     margin: auto;
     padding: 24px;
 }
-/* Keep preview controls reachable when browser chrome or rotation reduces space. */
-.file-preview .preview-surface-message {
+/* Keep recovery controls reachable when browser chrome or rotation reduces space. */
+.file-preview .preview-surface:has(> .preview-feedback) {
+    display: flex;
+    padding: clamp(12px, 3vw, 24px);
     overflow: auto;
     overscroll-behavior: contain;
+    background: var(--canvas);
+    color-scheme: inherit;
 }
-.file-preview .preview-surface-message > .empty-state {
-    flex-shrink: 0;
-    width: min(100%, 55ch);
+.preview-feedback {
+    flex: none;
+    width: min(100%, 32rem);
     margin: auto;
+    color: var(--ink);
     overflow-wrap: anywhere;
+}
+.preview-feedback-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin-bottom: 12px;
+}
+.preview-feedback h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    text-wrap: balance;
+}
+.preview-feedback > p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--muted);
+}
+.preview-feedback .secondary-button {
+    min-height: 44px;
+    max-width: 100%;
+    white-space: normal;
 }
 .file-preview:not(.file-details) .preview-header {
     padding-left: max(10px, env(safe-area-inset-left));
@@ -57,12 +89,20 @@
     .file-preview .preview-quality select {
         min-height: 44px;
     }
+    .file-preview
+        .archive-preview
+        :is(
+            .archive-breadcrumbs button,
+            .archive-folder,
+            .archive-pagination button
+        ),
+    .file-preview .preview-surface-office .mantine-NativeSelect-input {
+        min-height: 44px;
+    }
+    .file-preview .preview-surface-office .mantine-NativeSelect-input {
+        font-size: 16px;
+    }
     .file-preview .preview-surface-audio {
         padding-bottom: max(12px, env(safe-area-inset-bottom));
-    }
-    .file-preview .preview-surface-message .secondary-button {
-        min-height: 44px;
-        max-width: 100%;
-        white-space: normal;
     }
 }

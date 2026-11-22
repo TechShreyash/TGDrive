@@ -5,10 +5,10 @@
  */
 
 /* Lists and cards: opacity-only stagger, capped at 8 steps. */
-:is(.transfer-batch, .transfer-item, .share-row, .preload-job) {
+:is(.share-row, .preload-job) {
     animation: refresh-fade var(--dur-3) var(--ease-out) backwards;
 }
-:is(.transfer-batch, .transfer-item, .share-row, .preload-job) {
+:is(.share-row, .preload-job) {
     &:nth-child(2) {
         animation-delay: 30ms;
     }
@@ -52,13 +52,6 @@
 input[type="checkbox"]:not(.switch):checked {
     animation: motion-check-pop var(--dur-2) var(--ease-spring);
 }
-.sidebar-tools .nav-disclosure {
-    transition: transform var(--dur-2) var(--ease-out);
-}
-.sidebar-tools[open] > .sidebar-tools-content {
-    animation: refresh-fade var(--dur-2) var(--ease-out);
-}
-
 /* Live data */
 progress::-webkit-progress-value {
     transition: width 400ms var(--ease-out);

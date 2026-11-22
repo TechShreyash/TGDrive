@@ -1,5 +1,8 @@
 import { request } from "../../../shared/api";
-import { createOrderedProgressWriter } from "../orderedProgressWriter";
+import {
+    createOrderedProgressWriter,
+    waitForProgressSave,
+} from "../orderedProgressWriter";
 
 export interface PdfPosition {
     page_number: number;
@@ -38,11 +41,13 @@ export async function loadServerPdfPosition(
     fileId: string,
     signal: AbortSignal,
 ) {
-    const result = await request<{ progress: unknown }>(
-        endpoint(fileId),
-        undefined,
-        { signal, cache: "no-store", notifySessionExpiry: false },
-    );
+    const url = endpoint(fileId);
+    await waitForProgressSave(url, signal);
+    const result = await request<{ progress: unknown }>(url, undefined, {
+        signal,
+        cache: "no-store",
+        notifySessionExpiry: false,
+    });
     return position(result.progress);
 }
 

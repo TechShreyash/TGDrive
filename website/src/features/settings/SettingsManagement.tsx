@@ -79,7 +79,10 @@ export default function SettingsManagement({
     const [target, setTarget] = useState<string | null>(null);
     const [premiumOpen, setPremiumOpen] = useState(false);
     const [error, setError] = useState("");
-    const [formError, setFormError] = useState("");
+    const [formError, setFormError] = useState<{
+        message: string;
+        validation?: boolean;
+    } | null>(null);
     const [notice, setNotice] = useState("");
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -235,10 +238,13 @@ export default function SettingsManagement({
             ? "Finish or cancel pending transfers before saving connection changes."
             : "Restore the database connection before saving connection changes.";
     const credentialRepair = isCredentialRepair(draft, settings);
+    const clearValidationError = () => {
+        if (formError?.validation) setFormError(null);
+    };
     const closeEditor = () => {
         setDraft(null);
         setTarget(null);
-        setFormError("");
+        setFormError(null);
         editBase.current = null;
     };
     const beginEdit = (id: string) => {
@@ -247,7 +253,7 @@ export default function SettingsManagement({
         setDraft(createConnectionDraft(settings));
         setTarget(id);
         setNotice("");
-        setFormError("");
+        setFormError(null);
     };
     const addClient = (kind: "bot" | "user") => {
         if (demoMode || !settings) return;
@@ -266,9 +272,10 @@ export default function SettingsManagement({
         setTarget(key);
         setPremiumOpen(false);
         setNotice("");
-        setFormError("");
+        setFormError(null);
     };
-    const changeClient = (key: string, patch: Partial<ClientDraft>) =>
+    const changeClient = (key: string, patch: Partial<ClientDraft>) => {
+        clearValidationError();
         setDraft(
             (current) =>
                 current && {
@@ -278,6 +285,7 @@ export default function SettingsManagement({
                     ),
                 },
         );
+    };
     const dirty = Boolean(
         draft &&
         editBase.current &&
@@ -300,18 +308,18 @@ export default function SettingsManagement({
         event.preventDefault();
         if (demoMode || !draft || saving || !dirty) return;
         if (blocked && !credentialRepair) {
-            setFormError(blockedReason);
+            setFormError({ message: blockedReason });
             return;
         }
         let payload;
         try {
             payload = prepareConnectionUpdate(draft);
         } catch (cause) {
-            setFormError(errorMessage(cause));
+            setFormError({ message: errorMessage(cause), validation: true });
             return;
         }
         setSaving(true);
-        setFormError("");
+        setFormError(null);
         setNotice("");
         ++generation.current;
         try {
@@ -330,11 +338,12 @@ export default function SettingsManagement({
                 cause.code === "SETTINGS_CONFLICT"
             ) {
                 closeEditor();
-                setFormError(
-                    "Connection settings changed elsewhere. Review the latest configuration and try again.",
-                );
+                setFormError({
+                    message:
+                        "Connection settings changed elsewhere. Review the latest configuration and try again.",
+                });
                 await load();
-            } else setFormError(errorMessage(cause));
+            } else setFormError({ message: errorMessage(cause) });
         } finally {
             if (mounted.current) setSaving(false);
         }
@@ -359,7 +368,7 @@ export default function SettingsManagement({
             {settings && draft && settings.revision !== draft.revision && (
                 <ErrorNotice message="The saved configuration changed. Cancel and reopen this editor before saving." />
             )}
-            <ErrorNotice message={formError} />
+            <ErrorNotice message={formError?.message ?? ""} />
             <div className="management-actions">
                 {dirty && (
                     <button
@@ -515,6 +524,12 @@ export default function SettingsManagement({
         settings?.clients.filter(
             (client) => clientConnectionLabel(client) === "Connected",
         ).length ?? 0;
+    const checkingConnections = refreshingConnections || checksPending;
+    const refreshLabel = checkingConnections
+        ? "Checking…"
+        : checksBusy
+          ? "Waiting to retry…"
+          : "Refresh";
     return (
         <div
             className="connection-management page-body"
@@ -603,26 +618,31 @@ export default function SettingsManagement({
                                       : "Telegram connected"}
                             </strong>
                             <p className="connection-summary">
-                                {connectedClients} connected ·{" "}
-                                {settings.clients.length} configured
+                                {connectedClients} of {settings.clients.length}{" "}
+                                storage clients connected
                             </p>
                         </div>
-                        <dl className="connection-hero-facts">
-                            <div>
-                                <dt>Bots</dt>
-                                <dd>
-                                    {
-                                        settings.clients.filter(
-                                            (client) => client.kind === "bot",
-                                        ).length
-                                    }
-                                </dd>
-                            </div>
-                            <div>
-                                <dt>Channel</dt>
-                                <dd>{settings.storage_channel}</dd>
-                            </div>
-                        </dl>
+                        <button
+                            type="button"
+                            className="text-button connection-refresh"
+                            disabled={
+                                demoMode ||
+                                refreshingConnections ||
+                                checksBusy ||
+                                Boolean(draft) ||
+                                premiumOpen
+                            }
+                            aria-label={refreshLabel}
+                            title="Check saved credentials and storage channel access"
+                            onClick={() => void refreshConnections()}
+                        >
+                            {checkingConnections ? (
+                                <Spinner />
+                            ) : (
+                                <RefreshCw size={16} />
+                            )}
+                            <span>{refreshLabel}</span>
+                        </button>
                     </div>
                     <section
                         className="settings-section"
@@ -630,15 +650,10 @@ export default function SettingsManagement({
                     >
                         <div className="settings-section-title">
                             <div>
-                                <h2 id="storage-clients-heading">
-                                    Storage Clients
-                                </h2>
-                                <p>
-                                    Bots store your files. Available Premium
-                                    accounts are preferred for upload and
-                                    download speed. All accounts use the same
-                                    file split size, capped at 2000 MiB per
-                                    document.
+                                <div className="connection-clients-heading">
+                                    <h2 id="storage-clients-heading">
+                                        Storage Clients
+                                    </h2>
                                     <SettingHelp label="Storage clients">
                                         <p>
                                             Add storage bots or a Premium user
@@ -648,36 +663,15 @@ export default function SettingsManagement({
                                             permissions. More accounts do not
                                             multiply aggregate speed limits; all
                                             accounts share the file split size
-                                            in Transfer settings.
+                                            in Transfer settings, up to 2000 MiB
+                                            per document. When available,
+                                            Premium accounts are preferred for
+                                            transfers.
                                         </p>
                                     </SettingHelp>
-                                </p>
+                                </div>
                             </div>
-                            <div className="management-actions">
-                                <button
-                                    type="button"
-                                    className="text-button"
-                                    disabled={
-                                        demoMode ||
-                                        refreshingConnections ||
-                                        checksBusy ||
-                                        Boolean(draft) ||
-                                        premiumOpen
-                                    }
-                                    title="Check saved credentials and storage channel access"
-                                    onClick={() => void refreshConnections()}
-                                >
-                                    {refreshingConnections || checksPending ? (
-                                        <Spinner />
-                                    ) : (
-                                        <RefreshCw size={16} />
-                                    )}
-                                    {refreshingConnections || checksPending
-                                        ? "Checking…"
-                                        : checksBusy
-                                          ? "Waiting to retry…"
-                                          : "Refresh"}
-                                </button>
+                            <div className="management-actions connection-client-actions">
                                 <button
                                     type="button"
                                     className="primary-button"
@@ -945,6 +939,7 @@ export default function SettingsManagement({
                         {target === "api" && draft && (
                             <form
                                 className="connection-editor"
+                                onChange={clearValidationError}
                                 onSubmit={(event) => void save(event)}
                             >
                                 <fieldset disabled={demoMode || saving}>
@@ -1027,7 +1022,7 @@ export default function SettingsManagement({
                     </p>
                 </>
             )}
-            {!draft && <ErrorNotice message={formError} />}
+            {!draft && <ErrorNotice message={formError?.message ?? ""} />}
         </div>
     );
 }

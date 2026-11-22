@@ -35,6 +35,7 @@
 }
 .sidebar {
     padding: 0 12px 14px;
+    overflow: hidden;
 }
 .sidebar > .brand {
     height: 64px;
@@ -44,12 +45,13 @@
     gap: 10px;
     height: 48px;
     min-width: 0;
+    width: calc(100% - 4px);
     margin: 0 2px 16px;
     padding: 0 22px 0 16px;
     border-radius: 16px;
-    background: var(--surface-raised);
-    color: var(--ink);
-    box-shadow: var(--raise-shadow);
+    background: var(--action);
+    color: var(--on-action);
+    box-shadow: none;
     font-weight: 600;
     transition:
         box-shadow var(--dur-2) var(--ease-out),
@@ -57,28 +59,38 @@
         background-color var(--dur-1);
 }
 .sidebar .new-button svg {
-    color: var(--action);
+    color: inherit;
     width: 22px;
     height: 22px;
 }
 .sidebar .new-button:hover {
-    background: var(--surface-raised);
-    box-shadow:
-        0 14px 30px -12px light-dark(#141a234d, #000d),
-        0 2px 6px light-dark(#141a2318, #0007);
-    transform: translateY(-1px);
+    background: var(--action-hover);
 }
 .sidebar .new-button:active {
     transform: scale(0.97);
 }
 .sidebar .new-button[aria-expanded="true"] {
     background: var(--action-soft);
+    color: var(--on-action-soft);
+}
+.sidebar-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-height: 0;
+    margin-inline: -4px;
+    padding: 0 4px 4px;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-width: thin;
+    scroll-padding-block: 4px;
 }
 .drive-nav {
     gap: 1px;
+    padding-block: 4px;
 }
 .drive-nav a,
-.sidebar-tools > summary,
 .sidebar-help,
 .sidebar-logout {
     border-radius: 12px;
@@ -90,7 +102,9 @@
 .drive-nav a[aria-current] {
     background: var(--action-soft);
     color: var(--on-action-soft);
-    font-weight: 600;
+    font-weight: 650;
+    box-shadow: inset 0 0 0 1px
+        color-mix(in srgb, var(--action) 24%, transparent);
 }
 .drive-nav a[aria-current] > svg {
     color: var(--action);
@@ -105,21 +119,12 @@
     line-height: 16px;
     font-variant-numeric: tabular-nums;
 }
-.sidebar-tools {
-    margin-top: 10px;
-    padding-top: 10px;
-}
-.sidebar-tools .nav-disclosure {
-    transition: transform var(--dur-2) var(--ease-out);
-}
-.sidebar-tools-content {
-    margin-inline-start: 22px;
-}
-.sidebar-tools-content a {
-    border-radius: 10px;
+.sidebar.nav-open .drive-nav a {
+    min-height: 44px;
 }
 .sidebar-bottom {
-    border-top: 0;
+    margin-top: auto;
+    border-top: 1px solid var(--line-subtle);
     padding-top: 6px;
 }
 .sidebar-bottom .demo-data-label {
@@ -157,6 +162,53 @@
 }
 .public-shell .workspace {
     border-radius: 22px;
+}
+
+@media (min-width: 1024px) and (pointer: fine) {
+    .app-shell:not(.public-shell) {
+        grid-template-columns: 228px minmax(0, 1fr);
+    }
+    .sidebar {
+        padding-bottom: 10px;
+    }
+    .sidebar > .brand {
+        height: 56px;
+    }
+    .sidebar .new-button {
+        width: auto;
+        min-width: 112px;
+        height: 40px;
+        margin: 0 4px 10px;
+        padding-inline: 16px;
+        border-radius: 12px;
+    }
+    .sidebar-scroll {
+        gap: 6px;
+    }
+    .drive-nav a {
+        height: 40px;
+    }
+    .drive-nav:has(.nav-tools-toggle[aria-expanded="true"]) a {
+        height: 36px;
+    }
+    .nav-group + .nav-group {
+        margin-top: 6px;
+        padding-top: 5px;
+    }
+    .nav-section-label {
+        padding-block: 1px;
+    }
+    .sidebar-logout {
+        min-height: 36px;
+        margin-top: 4px;
+    }
+    .app-shell:not(.public-shell) .workspace {
+        padding-block-start: 16px;
+        padding-inline: 22px;
+    }
+    .app-shell:not(.public-shell) .workspace:not(.file-workspace) {
+        padding-block-end: 24px;
+    }
 }
 
 /* Headings and toolbar */
@@ -265,25 +317,37 @@
 }
 .file-view-toggle {
     gap: 2px;
-    padding: 3px;
-    border: 0;
-    border-radius: 13px;
-    background: var(--hover);
+    padding: 2px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 9px;
+    background: var(--surface-subtle);
 }
 .file-view-toggle .icon-button {
-    width: 36px;
+    width: auto;
     height: 32px;
-    border-radius: 10px;
+    gap: 6px;
+    padding: 0 8px;
+    border-radius: 6px;
     color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
     transition:
         background-color var(--dur-2) var(--ease-out),
-        color var(--dur-2),
-        box-shadow var(--dur-2);
+        color var(--dur-2);
+}
+.file-view-toggle .icon-button:hover:not([aria-pressed="true"]) {
+    background: var(--hover);
+    color: var(--ink);
 }
 .file-view-toggle button[aria-pressed="true"] {
-    background: var(--surface-raised);
-    color: var(--ink);
-    box-shadow: 0 1px 3px light-dark(#141a231f, #0008);
+    background: var(--action-soft);
+    color: var(--on-action-soft);
+    font-weight: 650;
+}
+@media (any-pointer: coarse) {
+    .file-view-toggle .icon-button {
+        min-height: 44px;
+    }
 }
 .file-toolbar[data-selection="true"] .file-toolbar-controls {
     padding: 0 6px 0 12px;
@@ -406,7 +470,9 @@
 .action-menu a:hover,
 .new-menu button:hover,
 .theme-menu button:hover,
+.theme-menu button[data-highlighted],
 .file-sort-menu button:hover,
+.file-sort-menu button[data-highlighted],
 .file-sort-menu button:focus-visible {
     background: var(--hover);
 }
@@ -511,6 +577,13 @@ input[type="checkbox"] {
 /* Phone and short landscape layouts */
 @media (max-width: 720px),
     (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
+    .app-shell {
+        --compact-header-height: max(
+            58px,
+            calc(45px + env(safe-area-inset-top))
+        );
+        --compact-header-end-padding: max(10px, env(safe-area-inset-right));
+    }
     .main-content {
         padding: 0;
     }
@@ -520,22 +593,15 @@ input[type="checkbox"] {
         padding: 14px 14px 24px;
     }
     .topbar {
-        min-height: 58px;
+        min-height: var(--compact-header-height);
         gap: 6px;
-        padding: env(safe-area-inset-top) 10px 0 6px;
+        padding: env(safe-area-inset-top) var(--compact-header-end-padding) 0
+            max(6px, env(safe-area-inset-left));
         background: var(--surface);
         border-bottom: 1px solid var(--line-subtle);
     }
     .mobile-brand .brand-logo-compact {
         width: 120px;
-    }
-    .mobile-new,
-    .mobile-new[aria-expanded="true"] {
-        min-height: 40px;
-        padding: 0 16px 0 12px;
-        border-radius: 14px;
-        box-shadow: 0 6px 16px -8px
-            color-mix(in srgb, var(--action) 80%, transparent);
     }
     .sidebar {
         padding-inline: 12px;
@@ -543,10 +609,13 @@ input[type="checkbox"] {
         transition: transform var(--dur-3) var(--ease-out);
     }
     .page-heading h1,
-    .file-toolbar h1,
-    .file-toolbar .page-title-line h1 {
+    .file-toolbar h1 {
         font-size: 24px;
         line-height: 32px;
+    }
+    .file-toolbar .page-title-line h1 {
+        font-size: 20px;
+        line-height: 26px;
     }
     .file-toolbar .file-selection-toggle,
     .file-toolbar .compact-search-trigger,
@@ -689,40 +758,20 @@ input[type="checkbox"] {
     }
 }
 
-/* Phone: New becomes a floating action button above the tab bar. */
+/* Keep New and its menu aligned with the compact header. */
 @media (max-width: 720px),
     (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
-    .main-content {
-        position: relative;
-    }
-    .topbar {
-        position: static;
-    }
-    .topbar .mobile-brand {
-        flex: 1;
-    }
     #compact-new-button.mobile-new {
-        position: absolute;
-        z-index: 35;
-        right: 16px;
-        bottom: calc(80px + env(safe-area-inset-bottom));
-        width: 58px;
-        height: 58px;
-        min-height: 58px;
+        position: static;
+        width: 44px;
+        height: 44px;
+        min-height: 44px;
         padding: 0;
-        border-radius: 19px;
-        font-size: 0;
-        gap: 0;
-        box-shadow:
-            0 14px 28px -10px color-mix(in srgb, var(--action) 75%, transparent),
-            0 2px 6px light-dark(#141a2326, #0008);
-        transition:
-            transform var(--dur-3) var(--ease-spring),
-            bottom var(--dur-3) var(--ease-out);
+        border-radius: 12px;
+        box-shadow: none;
+        transition: transform var(--dur-3) var(--ease-spring);
     }
     #compact-new-button.mobile-new svg {
-        width: 26px;
-        height: 26px;
         transition: transform var(--dur-3) var(--ease-spring);
     }
     #compact-new-button.mobile-new[aria-expanded="true"] svg {
@@ -731,22 +780,22 @@ input[type="checkbox"] {
     #compact-new-button.mobile-new:active {
         transform: scale(0.92);
     }
-    .main-content:has(.mobile-transfer-status) #compact-new-button.mobile-new {
-        bottom: calc(142px + env(safe-area-inset-bottom));
-    }
-    .main-content:has(#compact-new-button) .workspace {
-        padding-bottom: 96px;
-    }
     .new-menu {
-        top: auto;
-        bottom: calc(150px + env(safe-area-inset-bottom));
-        right: 16px;
+        --new-menu-end: calc(50px + var(--compact-header-end-padding));
+        top: var(--compact-header-height);
+        right: var(--new-menu-end);
+        bottom: auto;
         left: auto;
-        transform-origin: bottom right;
-    }
-    .main-content:has(.mobile-transfer-status) ~ .new-menu,
-    .app-shell:has(.mobile-transfer-status) .new-menu {
-        bottom: calc(212px + env(safe-area-inset-bottom));
+        max-width: calc(
+            100vw - var(--new-menu-end) - max(8px, env(safe-area-inset-left))
+        );
+        max-height: calc(
+            100dvh - var(--compact-header-height) -
+                max(8px, env(safe-area-inset-bottom))
+        );
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        transform-origin: top right;
     }
     .file-toolbar .file-selection-toggle {
         border: 0;
@@ -871,9 +920,6 @@ input[type="checkbox"] {
 .transfer-page .transfer-state-icon svg {
     width: 19px;
     height: 19px;
-}
-.share-row {
-    grid-template-columns: 36px minmax(0, 1fr);
 }
 .share-row-actions .icon-button {
     border-radius: 10px;
@@ -1062,6 +1108,15 @@ progress::-moz-progress-bar {
     max-width: 1040px;
 }
 
+@media (min-width: 721px) and (max-width: 960px) and (pointer: fine) {
+    .workspace > .page-heading > div:first-child {
+        flex-basis: 180px;
+    }
+    .workspace > .page-heading > .search-form {
+        flex: 1 1 140px;
+    }
+}
+
 /* Phone: secondary pages fill the width */
 @media (max-width: 720px),
     (max-width: 1000px) and (max-height: 600px) and (pointer: coarse) {
@@ -1136,4 +1191,30 @@ progress::-moz-progress-bar {
         .channel-recovery-main
     ) {
     max-width: none;
+}
+
+@media (forced-colors: active) {
+    .drive-nav a[aria-current="page"],
+    .workspace .settings-sections > a[aria-current="page"],
+    .file-view-toggle button[aria-pressed="true"],
+    .file-browser .file-filter-chip[aria-pressed="true"],
+    .performance-page button[role="tab"][aria-selected="true"],
+    .workspace
+        :is(.shares-filters, .transfer-filters, .preload-filters)
+        button[aria-pressed="true"] {
+        text-decoration: underline 2px Highlight;
+        text-underline-offset: 4px;
+    }
+
+    .mobile-tabbar [aria-current="page"] .mobile-tab-icon {
+        outline: 2px solid Highlight;
+        outline-offset: 3px;
+        border-radius: 4px;
+    }
+
+    .file-table:not(.file-grid) .file-row.selected .name-cell,
+    .file-grid .file-row.selected {
+        outline: 2px solid Highlight;
+        outline-offset: -2px;
+    }
 }

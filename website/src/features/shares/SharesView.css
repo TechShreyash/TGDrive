@@ -1,5 +1,6 @@
 .shares-page {
     container-type: inline-size;
+    position: relative;
 }
 .shares-toolbar {
     display: flex;
@@ -40,7 +41,7 @@
 }
 .share-row {
     display: grid;
-    grid-template-columns: 24px minmax(0, 1fr);
+    grid-template-columns: 36px minmax(0, 1fr);
     gap: 8px 12px;
     padding: 12px 14px;
     border-bottom: 1px solid var(--line-subtle);
@@ -98,21 +99,48 @@
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.share-dates {
+.share-protection {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--ink);
+    font-size: 12px;
+    line-height: 18px;
+}
+.share-protection svg {
+    flex: 0 0 auto;
+    color: var(--muted);
+}
+.share-stats {
     grid-column: 2;
     grid-row: 2;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px 12px;
+    flex-wrap: wrap;
+}
+.share-dates {
     display: flex;
     flex-direction: column;
     gap: 4px;
     min-width: 0;
 }
 .share-expiry,
-.share-created {
+.share-created,
+.share-opens {
     font-size: 12px;
     line-height: 18px;
     color: var(--muted);
     min-width: 0;
     font-variant-numeric: tabular-nums;
+}
+.share-open-since {
+    display: block;
+}
+.share-opens strong {
+    color: var(--ink);
+    font-weight: 600;
 }
 .share-expiry time {
     position: relative;
@@ -124,8 +152,7 @@
 .share-expiry-label {
     font-size: inherit;
 }
-.share-expiry-tooltip,
-.share-copy-explanation {
+.share-expiry-tooltip {
     display: none;
     position: absolute;
     z-index: 5;
@@ -179,16 +206,12 @@
     outline-offset: 2px;
     border-radius: 8px;
 }
-.share-copy-explanation {
-    bottom: 100%;
-    left: 0;
-    width: 230px;
-    max-width: calc(100vw - 48px);
-    white-space: normal;
-}
-:is(.share-copy-control, .share-embed-control):hover .share-copy-explanation,
-:is(.share-copy-control, .share-embed-control):focus .share-copy-explanation {
-    display: block;
+.mantine-Tooltip-tooltip.share-copy-explanation {
+    max-width: calc(100vw - 24px);
+    border: 1px solid var(--line-subtle);
+    background: var(--surface-raised);
+    color: var(--ink);
+    box-shadow: var(--menu-shadow);
 }
 .share-row-actions .icon-button {
     width: 40px;
@@ -219,36 +242,53 @@
     color: var(--ink);
     font-size: 14px;
 }
+.share-expiry-toggle {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    gap: 8px;
+    cursor: pointer;
+}
 @container (min-width: 700px) {
-    .share-copy-explanation {
-        left: auto;
-        right: 0;
+    .share-columns,
+    .share-row {
+        grid-template-columns:
+            36px minmax(0, 1fr) minmax(140px, 190px)
+            104px 216px;
+        column-gap: 16px;
+        padding-inline: 12px;
     }
     .share-columns {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 210px 216px;
-        gap: 16px;
-        padding: 14px 8px 12px 48px;
+        padding-block: 14px 12px;
         border-bottom: 1px solid var(--line-subtle);
+    }
+    .share-columns > :first-child {
+        grid-column: 2;
     }
     .share-columns > :last-child {
         text-align: right;
     }
     .share-row {
-        grid-template-columns: 24px minmax(0, 1fr) 210px 216px;
-        column-gap: 16px;
-        padding: var(--list-row-padding, 8px) 8px;
+        padding-block: var(--list-row-padding, 8px);
         min-height: var(--list-row-min-height, 56px);
     }
     .share-item {
         grid-column: 2;
     }
+    .share-stats {
+        display: contents;
+    }
     .share-dates {
         grid-column: 3;
         grid-row: 1;
     }
-    .share-row-actions {
+    .share-opens {
         grid-column: 4;
+        grid-row: 1;
+    }
+    .share-row-actions {
+        grid-column: 5;
         grid-row: 1;
         justify-content: flex-end;
     }

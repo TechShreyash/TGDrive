@@ -40,6 +40,104 @@ def seed_recovery(page, rows):
     )
 
 
+@pytest.mark.parametrize(
+    "width,height,theme", [(1536, 695, "dark"), (390, 844, "light")]
+)
+def test_interrupted_uploads_show_the_right_recovery_action(
+    server, browser, width, height, theme
+):
+    fixtures.ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    touch = width <= 720
+    page = browser.new_page(
+        viewport={"width": width, "height": height},
+        color_scheme=theme,
+        has_touch=touch,
+        is_mobile=touch,
+    )
+    try:
+        jobs = [
+            {
+                "id": name,
+                "name": name + ".bin",
+                "kind": "upload",
+                "status": "error",
+                "phase": "interrupted",
+                "current": 4,
+                "total": 4,
+                "error": "TGDrive stopped while this transfer was running.",
+                "interrupted_upload_recovery": guidance,
+            }
+            for name, guidance in (
+                ("staged", "staged"),
+                ("missing", "original_required"),
+            )
+        ]
+        held = []
+
+        def list_jobs(route):
+            if hold_jobs:
+                held.append(route)
+            else:
+                route.fulfill(json={"jobs": jobs})
+
+        hold_jobs = True
+        page.route("**/api/v1/jobs", list_jobs)
+        page.route(
+            "**/api/v1/transfers/history/tasks",
+            lambda route: route.fulfill(
+                json={
+                    "jobs": jobs,
+                    "page": 1,
+                    "page_size": 50,
+                    "total_tasks": len(jobs),
+                    "total_pages": 1,
+                    "has_more": False,
+                }
+            ),
+        )
+
+        def retry(route):
+            jobs[0].update(status="completed", phase="completed", error=None)
+            jobs[0].pop("interrupted_upload_recovery")
+            route.fulfill(json=jobs[0])
+
+        page.route("**/api/v1/jobs/staged/retry", retry)
+        login(page, server.url + "/?view=activity")
+        staged = page.get_by_role("listitem").filter(has_text="staged.bin")
+        missing = page.get_by_role("listitem").filter(has_text="missing.bin")
+        expect(staged).to_contain_text("Interrupted by restart")
+        expect(staged.get_by_role("button", name="Retry staged.bin")).to_have_count(0)
+        assert held
+        hold_jobs = False
+        for route in held:
+            route.fulfill(json={"jobs": jobs})
+        expect(staged).to_contain_text(
+            "Retry uses the file already staged on the server."
+        )
+        expect(missing).to_contain_text(
+            "Cancel this transfer, then upload the original again."
+        )
+        expect(missing.get_by_role("button", name="Retry missing.bin")).to_have_count(0)
+        expect(missing.get_by_role("button", name="Cancel missing.bin")).to_be_visible()
+        expect(staged).to_contain_text("TGDrive stopped")
+        expect(staged).not_to_contain_text("99%")
+        page.screenshot(
+            path=ARTIFACTS / f"bug-16-interrupted-{width}.png", animations="disabled"
+        )
+        retry_button = staged.get_by_role("button", name="Retry staged.bin")
+        with page.expect_response("**/api/v1/jobs/staged/retry") as response:
+            if touch:
+                retry_button.tap()
+            else:
+                retry_button.press("Enter")
+        assert response.value.ok
+        expect(staged).to_have_attribute("data-status", "completed")
+        expect(staged).not_to_contain_text("Retry uses the file")
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    finally:
+        page.context.close()
+
+
 def test_saved_recovery_works_when_server_history_fails(server, desktop, tmp_path):
     _, page = desktop
     seed_recovery(page, [recovery_row("recover.bin", state="error")])
@@ -146,6 +244,14 @@ def test_collapsed_panel_shows_running_finished_and_blocked_work(
         status = page.get_by_role("button", name="Open transfer progress", exact=True)
         expect(status).to_have_text("1 upload in progress")
     else:
+        panel = page.locator("main > #transfer-dialog")
+        expect(panel).to_be_in_viewport(ratio=1)
+        assert panel.evaluate("""element => {
+            const workspace = element.previousElementSibling;
+            return workspace.matches(".workspace") &&
+                workspace.getBoundingClientRect().bottom <=
+                    element.getBoundingClientRect().top;
+        }""")
         collapse()
         status = page.locator("#transfer-summary .transfer-collapsed-status")
         expect(status).to_contain_text("1 uploading")

@@ -108,10 +108,16 @@
     font-size: 13px;
     font-weight: 600;
 }
-.modal input:not([type="checkbox"]):not([type="radio"]),
-.modal select {
+.modal
+    input:not(
+        [type="checkbox"],
+        [type="radio"],
+        :where(.mantine-PasswordInput-innerInput)
+    ),
+.modal select,
+.modal .mantine-PasswordInput-input {
     min-height: 46px;
-    padding: 11px 14px;
+    padding: 0 14px;
     border: 1px solid var(--line);
     border-radius: 12px;
     background: var(--surface-subtle);
@@ -120,12 +126,28 @@
         box-shadow var(--dur-2) var(--ease-out),
         background-color var(--dur-1);
 }
-.modal input:not([type="checkbox"]):not([type="radio"]):hover,
-.modal select:hover {
+.modal select.mantine-NativeSelect-input {
+    padding-inline-end: 36px;
+    line-height: normal;
+}
+.modal
+    input:not(
+        [type="checkbox"],
+        [type="radio"],
+        :where(.mantine-PasswordInput-innerInput)
+    ):hover,
+.modal select:hover,
+.modal .mantine-PasswordInput-input:hover {
     border-color: color-mix(in srgb, var(--muted) 45%, var(--line));
 }
-.modal input:not([type="checkbox"]):not([type="radio"]):focus,
-.modal select:focus {
+.modal
+    input:not(
+        [type="checkbox"],
+        [type="radio"],
+        :where(.mantine-PasswordInput-innerInput)
+    ):focus,
+.modal select:focus,
+.modal .mantine-PasswordInput-input:focus-within {
     outline: none;
     border-color: var(--action);
     background: var(--surface-raised);
@@ -531,17 +553,9 @@ input.switch:checked::before {
     body:has(.mobile-transfer-status) .toast {
         bottom: calc(136px + env(safe-area-inset-bottom));
     }
-    /* Stack above the floating New button (58px) instead of beside it. */
-    body:has(#compact-new-button) .toast {
-        bottom: calc(150px + env(safe-area-inset-bottom));
-    }
-    body:has(#compact-new-button):has(.mobile-transfer-status) .toast {
-        bottom: calc(212px + env(safe-area-inset-bottom));
-    }
-    /* The New menu opens where the toast sits; move the toast to the top so it never covers menu items. */
+    /* Keep persistent messages from overlapping the menu on short screens. */
     body:has(#new-menu) .toast {
-        top: calc(12px + env(safe-area-inset-top));
-        bottom: auto;
+        visibility: hidden;
     }
     .modal .toast {
         bottom: max(16px, env(safe-area-inset-bottom));

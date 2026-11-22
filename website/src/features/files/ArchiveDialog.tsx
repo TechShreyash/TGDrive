@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Archive, FolderArchive } from "lucide-react";
-import { ApiError, errorMessage } from "../../shared/api";
+import { PasswordInput } from "@mantine/core";
+import { api, ApiError, errorMessage } from "../../shared/api";
 import { ErrorNotice, Modal, Spinner } from "../../shared/components";
 import { itemPath, type DriveItem } from "../../shared/types";
 import { transfers } from "../transfers/transfers";
@@ -32,18 +33,46 @@ export default function ArchiveDialog({
     const target = items.every((item) => (item.path || "/") === parent)
         ? parent
         : destination;
+    const knownTrail = target === parent ? items[0].parent_names : undefined;
+    const [resolved, setResolved] = useState<{ path: string; label: string }>();
+    useEffect(() => {
+        if (target === "/" || knownTrail?.length) return;
+        const controller = new AbortController();
+        void api
+            .nodes(
+                { parent_id: target, type: "folder", limit: 1 },
+                controller.signal,
+            )
+            .then(({ folder }) => {
+                if (!controller.signal.aborted && folder?.breadcrumbs)
+                    setResolved({
+                        path: target,
+                        label: [
+                            "My Files",
+                            ...folder.breadcrumbs
+                                .slice(1)
+                                .map((crumb) => crumb.name),
+                        ].join(" / "),
+                    });
+            })
+            .catch(() => {});
+        return () => controller.abort();
+    }, [target, knownTrail]);
     const targetLabel =
         target === "/"
             ? "My Files"
-            : target === parent && items[0].parent_names?.length
-              ? ["My Files", ...(items[0].parent_names || [])].join(" / ")
-              : "Current folder";
+            : knownTrail?.length
+              ? ["My Files", ...knownTrail].join(" / ")
+              : resolved?.path === target
+                ? resolved.label
+                : "Current folder";
     const [name, setName] = useState(() =>
         extracting
             ? extractionFolderName(dialog.item.name)
             : defaultArchiveName(dialog.items),
     );
     const [newFolder, setNewFolder] = useState(true);
+    const [password, setPassword] = useState("");
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const [exposure, setExposure] = useState(false);
@@ -62,12 +91,14 @@ export default function ArchiveDialog({
                       target,
                       newFolder ? name.trim() : null,
                       allow,
+                      password || undefined,
                   )
                 : await archiveApi.create(
                       dialog.items.map(itemPath),
                       target,
                       name.trim(),
                       allow,
+                      password || undefined,
                   );
             transfers.addJob(
                 result.id,
@@ -168,23 +199,33 @@ export default function ArchiveDialog({
                         />
                     </>
                 )}
+                {(!extracting ||
+                    dialog.item.name.toLowerCase().endsWith(".zip")) && (
+                    <PasswordInput
+                        label="ZIP password (optional)"
+                        description={
+                            extracting
+                                ? undefined
+                                : "Encrypts file contents. Filenames stay visible."
+                        }
+                        value={password}
+                        maxLength={255}
+                        autoComplete={extracting ? "off" : "new-password"}
+                        disabled={busy}
+                        onChange={(event) =>
+                            setPassword(event.currentTarget.value)
+                        }
+                    />
+                )}
                 <p id="archive-hint" className="muted">
-                    Existing items are never overwritten. Matching names get a
-                    numbered copy. Progress and failures appear in Transfers;
-                    work continues on the server after you close this tab.
+                    Matching names get a numbered copy. Follow progress in
+                    Transfers.
                 </p>
                 {extracting && (
-                    <>
-                        <p className="muted">
-                            Supports ZIP, 7z, RAR, TAR (including compressed
-                            TAR), GZip, BZip2, XZ and Zstandard.
-                        </p>
-                        <p className="muted">
-                            Password-protected or split archives, and archives
-                            containing empty files, are not supported. Empty
-                            folders are kept.
-                        </p>
-                    </>
+                    <p className="muted">
+                        Empty folders are kept. Split archives and empty files
+                        inside archives are unsupported.
+                    </p>
                 )}
                 <ErrorNotice message={error} />
                 {exposure && (

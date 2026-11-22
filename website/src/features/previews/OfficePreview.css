@@ -1,0 +1,40 @@
+.office-preview {
+    min-width: 0;
+    overflow: auto;
+}
+.office-sheet-picker {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 2;
+    padding-block-end: 8px;
+    background: var(--canvas);
+}
+.office-sheet-scroll {
+    min-width: 0;
+}
+.office-sheet-scroll:focus-visible {
+    outline: 2px solid var(--action);
+    outline-offset: -2px;
+}
+.office-sheet caption {
+    text-align: start;
+}
+.office-sheet-row-number {
+    width: 44px;
+}
+.office-sheet tr > th:first-child {
+    position: sticky;
+    inset-inline-start: 0;
+    z-index: 1;
+    background: var(--surface-raised);
+}
+.office-sheet td,
+.office-document {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.office-document {
+    width: 100%;
+    max-width: 72ch;
+    margin-inline: auto;
+}

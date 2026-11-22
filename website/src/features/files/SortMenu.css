@@ -8,20 +8,25 @@
     min-height: 36px;
     font-size: 13px;
 }
+.file-sort-trigger > span {
+    min-inline-size: 11ch;
+    white-space: nowrap;
+    text-align: start;
+}
 .file-sort-trigger:hover,
 .file-sort-trigger[aria-expanded="true"] {
     background: var(--canvas);
     color: var(--ink);
 }
 .file-sort-menu {
-    position: fixed;
     z-index: 120;
     padding: 5px;
     border: 1px solid var(--line);
     border-radius: 8px;
     background: var(--surface);
     color: var(--ink);
-    max-height: calc(100dvh - 24px);
+    width: min(224px, calc(100vw - 24px));
+    max-height: var(--available-height, calc(100dvh - 24px));
     overflow-y: auto;
     overscroll-behavior: contain;
 }
@@ -43,9 +48,6 @@
 }
 .file-sort-menu button:focus-visible {
     outline-offset: -2px;
-}
-.sort-check-hidden {
-    visibility: hidden;
 }
 .file-table th .column-sort-button {
     display: inline-flex;
@@ -94,7 +96,9 @@
     .file-toolbar .file-sort-trigger {
         width: 44px;
         height: 44px;
+        gap: 2px;
         justify-content: center;
         padding: 0;
+        border: 1px solid var(--line);
     }
 }

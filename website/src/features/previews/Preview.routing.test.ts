@@ -42,6 +42,7 @@ describe("content-confirmed transport stream routing", () => {
         expect(nativePreviewKind("drawing.svg")).toBe("image");
         expect(nativePreviewKind("drawing.SVG")).toBe("image");
         expect(nativePreviewKind("movie.m2ts")).toBe("video");
+        expect(nativePreviewKind("movie.asf")).toBe("video");
     });
 
     it("rejects unrecognized descriptor viewers", async () => {

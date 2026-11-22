@@ -155,8 +155,9 @@ async def test_lost_send_response_retries_same_sender_and_random_id(tmp_path):
     await pool.stop()
 
 
+@pytest.mark.parametrize("interrupted", [False, True])
 async def test_retry_after_metadata_commit_does_not_duplicate_visible_file(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, interrupted
 ):
     telegram = Telegram()
     pool = ClientPool([telegram])
@@ -176,12 +177,23 @@ async def test_retry_after_metadata_commit_does_not_duplicate_visible_file(
     await job.task
     assert job.status == TransferStatus.ERROR
     assert len(manager.store.list_directory("/")) == 1
+    if interrupted:
+        # Model a crash after catalog commit and loss of local staging.
+        source.unlink()
+        job.status = TransferStatus.RUNNING
+        job.phase = "finalizing"
+        await manager.registry.persist(job)
     recovered = manager_for(
         tmp_path,
         pool,
         store=reopen_store(tmp_path / "drive"),
         registry=registry_for(tmp_path / "jobs"),
     )
+    if interrupted:
+        await recovered.recover()
+        row = recovered.registry.get(job.id)
+        assert row.status == TransferStatus.ERROR
+        assert row.as_dict()["interrupted_upload_recovery"] == "finish_saving"
     retry = await recovered.retry_job(job.id)
     assert retry.task is not None
     await retry.task
@@ -192,21 +204,92 @@ async def test_retry_after_metadata_commit_does_not_duplicate_visible_file(
     await pool.stop()
 
 
-async def test_shutdown_preserves_ambiguous_send_for_restart_reconciliation(tmp_path):
+@pytest.mark.parametrize("interruption", ["shutdown", "crash"])
+@pytest.mark.parametrize("keep_staging", [True, False])
+async def test_interrupted_send_waits_for_manual_retry(
+    tmp_path, interruption, keep_staging
+):
     telegram = Telegram()
-    telegram.block = True
     pool = ClientPool([telegram])
     await pool.start()
     manager = manager_for(tmp_path, pool)
+    earlier = tmp_path / "earlier.part"
+    earlier.write_bytes(b"done")
+    completed = await manager.enqueue_upload(earlier, "/", "earlier.bin", 4)
+    assert completed.task is not None
+    await completed.task
+    completed_snapshot = completed.as_dict()
+    telegram.started.clear()
+    telegram.block = True
     source = tmp_path / "receipt.part"
     source.write_bytes(b"bytes")
     job = await manager.enqueue_upload(source, "/", "one.bin", 5)
     await telegram.started.wait()
+    expected_calls = list(telegram.calls)
+
+    crashed_registry = (
+        registry_for(tmp_path / "jobs") if interruption == "crash" else None
+    )
     await manager.registry.shutdown()
-    assert job.status == TransferStatus.QUEUED
     assert source.exists()
     assert not job.context.get("cancel_requested")
+    if not keep_staging:
+        source.unlink()
+
     telegram.block = False
+    for registry in (crashed_registry, None):
+        recovered = manager_for(
+            tmp_path,
+            pool,
+            store=reopen_store(tmp_path / "drive"),
+            registry=registry or registry_for(tmp_path / "jobs"),
+        )
+        await recovered.recover()
+        resumed = recovered.registry.get(job.id)
+        assert resumed.status == TransferStatus.ERROR
+        assert resumed.error == "TGDrive stopped while this transfer was running."
+        assert resumed.task is None
+        assert telegram.calls == expected_calls
+        assert recovered.registry.get(completed.id).as_dict() == completed_snapshot
+        guidance = "staged" if keep_staging else "restore_staging"
+        assert resumed.as_dict()["interrupted_upload_recovery"] == guidance
+
+    if not keep_staging:
+        with pytest.raises(ValueError, match="Restore"):
+            await recovered.retry_job(resumed.id)
+        assert resumed.status == TransferStatus.ERROR
+        assert resumed.task is None
+        assert telegram.calls == expected_calls
+        source.write_bytes(b"bytes")
+
+    resumed = await recovered.retry_job(resumed.id)
+    assert resumed.task is not None
+    await resumed.task
+    assert resumed.status == TransferStatus.COMPLETED
+    assert len(telegram.messages) == 2
+    assert len(recovered.store.list_directory("/")) == 2
+    assert telegram.calls == [*expected_calls, expected_calls[-1]]
+    await pool.stop()
+
+
+async def test_interrupted_upload_missing_before_dispatch_requires_original(tmp_path):
+    telegram = Telegram()
+    pool = ClientPool([telegram])
+    await pool.start()
+    manager = manager_for(tmp_path, pool)
+    record = await manager.registry.create(
+        "verifying",
+        total=5,
+        context=dict(
+            kind="upload",
+            local_path=str(tmp_path / "lost.part"),
+            name="lost.bin",
+            destination="/",
+            size=5,
+        ),
+    )
+    await manager.registry.update(record.id, status=TransferStatus.RUNNING)
+
     recovered = manager_for(
         tmp_path,
         pool,
@@ -214,12 +297,14 @@ async def test_shutdown_preserves_ambiguous_send_for_restart_reconciliation(tmp_
         registry=registry_for(tmp_path / "jobs"),
     )
     await recovered.recover()
-    resumed = recovered.registry.get(job.id)
-    assert resumed.task is not None
-    await resumed.task
-    assert resumed.status == TransferStatus.COMPLETED
-    assert len(telegram.messages) == 1
-    assert telegram.calls[0] == telegram.calls[1]
+    failed = recovered.registry.get(record.id)
+    assert failed.status == TransferStatus.ERROR
+    assert failed.as_dict()["interrupted_upload_recovery"] == "original_required"
+    with pytest.raises(ValueError, match="upload the original"):
+        await recovered.retry_job(record.id)
+    assert failed.status == TransferStatus.ERROR
+    assert failed.task is None
+    assert not telegram.calls
     await pool.stop()
 
 

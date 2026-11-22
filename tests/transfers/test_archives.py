@@ -14,6 +14,7 @@ import pytest
 
 from tests.support.mongo_fixtures import new_store, register_test_backend
 from tests.transfers.test_multipart_transfers import Account, Ledger, registry_for
+from tgdrive.core import encryption
 from tgdrive.core.config import Settings
 from tgdrive.storage.demo_files import DemoFilesReadOnly
 from tgdrive.telegram.client_pool import ClientPool
@@ -256,6 +257,96 @@ async def test_create_zip_preserves_tree_and_reduces_overlapping_selection(tmp_p
             manager.store, {"id": job.id, "kind": "archive", "status": "completed"}
         )
         assert location["item_id"] == output["id"]
+    finally:
+        await dispose(manager)
+
+
+async def test_password_zip_round_trip_never_publishes_on_wrong_password(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(encryption, "_key", bytes(32))
+    manager, ledger, _ = await manager_for(tmp_path)
+    password = "private-雪-password"
+    original = b"original file content" * 60000
+    filename = "資料" * 80 + ".txt"
+    try:
+        folder = manager.store.create_folder("/", "Project")
+        parent = manager.store.resolve_id(folder["id"])
+        manager.store.create_folder(parent, "空")
+        nested = manager.store.create_folder(parent, "研究")
+        original_item = source(
+            manager, ledger, filename, original, manager.store.resolve_id(nested["id"])
+        )
+        created = await manager.start_archive(
+            paths=[parent], destination="/", name="Secure", password=password
+        )
+        await finish(created)
+        assert created.status is TransferStatus.COMPLETED, created.error
+        output = next(
+            row
+            for row in manager.store.list_directory("/").values()
+            if row["name"] == "Secure.zip"
+        )
+        path = manager.store.resolve_id(output["id"])
+        stored = manager.store.get_file(path)
+        message = ledger.messages[stored["message_id"]]
+        binary = message.content
+        with ZipFile(io.BytesIO(binary)) as archive:
+            entry = archive.getinfo(f"Project/研究/{filename}")
+            assert entry.flag_bits & 1
+            assert entry.compress_type == 99
+            assert entry.file_size == len(original)
+        assert original not in binary
+        # The fake sender checks plaintext and omits Telegram-side encryption.
+        message.content = encryption.crypt(stored["parts"][0]["nonce"], 0, binary)
+
+        extraction = await manager.start_extraction(
+            path=path, destination="/", folder_name="Restored"
+        )
+        await finish(extraction)
+        assert extraction.status is TransferStatus.ERROR, extraction.error
+        assert extraction.as_dict().get("archive_password_required"), extraction.error
+        before = manager.store.list_directory("/")
+        with pytest.raises(ValueError, match="Enter the ZIP password"):
+            await manager.retry_job(extraction.id)
+        await manager.retry_job(extraction.id, password="wrong-password")
+        await finish(extraction)
+        assert extraction.status is TransferStatus.ERROR
+        assert "Incorrect ZIP password" in (extraction.error or "")
+        assert manager.store.list_directory("/") == before
+        stage = manager.cache_dir / "archives" / extraction.id
+        assert list(stage.iterdir()) == [stage / "source.zip"]
+        assert extraction.context["staging_size"] == len(binary)
+
+        await manager.retry_job(extraction.id, password=password)
+        await finish(extraction)
+        assert extraction.status is TransferStatus.COMPLETED, extraction.error
+        restored = next(
+            row
+            for row in manager.store.list_directory("/").values()
+            if row["name"] == "Restored"
+        )
+        restored_path = manager.store.resolve_id(restored["id"])
+        project = next(iter(manager.store.list_directory(restored_path).values()))
+        files = manager.store.list_directory(manager.store.resolve_id(project["id"]))
+        assert {row["name"] for row in files.values()} == {"空", "研究"}
+        nested = next(row for row in files.values() if row["name"] == "研究")
+        (notes,) = manager.store.list_directory(
+            manager.store.resolve_id(nested["id"])
+        ).values()
+        assert notes["name"] == filename
+        copied = manager.store.get_file(manager.store.resolve_id(notes["id"]))
+        assert ledger.messages[copied["message_id"]].content == original
+        assert ledger.messages[original_item["message_id"]].content == original
+        assert (
+            sum(
+                row["name"] == "Restored"
+                for row in manager.store.list_directory("/").values()
+            )
+            == 1
+        )
+        assert password not in repr((created.context, extraction.context))
+        assert "wrong-password" not in repr(extraction.context)
     finally:
         await dispose(manager)
 

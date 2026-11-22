@@ -97,6 +97,7 @@ class MediaClient(Client):
 def transport(native, name="account-one"):
     value = MediaClient.__new__(MediaClient)
     value.native, value.name = native, name
+    value.connection_error = None
     return value
 
 

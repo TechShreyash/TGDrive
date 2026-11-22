@@ -3,6 +3,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from tgdrive.core import governor
 from tgdrive.core.governor import CONCURRENCY, GIB, Governor, cpus, decide, memory
 
@@ -191,6 +193,20 @@ def test_tick_applies_through_performance_settings(monkeypatch):
     runtime.mongo.db.command.assert_not_called()
     # The largest accepted file follows the staging budget; no fixed cap.
     assert applied[0]["max_file_size"] == applied[0]["staging_budget_bytes"]
+
+    confirmed = item.snapshot()
+    monkeypatch.setattr(governor, "measure", lambda *_args: measurements(GIB // 2))
+
+    async def fail_apply(_self, _value):
+        raise RuntimeError("Could not apply tuning")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Service, "_apply", fail_apply)
+        with pytest.raises(RuntimeError, match="Could not apply tuning"):
+            asyncio.run(item.tick())
+    assert item.snapshot() == confirmed
+    asyncio.run(item.tick())
+    assert item.snapshot()["values"]["cache_memory_bytes"] == GIB // 8
 
 
 def test_owner_ceilings_bound_automatic_budgets_and_pressure():

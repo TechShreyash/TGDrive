@@ -345,15 +345,17 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
     if width < 700:
         page.get_by_role("button", name="Toggle Navigation", exact=True).click()
         sidebar = page.locator(".sidebar")
-        assert sidebar.evaluate("node => getComputedStyle(node).overflowY") == "auto"
+        assert sidebar.locator(".sidebar-scroll").evaluate(
+            "node => getComputedStyle(node).overflowY"
+        ) == "auto"
         logout = page.get_by_role("button", name="Log Out", exact=True)
         logout.scroll_into_view_if_needed()
         expect(logout).to_be_in_viewport()
         documentation = page.get_by_role("link", name="Documentation", exact=True)
         documentation.scroll_into_view_if_needed()
         expect(documentation).to_be_in_viewport()
-        sidebar.locator(".sidebar-tools > summary").click()
-        page.get_by_role("link", name="Storage and Backups", exact=True).focus()
+        open_admin(page)
+        page.get_by_role("link", name="Backups", exact=True).focus()
         expect(
-            page.get_by_role("link", name="Storage and Backups", exact=True)
+            page.get_by_role("link", name="Backups", exact=True)
         ).to_be_in_viewport()

@@ -50,7 +50,7 @@ older versions can omit or reject these optional references.
 
 The player opens paused with the stored poster. Missing/unusable posters fall
 back to a frame halfway through the video, keeping the displayed time at zero;
-**Play** resumes a known saved position; **Start over** returns to the beginning.
+**Play** resumes a known saved position; the timeline lets you return to the beginning.
 Opening the preview does not autoplay.
 Seeking and decoding can take time, and the selected picture can still be black.
 Files already on Telegram, including direct bot intake, do not automatically get
@@ -83,7 +83,7 @@ thumbnail failure never fails an original upload.
 
 ## Rebuild existing thumbnails
 
-1. Open **Configuration → Cache settings → Regenerate all thumbnails**.
+1. Open **Settings → Cache → Regenerate all thumbnails**.
 2. Review the bandwidth/runtime warning, then choose **Start background rebuild**.
 3. Watch checked, regenerated, skipped and failed counts, the current file and
    recent issues on that page. You can close the browser and return later.

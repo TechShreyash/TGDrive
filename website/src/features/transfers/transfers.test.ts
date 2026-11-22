@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+    canCancelTransfer,
     fromJob,
     safeTransferMetadata,
     uploadBackupState,
@@ -21,6 +22,37 @@ import {
 } from "../../shared/types";
 const managerForTest = () =>
     new TransferManager((url, options) => fetch(url, options));
+
+it.each(["completed", "cancelled", "error"] as const)(
+    "retains bot cleanup after %s and disables unsafe actions",
+    (state) => {
+        const mapped = fromJob({
+            id: "relay",
+            kind: "telegram",
+            status: state,
+            phase: "bot_intake_cleanup",
+            current: 1,
+            total: 1,
+            error: "Cleanup needs review",
+        });
+        const item: Transfer = {
+            key: "relay",
+            name: "file.bin",
+            destination: "/",
+            size: 1,
+            lastModified: 0,
+            current: 1,
+            total: 1,
+            state,
+            phase: "",
+            ...mapped,
+        };
+        expect(item.state).toBe(state);
+        expect(canCancelTransfer(item)).toBe(false);
+        expect(item.phase).toMatch(/cleanup pending|queue paused/);
+        expect(retainTransferBatches([item])).toEqual([item]);
+    },
+);
 
 function folderBatch(name: string, rootPath = "/" + name) {
     return {

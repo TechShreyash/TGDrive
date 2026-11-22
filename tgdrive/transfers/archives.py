@@ -43,6 +43,53 @@ class ArchiveError(ValidationError):
     pass
 
 
+def validate_password(password):
+    if password is not None and (
+        not password or len(password) > 255 or chr(0) in password
+    ):
+        raise ArchiveError("Use a ZIP password of 1 to 255 characters without NUL.")
+
+
+class EncryptedZipWriter:
+    def __init__(self, path, password):
+        from libarchive import file_writer
+
+        self._writer = file_writer(
+            str(path),
+            "zip",
+            options="compression=store,encryption=aes256",
+            passphrase=password,
+        )
+        self._archive = self._writer.__enter__()
+
+    def header(self, member):
+        from libarchive.entry import ArchiveEntry, FileType
+        from libarchive.write import write_header  # pyright: ignore[reportAttributeAccessIssue]
+
+        directory = member["type"] == "folder"
+        item = ArchiveEntry(
+            pathname=member["name"] + ("/" if directory else ""),
+            size=member.get("size", 0),
+            filetype=FileType.DIRECTORY if directory else FileType.REGULAR_FILE,
+            perm=0o700 if directory else 0o600,
+        )
+        write_header(self._archive._pointer, item._entry_p)
+
+    def write(self, chunk):
+        from libarchive.write import write_data  # pyright: ignore[reportAttributeAccessIssue]
+
+        if write_data(self._archive._pointer, chunk, len(chunk)) != len(chunk):
+            raise ArchiveError("Could not write the full encrypted ZIP entry.")
+
+    def finish(self):
+        from libarchive.write import write_finish_entry  # pyright: ignore[reportAttributeAccessIssue]
+
+        write_finish_entry(self._archive._pointer)
+
+    def close(self):
+        self._writer.__exit__(None, None, None)
+
+
 async def _open(callback, *args):
     resource = None
 
@@ -203,6 +250,7 @@ def _zip_directory(source):
 def zip_manifest(path, limit, budget):
     entries, folders, explicit, files = [], {}, set(), set()
     total = 0
+    password_required = False
     try:
         with Path(path).open("rb") as source:
             _zip_directory(source)
@@ -236,15 +284,18 @@ def zip_manifest(path, limit, budget):
                         raise ArchiveError(
                             "ZIP symlinks and special files are unsupported."
                         )
-                    if entry.flag_bits & 1 or entry.compress_type not in {
+                    encrypted = bool(entry.flag_bits & 1)
+                    password_required |= encrypted
+                    if not (
+                        encrypted and entry.compress_type == 99
+                    ) and entry.compress_type not in {
                         ZIP_STORED,
                         ZIP_DEFLATED,
                         ZIP_BZIP2,
                         ZIP_LZMA,
                     }:
                         raise ArchiveError(
-                            "Use an unencrypted ZIP with Stored, Deflate, "
-                            "BZIP2 or LZMA compression."
+                            "Use ZIP with Stored, Deflate, BZIP2 or LZMA compression."
                         )
                     if (
                         key in explicit
@@ -309,6 +360,8 @@ def zip_manifest(path, limit, budget):
         "folders": sorted(folders.values(), key=lambda p: (len(p), p)),
         "size": total,
     }
+    if password_required:
+        plan["password_required"] = True
     if len(json.dumps(plan).encode()) > MAX_MANIFEST_BYTES:
         raise ArchiveError(
             "The expanded ZIP manifest exceeds the 4 MiB metadata limit."
@@ -397,8 +450,9 @@ def _sync_path(path):
 
 @_journalled
 async def start_archive(
-    manager, paths, destination, name, *, allow_public_exposure=False
+    manager, paths, destination, name, *, allow_public_exposure=False, password=None
 ):
+    validate_password(password)
     name = _normalize_name(name)
     if not name.lower().endswith(".zip"):
         name = _normalize_name(name + ".zip")
@@ -413,8 +467,11 @@ async def start_archive(
     total = sum(member.get("size", 0) for member in members)
     bound = (
         total
-        + sum(256 + 2 * len(member["name"].encode("utf-8")) for member in members)
-        + 256
+        + sum(
+            (512 if password else 256) + 2 * len(member["name"].encode("utf-8"))
+            for member in members
+        )
+        + (4096 if password else 256)
     )
     if bound > manager.settings.upload_limit:
         raise ArchiveError(
@@ -433,6 +490,8 @@ async def start_archive(
         staging_written=0,
         allow_public_exposure=allow_public_exposure,
     )
+    if password:
+        context["archive_password_required"] = True
     manager._pending_staging[identity] = bound
     try:
         record = await manager.registry.create(
@@ -440,17 +499,26 @@ async def start_archive(
         )
     finally:
         manager._pending_staging.pop(identity, None)
-    spawn_archive(manager, record)
+    spawn_archive(manager, record, password=password)
     return record
 
 
 @_journalled
 async def start_extraction(
-    manager, path, destination, folder_name, *, allow_public_exposure=False
+    manager,
+    path,
+    destination,
+    folder_name,
+    *,
+    allow_public_exposure=False,
+    password=None,
 ):
+    validate_password(password)
     if manager._check_upload_allowed is not None:
         manager._check_upload_allowed()
     file = manager.store.get_file(path)
+    if password and not file["name"].lower().endswith(".zip"):
+        raise ArchiveError("Archive passwords are supported for ZIP files.")
     try:
         archive_format(file["name"])
     except ValueError as error:
@@ -472,6 +540,8 @@ async def start_extraction(
         staging_written=0,
         allow_public_exposure=allow_public_exposure,
     )
+    if password:
+        context["archive_password_required"] = True
     manager._pending_staging[identity] = file["size"]
     try:
         record = await manager.registry.create(
@@ -479,17 +549,86 @@ async def start_extraction(
         )
     finally:
         manager._pending_staging.pop(identity, None)
-    spawn_archive(manager, record)
+    spawn_archive(manager, record, password=password)
     return record
 
 
-def spawn_archive(manager, record):
-    task = manager.registry.spawn(record.id, lambda item: run_archive(manager, item))
+@_journalled
+async def start_pdf_password(
+    manager,
+    path,
+    destination,
+    operation,
+    *,
+    password,
+    new_password,
+    allow_public_exposure=False,
+):
+    from tgdrive.transfers.pdf_passwords import (
+        MAX_SOURCE_BYTES,
+        MIB,
+        qpdf_executable,
+        validate_passwords,
+    )
+
+    try:
+        validate_passwords(operation, password, new_password)
+        qpdf_executable()
+    except ValueError as error:
+        raise ArchiveError(str(error)) from error
+    if manager._check_upload_allowed is not None:
+        manager._check_upload_allowed()
+    file = manager.store.get_file(path)
+    size = file["size"]
+    if not file["name"].lower().endswith(".pdf") or not 0 < size <= MAX_SOURCE_BYTES:
+        raise ArchiveError("PDF password changes support PDFs up to 256 MiB.")
+    binding = manager.store.upload_destination(destination)
+    output_limit = min(manager.settings.upload_limit, size + 4 * MIB)
+    bound = size + output_limit
+    name = file["name"][:-4]
+    suffix = " (unlocked).pdf" if operation == "remove" else " (protected).pdf"
+    name = _normalize_name(name[: 255 - len(suffix)].rstrip() + suffix)
+    check_staging(manager.settings, manager, bound)
+    identity = secrets.token_urlsafe(18)
+    manager._pending_staging[identity] = bound
+    try:
+        record = await manager.registry.create(
+            "downloading",
+            total=size,
+            transfer_id=identity,
+            context={
+                "kind": "pdf_password",
+                "source_kind": "pdf_password",
+                "name": name,
+                "archive_source": _member(file),
+                "archive_password_required": True,
+                "pdf_password_operation": operation,
+                "pdf_output_limit": output_limit,
+                "destination": binding["path"],
+                "destination_id": binding["id"],
+                "staging_size": bound,
+                "staging_written": 0,
+                "allow_public_exposure": allow_public_exposure,
+            },
+        )
+    finally:
+        manager._pending_staging.pop(identity, None)
+    spawn_archive(manager, record, password=password, new_password=new_password)
+    return record
+
+
+def spawn_archive(manager, record, *, password=None, new_password=None):
+    task = manager.registry.spawn(
+        record.id,
+        lambda item: run_archive(
+            manager, item, password=password, new_password=new_password
+        ),
+    )
     task.add_done_callback(lambda _: discard_stage(manager, record))
     return task
 
 
-async def _create_zip(manager, record, directory):
+async def _create_zip(manager, record, directory, *, password=None):
     context = record.context
     path = directory / "archive.zip"
     context.update(local_path=str(path), staging_directory=str(directory))
@@ -497,6 +636,8 @@ async def _create_zip(manager, record, directory):
     if context.get("archive_ready") and not path.exists():
         context.pop("archive_ready")
     if not context.get("archive_ready"):
+        if context.get("archive_password_required") and not password:
+            raise ArchiveError("Enter the ZIP password to retry.")
         async with manager._semaphore:
             context["staging_written"] = 0
             await manager.registry.update(
@@ -510,7 +651,21 @@ async def _create_zip(manager, record, directory):
                 written=context["staging_written"],
                 directory=directory,
             )
-            archive = await _open(lambda: ZipFile(path, "w", compression=ZIP_STORED))
+            encrypted = bool(context.get("archive_password_required"))
+            archive = await _open(
+                lambda: (
+                    EncryptedZipWriter(path, password)
+                    if encrypted
+                    else ZipFile(path, "w", compression=ZIP_STORED)
+                )
+            )
+
+            def written():
+                if isinstance(archive, EncryptedZipWriter):
+                    return path.stat().st_size
+                assert archive.fp is not None
+                return archive.fp.tell()
+
             current = 0
             try:
                 for member in context["members"]:
@@ -528,14 +683,23 @@ async def _create_zip(manager, record, directory):
                         manager.store.get_directory(
                             manager.store.resolve_id(member["id"])
                         )
-                        await _worker(archive.writestr, member["name"] + "/", b"")
-                        context["staging_written"] = archive.fp.tell()
+                        if isinstance(archive, EncryptedZipWriter):
+                            await _worker(archive.header, member)
+                            await _worker(archive.finish)
+                        else:
+                            await _worker(archive.writestr, member["name"] + "/", b"")
+                        context["staging_written"] = await _worker(written)
                         continue
-                    output = await _open(
-                        lambda name=member["name"]: archive.open(
-                            name, "w", force_zip64=True
+                    if isinstance(archive, EncryptedZipWriter):
+                        await _worker(archive.header, member)
+                        write, finish = archive.write, archive.finish
+                    else:
+                        output = await _open(
+                            lambda name=member["name"]: archive.open(
+                                name, "w", force_zip64=True
+                            )
                         )
-                    )
+                        write, finish = output.write, output.close
                     stream = _bytes(manager, record, member)
                     try:
                         async for chunk in stream:
@@ -547,9 +711,9 @@ async def _create_zip(manager, record, directory):
                                 written=context["staging_written"],
                                 directory=directory,
                             )
-                            await _worker(output.write, chunk)
+                            await _worker(write, chunk)
                             current += len(chunk)
-                            context["staging_written"] = archive.fp.tell()
+                            context["staging_written"] = await _worker(written)
                             await manager.registry.update(
                                 record.id, current=current, checkpoint_progress=False
                             )
@@ -557,7 +721,7 @@ async def _create_zip(manager, record, directory):
                         try:
                             await stream.aclose()
                         finally:
-                            await _worker(output.close)
+                            await _worker(finish)
             finally:
                 await _worker(archive.close)
             await _worker(_sync_path, path)
@@ -580,61 +744,127 @@ async def _create_zip(manager, record, directory):
     )
 
 
-async def _extract_files(manager, record, directory):
+async def _extract_files(manager, record, directory, *, password=None):
     context = record.context
     source = directory / "source.zip"
     context.update(local_path=str(source), staging_directory=str(directory))
     await manager.registry.persist(record)
     async with manager._semaphore:
-        if not context.get("archive_downloaded"):
-            context["staging_written"] = 0
-            await manager.registry.update(
-                record.id,
-                status=TransferStatus.RUNNING,
-                phase="downloading",
-                current=0,
-                total=context["archive_source"]["size"],
+        if not context.get("archive_extracted"):
+            await _stage_source(manager, record, source)
+            await _decode_archive(manager, record, source, directory, password=password)
+
+
+async def _stage_source(manager, record, source):
+    context = record.context
+    if context.get("archive_downloaded"):
+        if not await _worker(source.exists):
+            raise ArchiveError(
+                "Temporary source bytes are missing. Cancel this job and "
+                "start again; preserve CACHE_DIR across restarts."
             )
+        return
+    context["staging_written"] = 0
+    await manager.registry.update(
+        record.id,
+        status=TransferStatus.RUNNING,
+        phase="downloading",
+        current=0,
+        total=context["archive_source"]["size"],
+    )
+    check_staging(
+        manager.settings,
+        manager,
+        context["staging_size"],
+        exclude=record.id,
+        written=0,
+        directory=source.parent,
+    )
+    output = await _open(source.open, "wb")
+    stream = _bytes(manager, record, context["archive_source"])
+    try:
+        async for chunk in stream:
             check_staging(
                 manager.settings,
                 manager,
                 context["staging_size"],
                 exclude=record.id,
                 written=context["staging_written"],
+                directory=source.parent,
+            )
+            await _worker(output.write, chunk)
+            context["staging_written"] = output.tell()
+            await manager.registry.update(
+                record.id, current=output.tell(), checkpoint_progress=False
+            )
+        await _worker(_sync, output)
+    finally:
+        try:
+            await stream.aclose()
+        finally:
+            await _worker(output.close)
+    context["archive_downloaded"] = True
+    await manager.registry.persist(record)
+
+
+async def _rewrite_pdf(manager, record, directory, password, new_password):
+    from tgdrive.transfers.pdf_passwords import rewrite_pdf, validate_passwords
+
+    context = record.context
+    source, output = directory / "source.pdf", directory / "output.pdf"
+    if not context.get("archive_ready"):
+        operation = context["pdf_password_operation"]
+        validate_passwords(operation, password, new_password)
+        async with manager._semaphore:
+            await _stage_source(manager, record, source)
+            await manager.registry.update(
+                record.id, status=TransferStatus.RUNNING, phase="rewriting_pdf"
+            )
+            original = context["archive_source"]["size"]
+            check_staging(
+                manager.settings,
+                manager,
+                context["staging_size"],
+                exclude=record.id,
+                written=original,
                 directory=directory,
             )
-            output = await _open(source.open, "wb")
-            stream = _bytes(manager, record, context["archive_source"])
             try:
-                async for chunk in stream:
-                    check_staging(
-                        manager.settings,
-                        manager,
-                        context["staging_size"],
-                        exclude=record.id,
-                        written=context["staging_written"],
-                        directory=directory,
-                    )
-                    await _worker(output.write, chunk)
-                    context["staging_written"] = output.tell()
-                    await manager.registry.update(
-                        record.id, current=output.tell(), checkpoint_progress=False
-                    )
-                await _worker(_sync, output)
-            finally:
-                try:
-                    await stream.aclose()
-                finally:
-                    await _worker(output.close)
-            context["archive_downloaded"] = True
-            await manager.registry.persist(record)
-        if not context.get("archive_extracted"):
-            if not await _worker(source.exists):
-                raise ArchiveError(
-                    "Temporary archive bytes are missing. Cancel this job and "
-                    "start again; preserve CACHE_DIR across restarts."
+                await rewrite_pdf(
+                    source,
+                    output,
+                    operation,
+                    password,
+                    new_password,
+                    limit=context["pdf_output_limit"],
+                    cancelled=record.cancel_event,
                 )
-            await _decode_archive(manager, record, source, directory)
+                await _worker(_sync_path, output)
+                size = output.stat().st_size
+                if not 0 < size <= context["pdf_output_limit"]:
+                    raise ArchiveError(
+                        "The new PDF exceeds the staging or upload limit."
+                    )
+            except BaseException:
+                await _worker(lambda: output.unlink(missing_ok=True))
+                raise
+            context.update(
+                archive_ready=True,
+                size=size,
+                local_path=str(output),
+                staging_directory=str(directory),
+                staging_written=original + size,
+            )
+            await manager.registry.persist(record)
+    if not await _worker(output.exists):
+        raise ArchiveError("Temporary PDF bytes are missing. Start a new operation.")
+    await manager._upload_path(
+        record,
+        output,
+        await _destination(manager, record),
+        context["name"],
+        context["size"],
+    )
 
 
 @_journalled
@@ -701,7 +931,7 @@ def _validate_plan(plan, limit, budget, directory):
         ) from error
 
 
-async def _decode_archive(manager, record, source, directory):
+async def _decode_archive(manager, record, source, directory, *, password=None):
     context = record.context
     # Keep the worker's validation bounds fixed. Every storage claim still goes
     # through check_staging with the latest policy before the worker can write.
@@ -717,6 +947,11 @@ async def _decode_archive(manager, record, source, directory):
             budget,
         )
         total = metadata["size"]
+        if metadata.get("password_required"):
+            context["archive_password_required"] = True
+            await manager.registry.persist(record)
+            if not password:
+                raise ArchiveError("Enter the ZIP password to extract these files.")
 
     def discard_partial():
         for file in directory.glob("*.file"):
@@ -764,6 +999,7 @@ async def _decode_archive(manager, record, source, directory):
         await _stop_decoder(process)
         raise asyncio.CancelledError
     cancelled = asyncio.create_task(record.cancel_event.wait())
+    invalid_output = False
     assert process.stdin is not None
     try:
         process.stdin.write(
@@ -774,6 +1010,7 @@ async def _decode_archive(manager, record, source, directory):
                     "name": context["name"],
                     "limit": entry_limit,
                     "budget": budget,
+                    "password": password,
                 }
             ).encode()
             + b"\n"
@@ -877,8 +1114,14 @@ async def _decode_archive(manager, record, source, directory):
                 )
             process.stdin.write(b"ok\n")
             await process.stdin.drain()
+    except ArchiveError:
+        invalid_output = True
+        raise
     finally:
         await _stop_decoder(process, cancelled)
+        if invalid_output:
+            await _worker(discard_partial)
+            context.update(staging_size=original, staging_written=original)
 
 
 def _prepare_folders(manager, record, destination):
@@ -1007,12 +1250,12 @@ async def _upload_extracted(manager, record, directory):
     )
 
 
-async def run_archive(manager, record):
+async def run_archive(manager, record, *, password=None, new_password=None):
     directory = _directory(manager, record)
     try:
         committed = manager._metadata_committed(record)
         if committed or (
-            record.context.get("source_kind") == "archive"
+            record.context.get("source_kind") in {"archive", "pdf_password"}
             and record.context.get("archive_ready")
             and record.context.get("multipart_plan")
         ):
@@ -1022,7 +1265,7 @@ async def run_archive(manager, record):
                 and not await _worker(Path(record.context["local_path"]).exists)
             ):
                 raise ArchiveError(
-                    "Temporary ZIP bytes are missing. Cancel this job and "
+                    "Temporary output bytes are missing. Cancel this job and "
                     "start again; preserve CACHE_DIR across restarts."
                 )
             await manager._upload_path(
@@ -1040,9 +1283,11 @@ async def run_archive(manager, record):
             manager._check_upload_allowed()
         await _worker(lambda: directory.mkdir(parents=True, exist_ok=True, mode=0o700))
         if record.context["source_kind"] == "archive":
-            await _create_zip(manager, record, directory)
+            await _create_zip(manager, record, directory, password=password)
+        elif record.context["source_kind"] == "pdf_password":
+            await _rewrite_pdf(manager, record, directory, password, new_password)
         else:
-            await _extract_files(manager, record, directory)
+            await _extract_files(manager, record, directory, password=password)
             if record.cancel_event.is_set():
                 raise TransferCancelled("Transfer cancelled")
             await _upload_extracted(manager, record, directory)

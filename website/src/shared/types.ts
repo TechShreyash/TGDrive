@@ -68,8 +68,15 @@ export interface FolderUploadMetadata {
     root_path: string;
     created_at: number;
 }
+export type PdfPasswordOperation = "add" | "change" | "remove";
+
 export interface Job {
     history_cleared?: boolean;
+    bot_intake_review_required?: boolean;
+    interrupted_upload_recovery?:
+        "staged" | "finish_saving" | "original_required" | "restore_staging";
+    archive_password_required?: boolean;
+    pdf_password_operation?: PdfPasswordOperation;
     folder_upload?: FolderUploadMetadata;
     queue?: { position: number; estimated_wait_seconds: number | null } | null;
     telegram_parts?: { total: number; stored: number };
@@ -130,6 +137,9 @@ export interface Share {
     folder_path?: string;
     folder_label?: string;
     copyable?: boolean;
+    password_required?: boolean;
+    open_count?: number;
+    opens_since?: string | null;
 }
 export interface PublicConfig {
     demo_data?: boolean;
@@ -140,6 +150,12 @@ export interface PublicConfig {
     timezone?: string;
 }
 export interface DriveProtection {
+    standalone_backup?: {
+        last_trigger: "manual" | "scheduled" | null;
+        next_eligible_at: number | null;
+        retry_pending: boolean;
+        retry_after: number | null;
+    };
     independent_backup?: {
         enabled: boolean;
         phase: string | null;
@@ -336,7 +352,14 @@ export function fileUrl(path: string, auth = "", download = false): string {
 }
 
 export interface PreviewDescriptor {
-    kind: "text" | "pdf" | "video" | "book" | "unsupported";
+    kind:
+        | "text"
+        | "pdf"
+        | "video"
+        | "book"
+        | "archive"
+        | "office"
+        | "unsupported";
     size: number;
     text?: string;
     language?: string;

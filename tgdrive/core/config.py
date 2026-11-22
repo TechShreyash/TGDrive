@@ -118,6 +118,15 @@ class Settings(BaseSettings):
         default=SecretStr(""), alias="STRING_SESSIONS"
     )
     main_bot_token: SecretStr | None = Field(default=None, alias="MAIN_BOT_TOKEN")
+    bot_intake_channel: int | None = Field(
+        default=None, alias="BOT_INTAKE_CHANNEL", lt=0, exclude=True
+    )
+
+    @field_validator("bot_intake_channel", mode="before")
+    @classmethod
+    def optional_intake_channel(cls, value):
+        return None if value in ("", None) else value
+
     public_url: str | None = Field(default=None, alias="PUBLIC_URL")
 
     @field_validator("public_url")
@@ -461,6 +470,11 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Demo administrator password must differ from the regular password"
                 )
+        if self.bot_intake_channel == self.storage_channel:
+            raise ValueError(
+                "BOT_INTAKE_CHANNEL must differ from STORAGE_CHANNEL; "
+                "temporary intake copies are plaintext"
+            )
         token = self.main_bot_token_value
         if token:
             if not _BOT_TOKEN_RE.fullmatch(token):

@@ -421,6 +421,11 @@ class ChannelReplica:
 
     async def configure(self, channel, token, independent):
         await _worker(self._check_saved_state)
+        if channel == getattr(self.settings, "bot_intake_channel", None):
+            raise SettingsProblem(
+                "The backup channel cannot be BOT_INTAKE_CHANNEL; "
+                "temporary intake copies are plaintext."
+            )
         if not independent or channel == self.settings.storage_channel or channel >= 0:
             raise SettingsProblem(
                 "Use two different private channels and confirm independent "

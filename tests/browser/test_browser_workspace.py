@@ -95,28 +95,24 @@ def test_admin_navigation_separates_categories_preserves_drafts_and_supports_key
     def open_drawer():
         fixtures.open_admin(page)
 
+    sections = page.get_by_role("navigation", name="Settings sections")
+
     def navigate(label):
-        open_drawer()
-        page.get_by_role("link", name=label, exact=True).click()
+        sections.get_by_role("link", name=label, exact=True).click()
 
     open_drawer()
     expect(page.get_by_role("button", name="Admin panel", exact=True)).to_have_count(0)
-    monitor = page.get_by_role("group", name="Monitor", exact=True)
-    expect(monitor.get_by_role("link")).to_have_count(2)
-    expect(monitor.get_by_role("link", name="Performance", exact=True)).to_be_visible()
-    expect(monitor.get_by_role("link", name="Preloads", exact=True)).to_be_visible()
-    config = page.get_by_role("group", name="Configuration", exact=True)
-    expect(config.get_by_role("link")).to_have_count(3)
-    manage = page.get_by_role("group", name="Management", exact=True)
-    expect(manage.get_by_role("link")).to_have_count(2)
+    manage = page.get_by_role("group", name="Tools and settings", exact=True)
+    expect(manage.get_by_role("link")).to_have_text(
+        ["Performance", "Preloads", "Settings", "Connections", "Backups"]
+    )
     page.get_by_role("link", name="Preloads", exact=True).focus()
     page.keyboard.press("Tab")
-    expect(page.get_by_role("link", name="Cache settings", exact=True)).to_be_focused()
+    expect(manage.get_by_role("link", name="Settings", exact=True)).to_be_focused()
     for label in [
-        "Storage and Backups",
-        "Cache settings",
-        "Transfer limits",
-        "Timezone",
+        "Backups",
+        "Settings",
+        "Connections",
     ]:
         link = page.get_by_role("link", name=label, exact=True)
         assert link.evaluate("node => node.scrollWidth <= node.clientWidth")
@@ -124,13 +120,19 @@ def test_admin_navigation_separates_categories_preserves_drafts_and_supports_key
             link.locator("span").evaluate("node => getComputedStyle(node).whiteSpace")
             == "nowrap"
         )
-    navigate("Cache settings")
+    manage.get_by_role("link", name="Settings", exact=True).click()
+    expect(
+        page.get_by_role("heading", name="Settings", exact=True, level=1)
+    ).to_be_visible()
+    expect(sections.get_by_role("link")).to_have_text(
+        ["Cache", "Transfer limits", "Timezone"]
+    )
     expect(
         page.get_by_role("heading", name="Cache and preloading", exact=True)
     ).to_be_visible()
     preload = page.get_by_role("switch", name=PRELOAD)
     expect(preload).to_be_checked()
-    page.get_by_text("Preload during playback", exact=True).click()
+    preload.click()
     expect(preload).not_to_be_checked()
     expect(page.get_by_label("Timezone", exact=True)).not_to_be_visible()
     navigate("Timezone")
@@ -138,7 +140,9 @@ def test_admin_navigation_separates_categories_preserves_drafts_and_supports_key
     expect(timezone).to_be_visible()
     timezone.fill("Europe/London")
     expect(preload).not_to_be_visible()
-    expect(page.get_by_role("link", name="Settings", exact=True)).to_have_count(0)
+    expect(sections.get_by_role("link", name="Timezone", exact=True)).to_have_attribute(
+        "aria-current", "page"
+    )
     navigate("Transfer limits")
     split = page.get_by_label("File split size (MiB)", exact=True)
     expect(split).to_be_visible()
@@ -146,7 +150,7 @@ def test_admin_navigation_separates_categories_preserves_drafts_and_supports_key
     expect(timezone).not_to_be_visible()
     page.go_back()
     expect(timezone).to_have_value("Europe/London")
-    navigate("Cache settings")
+    navigate("Cache")
     expect(preload).not_to_be_checked()
     navigate("Transfer limits")
     expect(split).to_have_value("1024")
@@ -163,7 +167,9 @@ def test_cache_settings_deep_link_opens_cache_category(server, desktop):
         page.get_by_role("heading", name="Cache and preloading", exact=True)
     ).to_be_visible()
     expect(
-        page.get_by_role("link", name="Cache settings", exact=True)
+        page.get_by_role("navigation", name="Settings sections").get_by_role(
+            "link", name="Cache", exact=True
+        )
     ).to_have_attribute("aria-current", "page")
 
 
@@ -224,7 +230,14 @@ def test_missing_or_unknown_settings_section_uses_cache_without_url_rewrite(
         page.get_by_role("heading", name="Cache and preloading", exact=True)
     ).to_be_visible()
     assert page.url == server.url + "/" + query
-    expect(page.get_by_role("link", name="Settings", exact=True)).to_have_count(0)
+    expect(page.get_by_role("link", name="Settings", exact=True)).to_have_attribute(
+        "aria-current", "page"
+    )
+    expect(
+        page.get_by_role("navigation", name="Settings sections").get_by_role(
+            "link", name="Cache", exact=True
+        )
+    ).to_have_attribute("aria-current", "page")
     expect(
         page.get_by_role("button", name="Change Appearance", exact=True)
     ).to_be_visible()
@@ -243,10 +256,10 @@ def test_sidebar_logout_busy_error_retry_and_server_transfer_survives(
         page.get_by_role("button", name="Toggle Navigation", exact=True).click()
     logout = page.get_by_role("button", name="Log Out", exact=True)
     logout.scroll_into_view_if_needed()
-    sidebar = page.locator(".sidebar")
     expect(logout).to_be_in_viewport()
-    assert sidebar.evaluate("e => getComputedStyle(e).overflowY") == "auto"
-    assert page.locator(".drive-nav").evaluate("e => e.scrollTop") == 0
+    scroll = page.locator(".sidebar-scroll")
+    assert scroll.evaluate("e => getComputedStyle(e).overflowY") == "auto"
+    assert page.locator(".sidebar").evaluate("e => e.scrollTop") == 0
     assert (
         page.locator(".sidebar-bottom").evaluate("e => getComputedStyle(e).position")
         == "static"

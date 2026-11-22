@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+    type FormEvent,
+} from "react";
 import { Check, ShieldCheck } from "lucide-react";
 import { api, ApiError, errorMessage } from "../../shared/api";
 import { ErrorNotice, Spinner } from "../../shared/components";
@@ -20,6 +26,7 @@ export default function PremiumConnection({
     const [stage, setStage] = useState<"phone" | "code" | "password">("phone");
     const [label, setLabel] = useState("My Premium account");
     const [phone, setPhone] = useState("");
+    const [phoneError, setPhoneError] = useState("");
     const [code, setCode] = useState("");
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
@@ -41,9 +48,9 @@ export default function PremiumConnection({
                     .catch(() => {});
         };
     }, []);
-    useEffect(() => {
-        focusField.current?.focus();
-    }, [stage]);
+    useLayoutEffect(() => {
+        if (!busy && !blockedReason) focusField.current?.focus();
+    }, [stage, busy, blockedReason]);
     useEffect(() => {
         if (!waitUntil) return;
         const tick = () => {
@@ -62,14 +69,16 @@ export default function PremiumConnection({
         event.preventDefault();
         if (busy || remaining || blockedReason) return;
         setError("");
+        setPhoneError("");
         const normalizedPhone = phone.replace(/[ ()-]/g, "").trim();
         if (
             stage === "phone" &&
             !/^\+[1-9][0-9]{6,14}$/.test(normalizedPhone)
         ) {
-            setError(
+            setPhoneError(
                 "Enter your phone number with its country code, such as +441234567890.",
             );
+            focusField.current?.focus();
             return;
         }
         setBusy(true);
@@ -139,7 +148,6 @@ export default function PremiumConnection({
                 if (cause.code.startsWith("SETTINGS_")) onRefresh();
             }
             setError(errorMessage(cause));
-            focusField.current?.focus();
         } finally {
             setCode("");
             setPassword("");
@@ -201,8 +209,20 @@ export default function PremiumConnection({
                             maxLength={32}
                             placeholder="+441234567890"
                             value={phone}
-                            aria-describedby="premium-phone-help"
-                            onChange={(event) => setPhone(event.target.value)}
+                            aria-invalid={Boolean(phoneError) || undefined}
+                            aria-describedby={
+                                phoneError
+                                    ? "premium-phone-error premium-phone-help"
+                                    : "premium-phone-help"
+                            }
+                            onChange={(event) => {
+                                setPhone(event.target.value);
+                                setPhoneError("");
+                            }}
+                        />
+                        <ErrorNotice
+                            id="premium-phone-error"
+                            message={phoneError}
                         />
                         <p
                             id="premium-phone-help"

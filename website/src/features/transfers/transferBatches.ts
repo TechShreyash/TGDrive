@@ -3,6 +3,7 @@ import { currentRate, transferDetails, transferProgress } from "./progress";
 import { deviceUploadProgress, needsDeviceUpload } from "./deviceUploadStatus";
 import type { BatchProgressMeters } from "./batchProgress";
 import {
+    botCleanupPending,
     isFolderTransfer,
     isServerImport,
     transferTaskId,
@@ -18,6 +19,7 @@ export interface TransferBatch {
     cancelled: number;
     failed: number;
     awaiting: number;
+    cleanup: number;
     active: number;
     queued: number;
     pending: boolean;
@@ -59,6 +61,7 @@ function sizeOf(item: Transfer): number | undefined {
         return item.total;
 }
 function priority(item: Transfer): number {
+    if (botCleanupPending(item)) return 0;
     if (item.state === "error") return 0;
     if (item.state === "awaiting_file") return 1;
     if (!finished(item)) return isQueued(item) ? 3 : 2;
@@ -142,6 +145,9 @@ function summarize(
     const failed = items.filter((item) => item.state === "error").length;
     const awaiting = items.filter(
         (item) => item.state === "awaiting_file",
+    ).length;
+    const cleanup = items.filter(
+        (item) => botCleanupPending(item) && finished(item),
     ).length;
     const queued = items.filter(isQueued).length;
     const active =
@@ -236,9 +242,12 @@ function summarize(
         cancelled,
         failed,
         awaiting,
+        cleanup,
         active,
         queued,
-        pending: items.some((item) => !finished(item)),
+        pending: items.some(
+            (item) => botCleanupPending(item) || !finished(item),
+        ),
         unfinished: items.filter(
             (item) => !finished(item) && item.state !== "error",
         ).length,
@@ -308,6 +317,6 @@ export function batchCategory(
 ): "running" | "queued" | "error" | "completed" | "cancelled" {
     if (batch.active > 0) return "running";
     if (batch.queued > 0) return "queued";
-    if (batch.failed + batch.awaiting > 0) return "error";
+    if (batch.failed + batch.awaiting + batch.cleanup > 0) return "error";
     return batch.completed === batch.count ? "completed" : "cancelled";
 }

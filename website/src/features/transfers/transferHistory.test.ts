@@ -71,6 +71,19 @@ describe("history merged with live browser work", () => {
             "older",
         ]);
     });
+    it("keeps a completed bot import visible while its copy needs cleanup", () => {
+        const cleanup = local({
+            jobId: "relay",
+            state: "completed",
+            stage: "bot_intake_cleanup",
+            phase: "File saved · temporary copy cleanup pending",
+        });
+        expect(visibleHistory([], [cleanup], "all", false)).toEqual([cleanup]);
+        expect(
+            mergeHistory([job({ phase: "bot_intake_cleanup" })], [], "all")[0]
+                .phase,
+        ).toBe(cleanup.phase);
+    });
     it("keeps the first server page bounded when older job-backed completions remain locally", () => {
         const rows = visibleHistory(
             [job({ id: "newest" })],

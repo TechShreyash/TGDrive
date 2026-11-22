@@ -149,10 +149,12 @@ def test_default_resume_survives_close_reload_and_waits_for_play(server, desktop
     player.locator("button.movi-play-pause").click()
     page.wait_for_function("""()=>{const el=document.querySelector('movi-player');
       return el&&!el.paused&&!el.seeking&&el.currentTime>=2.2}""")
-    expect(dialog.get_by_text("Resumed at 0:02", exact=True)).to_be_visible()
-    dialog.get_by_role("button", name="Start over", exact=True).click()
-    page.wait_for_function("""()=>{const el=document.querySelector('movi-player');
-      return el&&!el.seeking&&el.currentTime<2}""")
+    expect(dialog.get_by_text("Resumed at", exact=False)).to_have_count(0)
+    expect(dialog.get_by_role("button", name="Start over", exact=True)).to_have_count(0)
+    player.locator("button.movi-play-pause").click()
+    timeline = player.get_by_role("slider", name="Seek", exact=True)
+    timeline.press("Home")
+    _resumed_paused(page, player, 0)
     _wait_saved(page, item_id, 0)
 
 
@@ -390,6 +392,45 @@ def test_close_while_begin_response_is_pending_sends_one_owned_final_save(
     _wait_saved(page, item_id, None)
     assert len(writes) == 1 and writes[0]["final"] is True
     assert _position(page, server, item_id)["position_seconds"] > 0
+
+
+def test_reopen_waits_for_pending_final_video_position(server, desktop):
+    _, page = desktop
+    _samples(page, server)
+    dialog, player, item_id = _open_video(page)
+    _save_seek(page, player, item_id, 2.25)
+    url = "**/api/v1/files/" + item_id + "/video-progress"
+    pending = []
+    reads = []
+
+    def hold_final(route):
+        if route.request.method == "PUT":
+            if route.request.post_data_json["final"]:
+                pending.append(route)
+            else:
+                route.fulfill(status=503, json={"detail": "Synthetic delay"})
+        else:
+            reads.append(route.request)
+            route.continue_()
+
+    page.route(url, hold_final)
+    _seek(page, player, 2.5)
+    with page.expect_request(
+        lambda request: (
+            request.method == "PUT"
+            and request.url.endswith("/video-progress")
+            and request.post_data_json["final"]
+        )
+    ):
+        dialog.get_by_role("button", name="Close Preview", exact=True).click()
+    _, player, _ = _open_video(page)
+    assert len(pending) == 1
+    assert pending[0].request.post_data_json["position_seconds"] == pytest.approx(
+        2.5, abs=0.1
+    )
+    assert not reads
+    pending.pop().continue_()
+    _resumed_paused(page, player, 2.5)
 
 
 def test_delayed_final_save_cannot_replace_a_new_device_writer(
@@ -737,25 +778,6 @@ def test_pending_progress_null_error_retry_and_manual_seek_remain_safe(
             dialog.get_by_role("button", name="Keep playing from here", exact=True)
         ).to_be_visible()
         assert _position(page, server, identity) == saved
-
-
-def test_resumed_notice_waits_while_start_over_has_keyboard_focus(server, desktop):
-    _, page = desktop
-    _samples(page, server)
-    _seed_saved_position(page, server)
-    dialog, player, _ = _open_video(page)
-    _resumed_paused(page, player, 2.25)
-    player.evaluate("el=>el.play()")
-    start_over = dialog.get_by_role("button", name="Start over", exact=True)
-    expect(start_over).to_be_visible()
-    player.evaluate("el=>el.pause()")
-    start_over.focus()
-    page.clock.install()
-    page.clock.fast_forward(11000)
-    expect(start_over).to_be_focused()
-    start_over.press("Tab")
-    page.clock.fast_forward(11000)
-    expect(start_over).to_have_count(0)
 
 
 @pytest.mark.parametrize("layout", ["Grid view", "List view"])

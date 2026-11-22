@@ -11,11 +11,12 @@ from typing import Any, Literal
 
 from fastapi import Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictBool
 from starlette.requests import ClientDisconnect
 
 from tgdrive.core.errors import NotDirectoryError, NotFoundError, TrashedItemError
 from tgdrive.core.errors import ValidationError as DriveValidationError
+from tgdrive.core.security import LoginLimiter, verify_password
 from tgdrive.recovery.backup import RecoveryConflict
 from tgdrive.settings.management_api import register_management_routes
 from tgdrive.storage.demo_files import (
@@ -26,7 +27,11 @@ from tgdrive.storage.demo_files import (
     restricted_writes,
     write_policy,
 )
-from tgdrive.storage.mongo_store import MAX_CURSOR_LENGTH, ShareDenied
+from tgdrive.storage.mongo_store import (
+    MAX_CURSOR_LENGTH,
+    ShareDenied,
+    SharePasswordRequired,
+)
 from tgdrive.storage.store import (
     MAX_NAME_LENGTH,
     ROOT_ID,
@@ -35,13 +40,21 @@ from tgdrive.storage.store import (
 from tgdrive.telegram.client_pool import current_upload_limit
 from tgdrive.transfers.transfer_locations import enrich_locations, locate_transfer
 from tgdrive.transfers.uploads import CHUNK_SIZE, ResumableUploads, UploadError
+from tgdrive.web.archive_api import ArchivePassword
 from tgdrive.web.demo_access import session_access
 from tgdrive.web.schemas import (
     FolderTreeRequest,
     FolderUploadMetadata,
     TransferTaskHistoryRequest,
 )
-from tgdrive.web.share_links import token_factory
+from tgdrive.web.share_links import (
+    SHARE_UNLOCK_TTL,
+    create_unlock,
+    share_password_hasher,
+    share_unlock,
+    token_factory,
+    unlock_cookie_name,
+)
 
 
 class TorrentFileChoice(BaseModel):
@@ -61,6 +74,11 @@ class ClearTransferHistoryRequest(BaseModel):
     exclude_folders: list[str] = Field(default_factory=list)
 
 
+class RetryJobRequest(BaseModel):
+    password: ArchivePassword | None = None
+    new_password: ArchivePassword | None = None
+
+
 class UploadCreate(BaseModel):
     name: str = Field(min_length=1, max_length=1024)
     parent_id: str = Field(default="/")
@@ -78,6 +96,7 @@ class ShareCreate(BaseModel):
     expires_in_days: int | None = Field(default=7, ge=1, le=3650)
     expires_at: datetime | None = None
     label: str = Field(default="", max_length=80)
+    password: ArchivePassword | None = None
 
 
 class MoveItems(BaseModel):
@@ -104,6 +123,18 @@ class ShareUpdate(BaseModel):
     share_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     label: str = Field(default="", max_length=80)
     expires_at: datetime | None = None
+    password: ArchivePassword | None = None
+
+
+class ShareOpen(BaseModel):
+    auth: SecretStr = Field(min_length=1, max_length=512)
+    path: str = Field(min_length=1, max_length=128)
+    event_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
+class ShareUnlock(BaseModel):
+    auth: str = Field(min_length=1, max_length=512)
+    password: ArchivePassword
 
 
 logger = logging.getLogger(__name__)
@@ -121,6 +152,20 @@ def register_routes(
     get_manager: Any,
     get_runtime: Any,
 ) -> None:
+    share_attempts = LoginLimiter()
+    share_verify = asyncio.Lock()
+
+    @app.exception_handler(SharePasswordRequired)
+    async def share_locked(_request: Request, _exc: SharePasswordRequired) -> Response:
+        return JSONResponse(
+            {
+                "code": "SHARE_PASSWORD_REQUIRED",
+                "detail": "This link requires a password.",
+            },
+            status_code=403,
+            headers={"Cache-Control": "private, no-store"},
+        )
+
     register_management_routes(
         app, settings, require_admin=require_admin, get_runtime=get_runtime
     )
@@ -426,6 +471,7 @@ def register_routes(
                 request,
                 parent_id,
                 share_token=auth,
+                share_unlock=share_unlock(request, settings, auth),
                 offset=offset,
                 limit=limit,
                 sort=sort,
@@ -440,6 +486,78 @@ def register_routes(
         for item in page["items"]:
             item.pop("starred", None)
         return describe(page)
+
+    @app.post("/api/v1/shared/opens", status_code=204)
+    async def open_shared_link(payload: ShareOpen, request: Request) -> Response:
+        if getattr(
+            getattr(get_runtime(request), "backup", None), "recovery_required", False
+        ):
+            raise HTTPException(409, "Shared access is paused until recovery completes")
+        auth = payload.auth.get_secret_value()
+        try:
+            await asyncio.to_thread(
+                get_store(request).record_share_open,
+                payload.path,
+                auth,
+                payload.event_id,
+                share_unlock=share_unlock(request, settings, auth),
+            )
+        except (
+            ShareDenied,
+            DriveValidationError,
+            NotFoundError,
+            NotDirectoryError,
+            TrashedItemError,
+        ):
+            raise HTTPException(403, "Invalid share link") from None
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/v1/shared/unlock")
+    async def unlock_share(payload: ShareUnlock, request: Request) -> Response:
+        if getattr(
+            getattr(get_runtime(request), "backup", None), "recovery_required", False
+        ):
+            raise HTTPException(409, "Shared access is paused until recovery completes")
+        client = request.client.host if request.client else "unknown"
+        cookie_name = unlock_cookie_name(payload.auth)
+        attempt_key = client + ":" + cookie_name
+        attempt = share_attempts.check(attempt_key)
+        if not attempt.allowed or share_verify.locked():
+            raise HTTPException(
+                429,
+                "Try again shortly.",
+                headers={"Retry-After": str(attempt.retry_after or 1)},
+            )
+        async with share_verify:
+            try:
+                password_hash = await asyncio.to_thread(
+                    get_store(request).share_password_hash, payload.auth
+                )
+            except ShareDenied:
+                raise HTTPException(403, "Invalid share link") from None
+            if password_hash is None:
+                return JSONResponse(
+                    {"status": "ok"}, headers={"Cache-Control": "no-store"}
+                )
+            valid = await asyncio.to_thread(
+                verify_password, payload.password.get_secret_value(), password_hash
+            )
+            if not valid:
+                share_attempts.failure(attempt_key)
+                raise HTTPException(403, "Incorrect share password.")
+            share_attempts.success(attempt_key)
+        secure = settings.cookie_secure or request.url.scheme == "https"
+        response = JSONResponse({"status": "ok"}, headers={"Cache-Control": "no-store"})
+        response.set_cookie(
+            cookie_name,
+            create_unlock(settings, payload.auth, password_hash),
+            max_age=SHARE_UNLOCK_TTL,
+            httponly=True,
+            secure=secure,
+            samesite="none" if secure else "lax",
+            partitioned=secure,
+        )
+        return response
 
     @app.post("/api/v1/folders/tree", dependencies=admin, status_code=201)
     async def prepare_folder_tree(payload: FolderTreeRequest, request: Request) -> Any:
@@ -559,8 +677,10 @@ def register_routes(
             "destination": record.context.get("destination", "/"),
             "history_cleared": record.history_hidden,
         }
-        if result["kind"] in {"archive", "extract"}:
+        if result["kind"] in {"archive", "extract", "pdf_password"}:
             result["location"] = locate_transfer(get_store(request), result)
+        if record.bot_intake_review_required and not restricted_writes.get():
+            result["bot_intake_review_required"] = True
         return result
 
     from tgdrive.web.archive_api import register_archive_routes
@@ -711,15 +831,40 @@ def register_routes(
             raise HTTPException(422, str(exc)) from exc
         return job_snapshot(record, request)
 
+    @app.post("/api/v1/jobs/{job_id}/review-bot-intake", dependencies=admin)
+    async def review_bot_intake(job_id: str, request: Request) -> dict[str, Any]:
+        if restricted_writes.get():
+            raise HTTPException(403, "Only the owner can confirm an intake review.")
+        try:
+            record = await get_manager(request).review_bot_intake(job_id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return job_snapshot(record, request)
+
     @app.post("/api/v1/jobs/{job_id}/retry", dependencies=admin)
-    async def retry_job(job_id: str, request: Request) -> dict[str, Any]:
+    async def retry_job(
+        job_id: str, request: Request, payload: RetryJobRequest | None = None
+    ) -> dict[str, Any]:
         manager = get_manager(request)
         record = manager.registry.get(job_id)
         check_transfer(get_store(request), record)
         record.context["demo_read_only"] = restricted_writes.get()
         await manager.registry.persist(record)
         try:
-            return job_snapshot(await get_manager(request).retry_job(job_id), request)
+            password = payload.password if payload else None
+            new_password = payload.new_password if payload else None
+            retried = (
+                await manager.retry_job(
+                    job_id,
+                    password=password.get_secret_value() if password else None,
+                    new_password=new_password.get_secret_value()
+                    if new_password
+                    else None,
+                )
+                if password or new_password
+                else await manager.retry_job(job_id)
+            )
+            return job_snapshot(retried, request)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 
@@ -776,6 +921,13 @@ def register_routes(
     @app.post("/api/v1/shares", dependencies=admin, status_code=201)
     async def create_share(payload: ShareCreate, request: Request) -> Response:
         check_path(get_store(request), payload.path, descendants=True)
+        password_hash = (
+            await asyncio.to_thread(
+                share_password_hasher.hash, payload.password.get_secret_value()
+            )
+            if payload.password is not None
+            else None
+        )
         expires = (
             payload.expires_at.isoformat()
             if payload.expires_at
@@ -795,6 +947,7 @@ def register_routes(
                     expires_at=expires,
                     label=payload.label,
                     token_factory=factory,
+                    password_hash=password_hash,
                 )
                 row = next(
                     row
@@ -807,6 +960,7 @@ def register_routes(
                     "path": row["path"],
                     "expires_at": row["expires_at"],
                     "label": row["label"],
+                    "password_required": row["password_required"],
                 }
 
         created = await asyncio.to_thread(create)
@@ -828,6 +982,14 @@ def register_routes(
         if "expires_at" in payload.model_fields_set:
             changes["expires_at"] = (
                 payload.expires_at.isoformat() if payload.expires_at else None
+            )
+        if "password" in payload.model_fields_set:
+            changes["password_hash"] = (
+                await asyncio.to_thread(
+                    share_password_hasher.hash, payload.password.get_secret_value()
+                )
+                if payload.password is not None
+                else None
             )
         await asyncio.to_thread(
             get_store(request).update_share, payload.share_id, **changes

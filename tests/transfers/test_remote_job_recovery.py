@@ -99,9 +99,10 @@ async def test_url_retry_replaces_only_own_unpublished_stage_after_publication_c
     try:
         if mode == "restart_recover":
             await manager.recover()
-            retried = manager.registry.get(record.id)
-        else:
-            retried = await manager.retry_job(record.id)
+            interrupted = manager.registry.get(record.id)
+            assert interrupted.status is TransferStatus.ERROR
+            assert interrupted.task is None
+        retried = await manager.retry_job(record.id)
         assert retried.task is not None
         await retried.task
         assert retried.status == TransferStatus.COMPLETED

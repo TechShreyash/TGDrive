@@ -2,7 +2,7 @@ import { summarizeBatches, batchCategory } from "./transferBatches";
 import type { Job } from "../../shared/types";
 import { fromJob, type Transfer } from "./transfers";
 import { api, type TransferHistoryContext } from "../../shared/api";
-import { isArchiveTransfer } from "./transferTasks";
+import { botCleanupPending, isArchiveTransfer } from "./transferTasks";
 import type { TransferTaskHistoryPage } from "../../shared/types";
 
 export const TRANSFER_TASK_PAGE_SIZE = 20;
@@ -59,13 +59,7 @@ export function mergeHistory(
     }
     // Browser receipts have not reached the server job list yet; live records
     // also replace stale history samples with current progress/retry state.
-    const liveKeys = new Set(
-        summarizeBatches(local, Date.now())
-            .filter((batch) =>
-                ["running", "queued"].includes(batchCategory(batch)),
-            )
-            .flatMap((batch) => batch.items.map((item) => item.key)),
-    );
+    const liveKeys = new Set(liveHistoryRows(local).map((item) => item.key));
     for (const item of local) {
         if (item.kind !== "delete") {
             const key = item.jobId || item.uploadId || item.key;
@@ -108,7 +102,9 @@ export function mergeHistory(
     return all
         .filter((item) => matching.has(item.key))
         .map((item) =>
-            item.state === "completed" && !isArchiveTransfer(item)
+            item.state === "completed" &&
+            !isArchiveTransfer(item) &&
+            !botCleanupPending(item)
                 ? { ...item, phase: "Upload completed" }
                 : item,
         );
@@ -162,7 +158,11 @@ export function matchHistoryTasks(
 
 export function liveHistoryRows(items: Transfer[]): Transfer[] {
     return summarizeBatches(items, Date.now())
-        .filter((task) => ["running", "queued"].includes(batchCategory(task)))
+        .filter(
+            (task) =>
+                ["running", "queued"].includes(batchCategory(task)) ||
+                task.items.some(botCleanupPending),
+        )
         .flatMap((task) => task.items);
 }
 

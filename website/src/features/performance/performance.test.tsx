@@ -292,6 +292,17 @@ describe("cache coverage and observed queue estimates", () => {
         expect(usage).toContain(
             'aria-valuetext="80 MiB of 256 MiB used (31%)"',
         );
+        const partial = renderToStaticMarkup(
+            <CacheCapacity label="Memory cache" used={MIB} limit={256 * MIB} />,
+        );
+        expect(partial).toContain("&lt;1%");
+        expect(partial).toContain(
+            'aria-valuetext="1 MiB of 256 MiB used (less than 1%)"',
+        );
+        const empty = renderToStaticMarkup(
+            <CacheCapacity label="Memory cache" used={0} limit={256 * MIB} />,
+        );
+        expect(empty).toContain('aria-valuetext="0 B of 256 MiB used (0%)"');
         const disabled = renderToStaticMarkup(
             <CacheCapacity
                 label="Disk cache"

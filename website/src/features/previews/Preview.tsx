@@ -4,9 +4,15 @@ import { videoPosterUrl } from "./video/videoPoster";
 import "./Preview.css";
 import "./Reader.css";
 import { readBoundedResponse, PreviewLimitError } from "./previewIO";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
-    AlertCircle,
+    lazy,
+    Suspense,
+    useEffect,
+    useRef,
+    useState,
+    type ReactNode,
+} from "react";
+import {
     ArrowLeft,
     ChevronDown,
     ChevronUp,
@@ -31,24 +37,46 @@ import {
     type DriveItem,
     type PreviewDescriptor,
 } from "../../shared/types";
-import { FileIcon, Spinner } from "../../shared/components";
+import { ErrorNotice, FileIcon, Spinner } from "../../shared/components";
+
+function PreviewFeedback({
+    title,
+    action,
+    children,
+}: {
+    title: ReactNode;
+    action?: ReactNode;
+    children: ReactNode;
+}) {
+    return (
+        <div className="preview-feedback">
+            <div className="preview-feedback-header">
+                <h3>{title}</h3>
+                {action}
+            </div>
+            {children}
+        </div>
+    );
+}
 
 function ViewerUnavailable() {
     return (
-        <div className="empty-state">
-            <AlertCircle size={34} />
-            <h3>Viewer could not load</h3>
+        <PreviewFeedback
+            title="Viewer could not load"
+            action={
+                <button
+                    className="secondary-button"
+                    onClick={() => window.location.reload()}
+                >
+                    <RefreshCw size={16} /> Reload Viewer
+                </button>
+            }
+        >
             <p>
                 Check your connection and reload the viewer, or download the
                 original.
             </p>
-            <button
-                className="secondary-button"
-                onClick={() => window.location.reload()}
-            >
-                <RefreshCw size={16} /> Reload Viewer
-            </button>
-        </div>
+        </PreviewFeedback>
     );
 }
 const PdfPreview = lazy(() =>
@@ -57,6 +85,16 @@ const PdfPreview = lazy(() =>
 
 const BookPreview = lazy(() =>
     import("./books/BookPreview").catch(() => ({ default: ViewerUnavailable })),
+);
+
+const ArchivePreview = lazy(() =>
+    import("./archives/ArchivePreview").catch(() => ({
+        default: ViewerUnavailable,
+    })),
+);
+
+const OfficePreview = lazy(() =>
+    import("./OfficePreview").catch(() => ({ default: ViewerUnavailable })),
 );
 
 export function nativePreviewKind(
@@ -92,6 +130,7 @@ export function nativePreviewKind(
             "m2ts",
             "flv",
             "wmv",
+            "asf",
             "vob",
         ].includes(extension)
     )
@@ -160,7 +199,15 @@ export async function loadPreview(
     if (
         !data ||
         typeof data !== "object" ||
-        !["text", "pdf", "video", "book", "unsupported"].includes(data.kind) ||
+        ![
+            "text",
+            "pdf",
+            "video",
+            "book",
+            "archive",
+            "office",
+            "unsupported",
+        ].includes(data.kind) ||
         (data.size !== undefined &&
             (!Number.isSafeInteger(data.size) || data.size < 0)) ||
         (data.reason !== undefined &&
@@ -472,6 +519,22 @@ export default function Preview({
         setMediaFailure("checking");
         setFailed(true);
     }
+    function retryPreview() {
+        viewer.current
+            ?.querySelector<HTMLElement>(".preview-close, .preview-download")
+            ?.focus({ preventScroll: true });
+        mediaRetries.current = 0;
+        setMediaFailure(null);
+        setFailed(false);
+        setAttempt((value) => value + 1);
+    }
+    const retryAction = (
+        <button className="secondary-button" onClick={retryPreview}>
+            <RefreshCw size={16} /> Try Preview Again
+        </button>
+    );
+    const mediaRetryPending =
+        mediaFailure === "checking" || mediaFailure === "retrying";
     const playback = useRef<{ time: number; playing: boolean } | null>(null);
     const src =
         fileUrl(path, auth) +
@@ -542,9 +605,8 @@ export default function Preview({
     const suffix = item.name.includes(".")
         ? item.name.slice(item.name.lastIndexOf(".") + 1)
         : "";
-    const fileType = /^[a-z0-9]{1,12}$/i.test(suffix)
-        ? suffix.toUpperCase() + " file"
-        : "File";
+    const format = /^[a-z0-9]{1,12}$/i.test(suffix) ? suffix.toUpperCase() : "";
+    const fileType = format ? format + " file" : "File";
     const queue = fileStatus?.queue;
     const waiting =
         fileStatus?.phase === "waiting_for_telegram" ||
@@ -578,6 +640,7 @@ export default function Preview({
                     onClose?.();
             }}
             onCancel={(event) => {
+                if (event.target !== event.currentTarget) return;
                 event.preventDefault();
                 if (
                     document.fullscreenElement &&
@@ -649,9 +712,12 @@ export default function Preview({
                                 <h2 id="preview-title" title={item.name}>
                                     {item.name}
                                 </h2>
-                                <span>
-                                    {formatBytes(item.size)} ·{" "}
-                                    {formatDate(item.upload_date)}
+                                <span className="preview-file-meta">
+                                    {format ? format + " · " : ""}
+                                    {formatBytes(item.size)}
+                                    <span className="preview-file-date">
+                                        {" · " + formatDate(item.upload_date)}
+                                    </span>
                                 </span>
                             </div>
                             {documentPreview && (
@@ -710,32 +776,36 @@ export default function Preview({
                 )}
                 {details ? (
                     <section className="file-details-body">
-                        <div className="file-details-icon">
-                            <FileIcon name={item.name} />
-                            {suffix && (
-                                <span
-                                    className="file-details-extension"
-                                    aria-hidden="true"
-                                >
-                                    {suffix.slice(0, 8).toUpperCase()}
-                                </span>
-                            )}
+                        <div className="file-details-identity">
+                            <div className="file-details-icon">
+                                <FileIcon name={item.name} />
+                            </div>
+                            <div className="file-details-copy">
+                                <h2 id="preview-title">{item.name}</h2>
+                                {loading ? (
+                                    <p
+                                        id="file-details-reason"
+                                        className="file-details-checking"
+                                        role="status"
+                                    >
+                                        <Spinner /> Checking preview…
+                                    </p>
+                                ) : (
+                                    <p id="file-details-reason">
+                                        {descriptor?.reason ||
+                                            "Download this file to open it on your device."}
+                                    </p>
+                                )}
+                            </div>
                         </div>
-                        <h2 id="preview-title">{item.name}</h2>
-                        {loading ? (
-                            <p
-                                id="file-details-reason"
-                                className="file-details-checking"
-                                role="status"
-                            >
-                                <Spinner /> Checking preview…
-                            </p>
-                        ) : (
-                            <p id="file-details-reason">
-                                {descriptor?.reason ||
-                                    "Download this file to open it on your device."}
-                            </p>
-                        )}
+                        <a
+                            className="primary-button file-details-download"
+                            href={fileUrl(path, auth, true)}
+                            download={item.name}
+                            aria-label="Download Original"
+                        >
+                            <Download size={19} /> Download File
+                        </a>
                         <dl className="file-details-metadata">
                             <div>
                                 <dt>Type</dt>
@@ -752,14 +822,6 @@ export default function Preview({
                                 <dd>{formatDate(item.upload_date)}</dd>
                             </div>
                         </dl>
-                        <a
-                            className="primary-button file-details-download"
-                            href={fileUrl(path, auth, true)}
-                            download={item.name}
-                            aria-label="Download Original"
-                        >
-                            <Download size={19} /> Download File
-                        </a>
                     </section>
                 ) : (
                     <>
@@ -790,12 +852,11 @@ export default function Preview({
                                 "preview-surface preview-surface-" +
                                 (pdf
                                     ? "pdf"
-                                    : descriptor?.kind === "text"
-                                      ? "text"
-                                      : kind || "other") +
-                                (error || failed
-                                    ? " preview-surface-message"
-                                    : "")
+                                    : descriptor?.kind === "archive" ||
+                                        descriptor?.kind === "office" ||
+                                        descriptor?.kind === "text"
+                                      ? descriptor.kind
+                                      : kind || "other")
                             }
                         >
                             {loading ? (
@@ -803,34 +864,28 @@ export default function Preview({
                                     <Spinner /> Loading preview…
                                 </div>
                             ) : error ? (
-                                <div className="empty-state">
-                                    <AlertCircle size={34} />
-                                    <p role="alert">{error}</p>
-                                    <button
-                                        className="secondary-button"
-                                        onClick={() =>
-                                            setAttempt((value) => value + 1)
-                                        }
-                                    >
-                                        <RefreshCw size={16} /> Try Preview
-                                        Again
-                                    </button>
-                                </div>
+                                <PreviewFeedback
+                                    title="Preview could not load"
+                                    action={retryAction}
+                                >
+                                    <ErrorNotice message={error} />
+                                </PreviewFeedback>
                             ) : failed ? (
-                                <div className="empty-state">
-                                    {mediaFailure === "checking" ||
-                                    mediaFailure === "retrying" ? (
-                                        <Spinner />
-                                    ) : (
-                                        <AlertCircle size={34} />
-                                    )}
-                                    <h3>
-                                        {mediaFailure === "checking"
-                                            ? "Checking preview…"
-                                            : mediaFailure
-                                              ? "Telegram is busy"
-                                              : "Preview Unavailable"}
-                                    </h3>
+                                <PreviewFeedback
+                                    title={
+                                        <>
+                                            {mediaRetryPending && <Spinner />}
+                                            {mediaFailure === "checking"
+                                                ? "Checking preview…"
+                                                : mediaFailure
+                                                  ? "Telegram is busy"
+                                                  : "Preview Unavailable"}
+                                        </>
+                                    }
+                                    action={
+                                        mediaRetryPending ? null : retryAction
+                                    }
+                                >
                                     <p
                                         role={
                                             mediaFailure ? "status" : undefined
@@ -844,24 +899,7 @@ export default function Preview({
                                                 ? "Telegram's waiting queue is full. Try again in a moment."
                                                 : "This file could not be played or displayed by your browser. Download the original to open it on your device."}
                                     </p>
-                                    {mediaFailure !== "checking" &&
-                                        mediaFailure !== "retrying" && (
-                                            <button
-                                                className="secondary-button"
-                                                onClick={() => {
-                                                    mediaRetries.current = 0;
-                                                    setMediaFailure(null);
-                                                    setFailed(false);
-                                                    setAttempt(
-                                                        (value) => value + 1,
-                                                    );
-                                                }}
-                                            >
-                                                <RefreshCw size={16} /> Try
-                                                Preview Again
-                                            </button>
-                                        )}
-                                </div>
+                                </PreviewFeedback>
                             ) : kind === "image" ? (
                                 <img
                                     key={attempt}
@@ -947,6 +985,7 @@ export default function Preview({
                                     )}
                                     <pre
                                         className={wrap ? "wrap-lines" : ""}
+                                        role="region"
                                         tabIndex={0}
                                         aria-label={"Contents of " + item.name}
                                     >
@@ -958,6 +997,31 @@ export default function Preview({
                                         </code>
                                     </pre>
                                 </div>
+                            ) : descriptor?.kind === "office" ? (
+                                <Suspense fallback={<Spinner />}>
+                                    <OfficePreview
+                                        key={path + auth}
+                                        path={path}
+                                        auth={auth}
+                                    />
+                                </Suspense>
+                            ) : descriptor?.kind === "archive" ? (
+                                <Suspense
+                                    fallback={
+                                        <div
+                                            className="preview-loading"
+                                            role="status"
+                                        >
+                                            <Spinner /> Loading ZIP contents…
+                                        </div>
+                                    }
+                                >
+                                    <ArchivePreview
+                                        key={path + auth}
+                                        path={path}
+                                        auth={auth}
+                                    />
+                                </Suspense>
                             ) : descriptor?.kind === "book" ? (
                                 <Suspense
                                     fallback={

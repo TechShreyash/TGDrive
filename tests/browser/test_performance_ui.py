@@ -336,7 +336,7 @@ def test_performance_real_samples_nullable_eta_and_mobile_tables(
                     "uploads": 1,
                     "downloads": 1,
                     "combined_limit": 3,
-                    "cooldown_seconds": 0,
+                    "cooldown_seconds": 12,
                     "requests": None,
                 }
             ],
@@ -415,12 +415,32 @@ def test_performance_real_samples_nullable_eta_and_mobile_tables(
     expect(
         page.get_by_role("img", name="Recent Telegram load", exact=False)
     ).to_be_visible()
-    page.set_viewport_size({"width": 390, "height": 844})
-    expect(page.get_by_text("Estimating…", exact=True)).to_be_visible()
-    assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
-    assert page.locator(".performance-table-wrap").first.evaluate(
-        "n=>n.scrollWidth>n.clientWidth"
+    capacity = page.get_by_role("table", name="Account capacity", exact=True)
+    expect(
+        capacity.get_by_role("columnheader", name="Media operations", exact=True)
+    ).to_be_visible()
+    row = capacity.get_by_role("row").filter(
+        has=page.get_by_role("rowheader", name=re.compile("Storage account"))
     )
+    for width in (390, 320):
+        page.set_viewport_size({"width": width, "height": 844})
+        expect(page.get_by_text("Estimating…", exact=True)).to_be_visible()
+        for label, reading in (
+            ("Provider waits", "About 12s"),
+            ("Media operations", "1 upload · 1 download"),
+            ("Part requests", "1 requests waiting"),
+            ("Origin bytes", "1 MiB uploaded"),
+            ("Pacing", "Configured ceiling 24"),
+        ):
+            cell = row.get_by_role("cell").filter(has_text=label)
+            expect(cell.get_by_text(label, exact=True)).to_be_visible()
+            expect(cell).to_contain_text(reading)
+        identity = row.get_by_role("rowheader").bounding_box()
+        waits = row.get_by_role("cell").filter(has_text="Provider waits").bounding_box()
+        assert identity is not None and waits is not None
+        assert identity["x"] + identity["width"] <= waits["x"] + 1
+        assert capacity.locator("..").evaluate("n=>n.scrollWidth<=n.clientWidth")
+        assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
     page.screenshot(path=ARTIFACTS / "performance-load-mobile.png", full_page=True)
 
 
@@ -432,7 +452,7 @@ def test_copy_download_link_is_explicit_public_capability_and_prepare_is_scoped(
     login(page, server.url)
     page.get_by_role("button", name="Preview samples", exact=True).dblclick()
     page.get_by_label("Actions for sample.json", exact=True).click()
-    page.get_by_role("menuitem", name="Copy Download Link", exact=True).click()
+    page.get_by_role("button", name="Copy Download Link", exact=True).click()
     dialog = page.get_by_role("dialog", name="Copy Download Link", exact=True)
     expect(dialog).to_contain_text("Anyone with this link")
     with page.expect_response("**/api/v1/download-links") as response:
@@ -477,7 +497,7 @@ def test_copy_download_link_is_explicit_public_capability_and_prepare_is_scoped(
 
     page.route("**/api/v1/preloads", prepare)
     page.get_by_label("Actions for sample.json", exact=True).click()
-    page.get_by_role("menuitem", name="Preload file", exact=True).click()
+    page.get_by_role("button", name="Preload file", exact=True).click()
     dialog = page.get_by_role("dialog", name="Preload file", exact=True)
     expect(dialog).to_contain_text("Cached bytes may be removed when space is needed.")
     dialog.get_by_role("button", name="Preload file", exact=True).click()

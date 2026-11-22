@@ -8,6 +8,8 @@ import {
 } from "react";
 import {
     AlertCircle,
+    CloudUpload,
+    Database,
     ExternalLink,
     RefreshCw,
     ShieldCheck,
@@ -118,6 +120,7 @@ export default function StorageView({
         uploadProtection === "attention",
     );
     const independent = recovery?.independent_backup;
+    const standalone = recovery?.standalone_backup;
     const confirmedIndependent = Boolean(
         independent?.enabled &&
         independent.phase === "protected" &&
@@ -139,12 +142,26 @@ export default function StorageView({
         ? priorIndependentSuccess
             ? independent.last_success_at
             : null
-        : status?.backup?.[0]?.status === "confirmed"
+        : standalone || status?.backup?.[0]?.status === "confirmed"
           ? recovery?.last_success_at
           : null;
     const lastBackup = confirmedDate ? new Date(confirmedDate) : null;
+    const lastTrigger =
+        standalone?.last_trigger === "manual"
+            ? "Started by Back Up Now"
+            : standalone?.last_trigger === "scheduled"
+              ? "Started on schedule"
+              : null;
+    const nextEligibleAt = standalone?.next_eligible_at;
+    const independentState = confirmedIndependent
+        ? "Current revision confirmed"
+        : independent?.error
+          ? "Needs attention"
+          : independent?.phase === "syncing"
+            ? "Copying files"
+            : "Awaiting confirmation";
     const label = loading
-        ? "Checking storage…"
+        ? "Checking backup status…"
         : protectedDrive
           ? "Saved to MongoDB"
           : recovery?.state === "error"
@@ -178,88 +195,146 @@ export default function StorageView({
                 className="settings-section storage-protection"
                 aria-labelledby="drive-backup-heading"
             >
-                <div className="storage-protection-heading">
-                    <div
-                        className={
-                            "storage-protection-icon " +
-                            (protectedDrive
-                                ? "is-protected"
-                                : attention
-                                  ? "is-attention"
-                                  : "")
-                        }
-                    >
-                        {protectedDrive ? (
-                            <ShieldCheck size={25} />
-                        ) : attention ? (
-                            <AlertCircle size={25} />
-                        ) : (
-                            <RefreshCw size={25} />
-                        )}
-                    </div>
-                    <div>
-                        <h2 id="drive-backup-heading">Cloud Database</h2>
-                        <p
-                            className={
-                                "drive-backup-state " +
-                                (protectedDrive
-                                    ? "connection-ready"
+                <div className="storage-overview">
+                    <div className="storage-protection-heading">
+                        <div
+                            className="storage-protection-icon"
+                            data-state={
+                                protectedDrive
+                                    ? "protected"
                                     : attention
-                                      ? "danger-text"
-                                      : "")
+                                      ? "attention"
+                                      : "neutral"
                             }
-                            role="status"
+                            aria-hidden="true"
                         >
-                            {(backingUp || (!protectedDrive && !attention)) && (
-                                <Spinner />
+                            {protectedDrive ? (
+                                <ShieldCheck size={24} />
+                            ) : attention ? (
+                                <AlertCircle size={24} />
+                            ) : (
+                                <Database size={24} />
                             )}
-                            {label}
-                        </p>
+                        </div>
+                        <div>
+                            <h2 id="drive-backup-heading">Cloud Database</h2>
+                            <p
+                                className={
+                                    "drive-backup-state " +
+                                    (protectedDrive
+                                        ? "connection-ready"
+                                        : attention
+                                          ? "danger-text"
+                                          : "")
+                                }
+                                role="status"
+                            >
+                                {(loading ||
+                                    backingUp ||
+                                    recovery?.state === "pending") && (
+                                    <Spinner />
+                                )}
+                                {label}
+                            </p>
+                        </div>
                     </div>
-                    <button
-                        className="secondary-button"
-                        disabled={
-                            loading || backingUp || refreshAction.refreshing
-                        }
-                        aria-busy={refreshAction.refreshing}
-                        onClick={() => void refreshStatus()}
-                    >
-                        {refreshAction.refreshing ? (
-                            <Spinner />
-                        ) : (
-                            <RefreshCw size={16} />
+                    <div className="storage-overview-facts">
+                        <p className="backup-confirmation-date">
+                            <span>Last Confirmed Telegram Backup: </span>
+                            <strong>
+                                {lastBackup &&
+                                !Number.isNaN(lastBackup.getTime())
+                                    ? formatTimestamp(confirmedDate)
+                                    : "Not confirmed yet"}
+                            </strong>
+                            {lastTrigger && <span>{lastTrigger}</span>}
+                        </p>
+                        {standalone?.retry_pending && (
+                            <p className="storage-backup-schedule">
+                                <span>Backup publication</span>
+                                <strong>Retry pending</strong>
+                                {standalone.retry_after != null && (
+                                    <span>
+                                        Retry after{" "}
+                                        {formatTimestamp(
+                                            standalone.retry_after,
+                                        )}
+                                    </span>
+                                )}
+                            </p>
                         )}
-                        {refreshAction.refreshing
-                            ? "Refreshing…"
-                            : "Check Again"}
-                    </button>
-                    <button
-                        className="secondary-button"
-                        disabled={
-                            demoMode ||
-                            backingUp ||
-                            loading ||
-                            refreshAction.refreshing ||
-                            !status
-                        }
-                        onClick={() => void backUp()}
-                    >
-                        {backingUp ? <Spinner /> : <RefreshCw size={16} />}
-                        {backingUp ? "Backing up…" : "Back Up Now"}
-                    </button>
+                        {!standalone?.retry_pending &&
+                            nextEligibleAt != null && (
+                                <p className="storage-backup-schedule">
+                                    <span>Next scheduled backup</span>
+                                    <strong>
+                                        {nextEligibleAt <= Date.now() / 1000
+                                            ? "Eligible now"
+                                            : formatTimestamp(nextEligibleAt)}
+                                    </strong>
+                                </p>
+                            )}
+                        {independent?.enabled && (
+                            <p className="storage-independent-state">
+                                <span>Independent backup</span>
+                                <strong
+                                    data-state={
+                                        confirmedIndependent
+                                            ? "protected"
+                                            : independent.error
+                                              ? "attention"
+                                              : "neutral"
+                                    }
+                                >
+                                    {independentState}
+                                </strong>
+                            </p>
+                        )}
+                    </div>
+                    <div className="storage-overview-actions">
+                        <button
+                            type="button"
+                            className="primary-button"
+                            disabled={
+                                demoMode ||
+                                backingUp ||
+                                loading ||
+                                refreshAction.refreshing ||
+                                !status
+                            }
+                            aria-busy={backingUp}
+                            onClick={() => void backUp()}
+                        >
+                            {backingUp ? (
+                                <Spinner />
+                            ) : (
+                                <CloudUpload size={16} aria-hidden="true" />
+                            )}
+                            {backingUp ? "Backing up…" : "Back Up Now"}
+                        </button>
+                        <button
+                            type="button"
+                            className="secondary-button"
+                            disabled={
+                                loading || backingUp || refreshAction.refreshing
+                            }
+                            aria-busy={refreshAction.refreshing}
+                            onClick={() => void refreshStatus()}
+                        >
+                            {refreshAction.refreshing ? (
+                                <Spinner />
+                            ) : (
+                                <RefreshCw size={16} aria-hidden="true" />
+                            )}
+                            {refreshAction.refreshing
+                                ? "Refreshing…"
+                                : "Check Again"}
+                        </button>
+                    </div>
                 </div>
-                <p className="backup-confirmation-date">
-                    Last Confirmed Telegram Backup:{" "}
-                    <strong>
-                        {lastBackup && !Number.isNaN(lastBackup.getTime())
-                            ? formatTimestamp(confirmedDate)
-                            : "Not confirmed yet"}
-                    </strong>
-                </p>
                 <p className="backup-safety-note">
-                    Your catalog is saved in MongoDB; files stay in Telegram.
-                    Encrypted recovery files are created in the background.
-                    Unfinished uploads still need their local files.
+                    MongoDB stores your catalog. Files stay in Telegram. Keep
+                    local files until uploads finish.
                 </p>
                 {independent?.enabled && !confirmedIndependent && (
                     <p role="status" className="backup-safety-note">
@@ -321,6 +396,7 @@ export default function StorageView({
                     rel="noopener noreferrer"
                 >
                     Backup and recovery guide
+                    <ExternalLink size={14} aria-hidden="true" />
                 </a>
             </section>
             <ChannelBackup demoMode={demoMode} onNotice={onNotice} />

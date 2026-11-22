@@ -189,6 +189,7 @@ def test_server_transfer_speed_and_eta_are_visible_and_expire_together(
                         if state == "calculating"
                         else 128 * 1024,
                         "eta_seconds": None,
+                        "retry_at": at + 45 if state == "waiting" else None,
                     }
                 ]
             }
@@ -201,6 +202,7 @@ def test_server_transfer_speed_and_eta_are_visible_and_expire_together(
         has_text="Timed transfer.mp4"
     )
     expect(row.locator(".transfer-phase")).to_have_text("Uploading to Telegram")
+    expect(row).to_have_css("animation-name", "none")
     expect(row.locator(".transfer-speed")).to_have_text("128 KB/s")
     expect(row.locator(".transfer-eta")).to_have_text("About 4s remaining")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -233,7 +235,7 @@ def test_server_transfer_speed_and_eta_are_visible_and_expire_together(
     for state, expected in [
         ("calculating", None),
         ("stale", "No recent progress"),
-        ("waiting", "Waiting for Telegram"),
+        ("waiting", "Retry in"),
     ]:
         mode[0] = state
         page.reload()
@@ -241,6 +243,11 @@ def test_server_transfer_speed_and_eta_are_visible_and_expire_together(
             expect(row.locator(".transfer-metrics")).to_have_text("")
         else:
             expect(row.locator(".transfer-metrics")).to_contain_text(expected)
+        if state == "waiting":
+            expect(row.locator(".transfer-phase")).to_have_text(
+                "Waiting for Telegram · retries automatically"
+            )
+            page.screenshot(path=ARTIFACTS / f"transfer-retry-{width}.png")
         expect(row.locator(".transfer-metrics")).not_to_contain_text("128 KB/s")
         expect(row.locator(".transfer-metrics")).not_to_contain_text("About 4s")
 
@@ -365,5 +372,5 @@ def test_folder_eta_survives_small_file_handoffs_and_publishing(
 
     mode[0] = "waiting"
     batch.get_by_role("button", name="Show Files", exact=True).click()
-    expect(batch).to_contain_text("Waiting for Telegram; retry scheduled")
+    expect(batch).to_contain_text("Waiting for Telegram · retries automatically")
     expect(metrics).not_to_contain_text("remaining")

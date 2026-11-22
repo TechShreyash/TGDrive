@@ -29,6 +29,9 @@ def bot_setup(tmp_path, monkeypatch):
     backend = register_test_backend(monkeypatch, configured)
     runtime = SimpleNamespace(store=store, mongo=backend)
     service = get_bot_settings(configured, runtime)
+    # These tests exercise Telegram-side copy/folder behavior explicitly.
+    service.value = BotUploadPreferences(encrypt=False)
+    service._loaded = True
     mode = BotMode(
         client=cast(Client, FakeBotClient()),
         settings=configured,
@@ -60,7 +63,7 @@ async def test_forwarding_creates_dedicated_default_once_for_all_admins(bot_setu
     assert store.list_directory("/") == {}  # Viewing settings is read-only.
     await asyncio.gather(
         *(
-            bot._file(bot.client, file_message(user_id, identity=100 + user_id))
+            bot._execute_file(bot.client, file_message(user_id, identity=100 + user_id))
             for user_id in (1, 2)
         )
     )
@@ -81,13 +84,13 @@ async def test_website_change_applies_to_next_import_without_restart(bot_setup):
         BotUploadPreferences(folder_path=path, site_url="https://drive.example")
     )
     message = file_message()
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
     assert len(store.list_directory(path)) == 1
     assert "Incoming" in message.status.edit_text.calls[-1][0][0]
     link_message = FakeMessage(2, text="/set_folder")
     await bot._set_folder(bot.client, link_message)
     text, buttons = link_message.replies[-1]
-    assert "https://drive.example" + SETTINGS_LOCATION in text
+    assert "Upload folder" in text
     assert buttons is not None
     assert buttons[0][0].type.url == "https://drive.example" + SETTINGS_LOCATION
     await service.save(BotUploadPreferences(folder_path="/"))
@@ -95,7 +98,7 @@ async def test_website_change_applies_to_next_import_without_restart(bot_setup):
     assert (await service.snapshot())[
         "settings_url"
     ] == "https://drive.example" + SETTINGS_LOCATION
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
     assert any(item["type"] == "file" for item in store.list_directory("/").values())
 
 
@@ -108,7 +111,7 @@ async def test_missing_destination_blocks_import_and_save_rejects_files_and_tras
     await service.save(BotUploadPreferences(folder_path=path))
     store.set_trashed(path, True)
     message = file_message()
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
     assert "/set_folder" in message.replies[-1][0]
     assert store.list_directory("/") == {}
     assert not bot.client.deleted
@@ -149,15 +152,15 @@ async def test_folder_change_during_copy_keeps_inflight_file_in_its_original_fol
         return message.copied
 
     message.copy = copy
-    task = asyncio.create_task(bot._file(bot.client, message))
+    task = asyncio.create_task(bot._execute_file(bot.client, message))
     try:
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 2)
         await service.save(BotUploadPreferences(folder_path=second_path))
         resume.set()
         await task
         assert len(store.list_directory(first_path)) == 1
         assert store.list_directory(second_path) == {}
-        await bot._file(bot.client, file_message(2, identity=120))
+        await bot._execute_file(bot.client, file_message(2, identity=120))
         assert len(store.list_directory(second_path)) == 1
     finally:
         resume.set()
@@ -171,7 +174,7 @@ async def test_blocked_upload_does_not_create_default_folder(bot_setup):
         raise SettingsProblem("Drive protection needs attention")
 
     bot.before_write = block
-    await bot._file(bot.client, file_message())
+    await bot._execute_file(bot.client, file_message())
     assert not store.list_directory("/")
 
 

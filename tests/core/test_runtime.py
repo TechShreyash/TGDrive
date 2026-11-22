@@ -689,6 +689,45 @@ async def test_bot_reconnect_retries_failed_start_without_registering_twice(
 
 
 @pytest.mark.asyncio
+async def test_initial_bot_failure_keeps_drive_ready_and_retries_bot_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = FakePool()
+    pool.pace_send = AsyncMock()
+    pool.defer_channel = AsyncMock()
+    store = new_store(tmp_path / "drive")
+    retry_entered, release = asyncio.Event(), asyncio.Event()
+
+    async def connect_bot():
+        if client.start.await_count == 1:
+            raise ConnectionError("temporary outage")
+        retry_entered.set()
+        await release.wait()
+
+    client = Mock(start=AsyncMock(side_effect=connect_bot), stop=AsyncMock())
+    factory = Mock(return_value=client)
+    runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
+    runtime.backup = cast(MongoProtection, FakeBackup(store))
+    runtime.remote = cast(RemoteClient, FakeRemote())
+    monkeypatch.setattr(runtime_module, "build_bot_mode_client", factory)
+    try:
+        await runtime.start()
+        await asyncio.wait_for(retry_entered.wait(), timeout=3)
+        assert runtime.ready
+        assert runtime.store is store
+        assert runtime._reconnector is not None
+        release.set()
+        await asyncio.wait_for(runtime._reconnector, timeout=3)
+        assert runtime.bot_mode is not None and runtime.bot_mode._started
+        client.register_bot.assert_called_once_with(runtime.bot_mode)
+        factory.assert_called_once_with(runtime.settings)
+        assert runtime.backup.backups == 1
+    finally:
+        release.set()
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
 async def test_empty_database_with_pinned_backup_opens_restore_not_a_new_drive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -879,6 +918,13 @@ async def test_cleanup_drains_transfers_before_pool_even_when_replica_close_fail
         events.append("pool_stopped")
         return ()
 
+    async def stop_bot():
+        events.append("bot_stopped")
+
+    runtime.bot_mode = cast(
+        runtime_module.BotMode, SimpleNamespace(stop=stop_bot, close=lambda: None)
+    )
+
     async def close_replica():
         raise RuntimeError("Synthetic replica cleanup failure")
 
@@ -896,6 +942,7 @@ async def test_cleanup_drains_transfers_before_pool_even_when_replica_close_fail
             await asyncio.sleep(0)
         assert not task.done()
         assert "pool_stopped" not in events
+        assert "bot_stopped" not in events
         assert "owner_released" not in events
         release.set()
         if partial or cancel:
@@ -905,7 +952,12 @@ async def test_cleanup_drains_transfers_before_pool_even_when_replica_close_fail
             failures = await task
             assert failures is not None and len(failures) == 1
             assert str(failures[0]) == "Synthetic replica cleanup failure"
-        assert events == ["transfers_closed", "pool_stopped", "owner_released"]
+        assert events == [
+            "transfers_closed",
+            "bot_stopped",
+            "pool_stopped",
+            "owner_released",
+        ]
         assert runtime._owner_lock is None and not runtime._mongo_acquired
     finally:
         release.set()

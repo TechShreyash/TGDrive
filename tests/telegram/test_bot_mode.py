@@ -137,7 +137,7 @@ async def test_photo_upload_gets_fallback_name_and_metadata(tmp_path: Path) -> N
     )
     message = FakeMessage(1, copied=copied)
 
-    await mode._file(cast(Client, client), message)
+    await mode._execute_file(cast(Client, client), message)
 
     item = next(iter(store.list_directory("/").values()))
     assert item["name"].startswith("photo-")
@@ -165,7 +165,7 @@ async def test_bot_upload_preserves_copy_when_metadata_fails(
         raise RuntimeError("disk full")
 
     monkeypatch.setattr(store, "add_file", fail)
-    await mode._file(cast(Client, client), message)
+    await mode._execute_file(cast(Client, client), message)
 
     assert client.deleted == []
     assert not store.list_directory("/")
@@ -223,7 +223,7 @@ async def test_bot_import_guard_before_copy_and_after_copy_preserves_metadata(
         before_delete=verify_delete,
     )
     try:
-        await mode._file(cast(Client, client), FakeMessage(1, copied=copied))
+        await mode._execute_file(cast(Client, client), FakeMessage(1, copied=copied))
         assert checks == 2 and verified == [True] and client.deleted == [57]
         assert not store.list_directory("/")
         assert mode.active_imports == 0
@@ -250,7 +250,7 @@ async def test_bot_rollback_does_not_delete_after_lineage_conflict(tmp_path):
         before_delete=verify_delete,
     )
     try:
-        await mode._file(cast(Client, client), FakeMessage(1, copied=copied))
+        await mode._execute_file(cast(Client, client), FakeMessage(1, copied=copied))
         assert client.deleted == []
         assert not store.list_directory("/")
         assert mode.active_imports == 0
@@ -272,7 +272,7 @@ async def test_bot_active_import_counter_covers_copy_and_cancellation(tmp_path):
         await asyncio.Event().wait()
 
     message.copy = copy
-    task = asyncio.create_task(mode._file(cast(Client, client), message))
+    task = asyncio.create_task(mode._execute_file(cast(Client, client), message))
     try:
         await entered.wait()
         assert mode.active_imports == 1
@@ -303,7 +303,7 @@ async def test_success_feedback_names_actual_file_when_a_duplicate_is_renamed(bo
         id=59, document=SimpleNamespace(file_name="report.txt", file_size=3)
     )
     message = FakeMessage(1, copied=copied)
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
     names = {item["name"] for item in bot.store.list_directory("/").values()}
     actual = next(name for name in names if name != "report.txt")
     assert actual in message.status.edit_text.calls[-1][0][0]
@@ -319,7 +319,7 @@ async def test_failed_success_message_edit_does_not_roll_back_committed_upload(b
         raise RuntimeError("message cannot be edited")
 
     message.status.edit_text = fail
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
     assert len(bot.store.list_directory("/")) == 1
     assert not bot.client.deleted
     assert message.replies[-1][0].startswith("<b>Saved ✓</b>")
@@ -334,7 +334,7 @@ async def test_paused_upload_explains_how_to_resume_without_copying(bot):
 
     bot.before_write = guard
     message = FakeMessage(1)
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
     assert "Connection restart required" in message.replies[-1][0]
     assert "Open TGDrive" in message.replies[-1][0]
     assert not bot.store.list_directory("/")
@@ -359,7 +359,7 @@ async def test_copy_failures_give_specific_recovery_instructions(bot, failure):
         raise error
 
     message.copy = fail
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
     assert expected in message.status.edit_text.calls[-1][0][0]
     assert not bot.store.list_directory("/")
     assert bot.active_imports == 0
@@ -374,7 +374,7 @@ async def test_uncertain_rollback_asks_user_to_check_drive_before_resending(bot)
 
     bot.before_delete = block_delete
     message = FakeMessage(1, copied=SimpleNamespace(id=61))  # No usable media.
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
     feedback = message.status.edit_text.calls[-1][0][0]
     assert "could not be confirmed" in feedback
     assert "before resending" in feedback
@@ -411,7 +411,7 @@ async def test_bot_preserves_saved_media_after_lost_commit_acknowledgement(
         ),
     )
     try:
-        await mode._file(cast(Client, client), message)
+        await mode._execute_file(cast(Client, client), message)
         assert mongo_backend.db.nodes.find_one({"message_id": 62}) is not None
         assert client.deleted == []
         assert "could not be confirmed" in message.status.edit_text.calls[-1][0][0]
@@ -433,7 +433,7 @@ async def test_bot_repeated_file_forwards_and_same_message_replay(bot, same_mess
             ),
         )
         message.id = incoming_id
-        await bot._file(bot.client, message)
+        await bot._execute_file(bot.client, message)
         assert message.status.edit_text.calls[-1][0][0].startswith("<b>Saved ✓</b>")
 
     names = {item["name"] for item in bot.store.list_directory("/").values()}
@@ -456,7 +456,7 @@ async def test_bot_operation_identity_survives_token_rotation_and_bot_replacemen
             id=80, document=SimpleNamespace(file_name="report.txt", file_size=3)
         ),
     )
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
     bot_id = "123456" if same_account else "654321"
     configured = bot.settings.model_copy(
         update={"main_bot_token": SecretStr(bot_id + ":" + "z" * 30)}
@@ -470,7 +470,7 @@ async def test_bot_operation_identity_survives_token_rotation_and_bot_replacemen
     )
     try:
         replay = FakeMessage(1, copied=copied)
-        await replacement._file(replacement.client, replay)
+        await replacement._execute_file(replacement.client, replay)
         assert len(bot.store.list_directory("/")) == (1 if same_account else 2)
         assert replay.status.edit_text.calls[-1][0][0].startswith("<b>Saved ✓</b>")
         assert cast(FakeBotClient, replacement.client).deleted == []
@@ -488,7 +488,7 @@ async def test_bot_replay_preserves_saved_media_when_write_guard_pauses(bot):
             id=92, document=SimpleNamespace(file_name="saved.txt", file_size=3)
         ),
     )
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
     checks = 0
 
     def pause():
@@ -498,7 +498,7 @@ async def test_bot_replay_preserves_saved_media_when_write_guard_pauses(bot):
             raise SettingsProblem("Connection restart required")
 
     bot.before_write = pause
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
 
     assert checks == 2
     assert len(bot.store.list_directory("/")) == 1
@@ -568,6 +568,7 @@ async def test_progress_edits_are_throttled_by_time_percent_and_flood_wait(bot):
 
 class FakeTransfers:
     def __init__(self, *, fail: str | None = None) -> None:
+        self.registry = SimpleNamespace(list=lambda: [])
         self.fail = fail
         self.calls = 0
 
@@ -623,7 +624,7 @@ async def test_encrypted_import_reports_saved_file_with_open_button(tmp_path):
     message = FakeMessage(1)
     message.document = SimpleNamespace(file_name="movie.mkv", file_size=3 * 1024**2)
     try:
-        await mode._file(mode.client, message)
+        await mode._execute_file(mode.client, message)
         assert message.replies[0] == (
             "<b>Saving…</b>\nFolder · <code>My Files / Inbox</code>",
             None,
@@ -651,7 +652,7 @@ async def test_encrypted_import_failure_explains_where_to_retry(tmp_path):
     message = FakeMessage(1)
     message.document = SimpleNamespace(file_name="movie.mkv", file_size=3)
     try:
-        await mode._file(mode.client, message)
+        await mode._execute_file(mode.client, message)
         text = message.status.edit_text.calls[-1][0][0]
         assert "Telegram rejected it" in text and "Transfers in TGDrive" in text
     finally:
@@ -681,7 +682,7 @@ async def test_bot_encryption_unavailable_never_falls_back_to_plaintext(bot):
         return_value=SimpleNamespace(id=333, document=message.document)
     )
 
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
 
     message.copy.assert_not_awaited()
     assert "encrypted" in message.replies[-1][0].lower()
@@ -773,7 +774,7 @@ async def test_bot_cancel_cannot_select_another_private_chats_import(bot):
     await bot._cancel(bot.client, message)
 
     cancel.assert_not_awaited()
-    assert "<b>No matching encrypted import</b>" in message.replies[-1][0]
+    assert "<b>No matching bot import</b>" in message.replies[-1][0]
 
 
 @pytest.mark.asyncio
@@ -809,7 +810,7 @@ async def test_start_is_short_and_help_keeps_commands_and_safety_guidance(
         for command in ("/current_folder", "/set_folder", "/cancel")
     )
     assert "reply to the original file" in help_text
-    assert "encrypted import" in help_text and "full quality" in help_text
+    assert "Cancel imports in Transfers" in help_text and "full quality" in help_text
     assert welcome.reply_modes == help_message.reply_modes == ["html"]
 
 
@@ -868,7 +869,7 @@ async def test_paused_copy_escapes_error_details_without_copying(bot):
     bot.before_write = pause
     message = FakeMessage(1)
     message.copy = AsyncMock()
-    await bot._file(bot.client, message)
+    await bot._execute_file(bot.client, message)
     text = message.replies[-1][0]
     plain, entities = telegram_html.parse(text)
     assert detail in plain and "Upload paused" in plain

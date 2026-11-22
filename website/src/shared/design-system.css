@@ -112,6 +112,29 @@
     color: var(--muted);
     border-color: var(--line);
 }
+.mantine-Switch-input + .mantine-Switch-track {
+    --switch-bg: var(--surface-subtle);
+    --switch-text-color: var(--ink);
+    --switch-thumb-bg: var(--muted);
+    border: 1px solid var(--muted);
+    transition: none;
+}
+.mantine-Switch-input:checked:enabled + .mantine-Switch-track {
+    --switch-bg: var(--action);
+    --switch-text-color: var(--on-action);
+    --switch-thumb-bg: var(--on-action);
+    border-color: transparent;
+}
+.mantine-Switch-input:disabled + .mantine-Switch-track {
+    --switch-bg: var(--surface-subtle);
+    --switch-text-color: var(--muted);
+}
+.mantine-Switch-track .mantine-Switch-thumb {
+    --switch-thumb-bg-disabled: var(--muted);
+}
+.mantine-Switch-input:focus-visible + .mantine-Switch-track {
+    outline-color: var(--action);
+}
 @media (max-width: 720px), (pointer: coarse) {
     .configuration-value input.mantine-NumberInput-input,
     .performance-field input.mantine-TextInput-input {
@@ -492,6 +515,27 @@ input,
 select,
 textarea {
     font-family: var(--font-ui);
+}
+[data-mantine-color-scheme]
+    .mantine-NativeSelect-wrapper[data-variant="default"]:not(
+        :where(.file-preview *)
+    ) {
+    --input-bg: var(--surface);
+    --input-bd: var(--input-line);
+    --input-bd-focus: var(--action);
+    --input-disabled-bg: var(--surface-subtle);
+    --input-disabled-color: var(--muted);
+}
+.mantine-NativeSelect-input:focus-visible:not(:where(.file-preview *)) {
+    outline: 2px solid var(--action);
+    outline-offset: 3px;
+}
+@media (hover: hover) {
+    .mantine-NativeSelect-input:hover:not(
+            :where(:disabled, :focus, [aria-invalid="true"], .file-preview *)
+        ) {
+        border-color: var(--muted);
+    }
 }
 .drive-nav a:hover:not([aria-current]) {
     background: var(--hover);

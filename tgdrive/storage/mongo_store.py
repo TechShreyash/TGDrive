@@ -78,6 +78,7 @@ _TABLES = ("nodes", "shares", "operations", "deletions", "preparations")
 # Finished bookkeeping and expired links are removed by MongoDB TTL indexes.
 _RECORD_RETENTION = timedelta(days=7)
 _EXPIRED_SHARE_RETENTION = timedelta(days=30)
+_SHARE_OPEN_RETRY_WINDOW = timedelta(days=1)
 _COUNTERS = ("files", "folders", "total_bytes", "trashed_files", "trashed_bytes")
 _BATCH = 1000
 # File type groups for listing filters; the web UI's chips use the same
@@ -220,6 +221,29 @@ def _decode_cursor(value, sort):
 
 class ShareDenied(PermissionError):
     """A share token does not cover the requested folder."""
+
+
+class SharePasswordRequired(PermissionError):
+    """A valid, in-scope share needs a current password unlock."""
+
+
+def _validate_share_password_hash(value):
+    from argon2 import Type, extract_parameters
+    from argon2.exceptions import InvalidHashError
+
+    if not isinstance(value, str) or len(value) > 255:
+        raise ValidationError("Invalid share password hash")
+    try:
+        parameters = extract_parameters(value)
+    except (InvalidHashError, ValueError) as exc:
+        raise ValidationError("Invalid share password hash") from exc
+    if (
+        parameters.type is not Type.ID
+        or not 19456 <= parameters.memory_cost <= 65536
+        or not 2 <= parameters.time_cost <= 4
+        or not 1 <= parameters.parallelism <= 4
+    ):
+        raise ValidationError("Unsupported share password hash")
 
 
 class MongoStore:
@@ -392,6 +416,7 @@ class MongoStore:
         backend.db.shares.create_index("token_hash", unique=True)
         backend.db.shares.create_index("node_id")
         backend.db.shares.create_index("expire_at", expireAfterSeconds=0)
+        backend.db.share_open_events.create_index("expire_at", expireAfterSeconds=0)
         backend.db.operations.create_index("node_id")
         backend.db.operations.create_index("expire_at", expireAfterSeconds=0)
         backend.db.deletions.create_index("root_id")
@@ -513,7 +538,7 @@ class MongoStore:
     def cache_metadata_page(self, after_id, source_keys):
         """One small catalog page; return display labels, never access grants."""
         if after_id is not None:
-            _validate_id(after_id)
+            _validate_id(after_id, allow_root=True)
         wanted = {
             (_strict_int(message_id, "message_id", 1), _strict_int(size, "size", 0))
             for message_id, size in source_keys
@@ -975,6 +1000,7 @@ class MongoStore:
         after=None,
         group=None,
         share_token=None,
+        share_unlock=None,
         around=None,
     ):
         """One indexed page of a folder; folders first, then the sort field.
@@ -1015,7 +1041,7 @@ class MongoStore:
             self._visible(chain)
             home = None
             if share_token is not None:
-                home = self._authorized(chain, share_token)
+                home = self._authorized(chain, share_token, share_unlock)
                 if home is None:
                     raise ShareDenied("Invalid share link")
             direction = ASCENDING if order == "asc" else DESCENDING
@@ -1140,12 +1166,17 @@ class MongoStore:
                 result["share_home"] = home
             return result
 
-    def get_file(self, path, *, include_trashed=False, share_token=None):
+    def get_file(
+        self, path, *, include_trashed=False, share_token=None, share_unlock=None
+    ):
         with self._transaction():
             node, path, chain = self._resolve(path, full=True)
             if node["kind"] != "file":
                 raise NotFileError("Not a file")
-            if share_token is not None and self._authorized(chain, share_token) is None:
+            if (
+                share_token is not None
+                and self._authorized(chain, share_token, share_unlock) is None
+            ):
                 raise ShareDenied("Invalid share link")
             self._visible(chain, include_trashed)
             return self._file(node, path)
@@ -2140,6 +2171,7 @@ class MongoStore:
         token_factory=None,
         label="",
         replace_existing=False,
+        password_hash=None,
     ):
         expiry = (
             self._default_share_expiry()
@@ -2149,6 +2181,8 @@ class MongoStore:
             else None
         )
         label = _share_label(label)
+        if password_hash is not None:
+            _validate_share_password_hash(password_hash)
         created = _utc_now()
         if expiry is not None and expiry <= created:
             raise ValidationError("Share expiry must be in the future")
@@ -2172,7 +2206,10 @@ class MongoStore:
                 "token_hash": hashlib.sha256(token.encode()).hexdigest(),
                 "created_at": created,
                 "expires_at": expiry,
+                "open_count": 0,
+                "opens_since": created,
                 **({"label": label} if label else {}),
+                **({"password_hash": password_hash} if password_hash else {}),
             }
             if expiry is not None:
                 row["expire_at"] = _expiry_date(expiry) + _EXPIRED_SHARE_RETENTION
@@ -2214,6 +2251,9 @@ class MongoStore:
             "size": node.get("size"),
             "folder_path": path.rsplit("/", 1)[0] or "/",
             "folder_label": " / ".join(["My Files", *(n["name"] for n in chain[1:-1])]),
+            "password_required": bool(row.get("password_hash")),
+            "open_count": row.get("open_count", 0),
+            "opens_since": row.get("opens_since"),
             "copyable": bool(
                 factory
                 and hmac.compare_digest(
@@ -2223,10 +2263,19 @@ class MongoStore:
             ),
         }
 
-    def update_share(self, share_id, *, label=_SHARE_UNSET, expires_at=_SHARE_UNSET):
+    def update_share(
+        self,
+        share_id,
+        *,
+        label=_SHARE_UNSET,
+        expires_at=_SHARE_UNSET,
+        password_hash=_SHARE_UNSET,
+    ):
         if label is not _SHARE_UNSET:
             label = _share_label(label)
         expiry = expires_at
+        if password_hash is not _SHARE_UNSET and password_hash is not None:
+            _validate_share_password_hash(password_hash)
         if expires_at is not _SHARE_UNSET and expires_at is not None:
             expiry = _validate_timestamp(expires_at)
             if expiry <= _utc_now():
@@ -2239,7 +2288,7 @@ class MongoStore:
             self._visible(chain)
             self._demo_mutable(chain, descendants=True)
             self._mutable(chain)
-            if label is _SHARE_UNSET and expiry is _SHARE_UNSET:
+            if label is expiry is password_hash is _SHARE_UNSET:
                 return
             change, unset = {}, {}
             if expiry is not _SHARE_UNSET:
@@ -2255,6 +2304,11 @@ class MongoStore:
                     change["label"] = label
                 else:
                     unset["label"] = ""
+            if password_hash is not _SHARE_UNSET:
+                if password_hash is None:
+                    unset["password_hash"] = ""
+                else:
+                    change["password_hash"] = password_hash
             update = {"$set": change} if change else {}
             if unset:
                 update["$unset"] = unset
@@ -2280,40 +2334,89 @@ class MongoStore:
                 self._bump()
             return bool(removed)
 
-    def _authorized(self, chain, token):
-        if (
-            not isinstance(token, str)
-            or not token
-            or len(token) > 1024
-            or self._hidden(chain)
-        ):
+    def _active_share(self, token):
+        if not isinstance(token, str) or not token or len(token) > 1024:
             return None
         # The token's SHA-256 is the indexed lookup key; the token never is.
         row = self._one(
             "shares", {"token_hash": hashlib.sha256(token.encode()).hexdigest()}
         )
-        ids = [item["_id"] for item in chain]
-        if (
-            row is None
-            or row["node_id"] not in ids
-            or (row["expires_at"] is not None and row["expires_at"] <= _utc_now())
-        ):
+        return (
+            None
+            if (
+                row is None
+                or (row["expires_at"] is not None and row["expires_at"] <= _utc_now())
+            )
+            else row
+        )
+
+    def share_password_hash(self, token):
+        with self._transaction():
+            row = self._active_share(token)
+            if row is None or self._hidden(self._ancestors(row["node_id"])):
+                raise ShareDenied("Invalid share link")
+            value = row.get("password_hash")
+            if value is not None:
+                _validate_share_password_hash(value)
+            return value
+
+    def _authorized_share(self, chain, token, unlock):
+        if self._hidden(chain):
             return None
+        row = self._active_share(token)
+        if row is None or not any(item["_id"] == row["node_id"] for item in chain):
+            return None
+        if "password_hash" in row and (
+            unlock is None
+            or not isinstance(row["password_hash"], str)
+            or not unlock(row["password_hash"])
+        ):
+            raise SharePasswordRequired("This link requires a password.")
+        return row
+
+    def _authorized(self, chain, token, unlock=None):
+        row = self._authorized_share(chain, token, unlock)
+        if row is None:
+            return None
+        ids = [item["_id"] for item in chain]
         return self._chain_path(chain[: ids.index(row["node_id"]) + 1])
 
-    def authorize_directory(self, path, token):
+    def record_share_open(self, path, token, event_id, *, share_unlock=None):
+        # Unknown tokens do not enter the write transaction.
+        if self._active_share(token) is None:
+            raise ShareDenied("Invalid share link")
+        with self._transaction(write=True):
+            _, _, chain = self._resolve(path)
+            row = self._authorized_share(chain, token, share_unlock)
+            if row is None:
+                raise ShareDenied("Invalid share link")
+            key = hashlib.sha256(f"{row['id']}:{event_id}".encode()).hexdigest()
+            if self._one("share_open_events", {"_id": key}):
+                return
+            self.db.share_open_events.insert_one(
+                {"_id": key, "expire_at": datetime.now(UTC) + _SHARE_OPEN_RETRY_WINDOW},
+                session=self._session,
+            )
+            update: dict[str, Any] = {"$inc": {"open_count": 1}}
+            if "opens_since" not in row:
+                update["$set"] = {"opens_since": _utc_now()}
+            self.db.shares.update_one({"_id": row["id"]}, update, session=self._session)
+            # Keep normal catalog backup scheduling independent of public traffic.
+            self._local.changed = True
+
+    def authorize_directory(self, path, token, *, share_unlock=None):
         with self._transaction():
             node, _, chain = self._resolve(path)
             if node["kind"] != "folder":
                 raise NotDirectoryError("Not a directory")
-            return self._authorized(chain, token)
+            return self._authorized(chain, token, share_unlock)
 
-    def authorize_file(self, path, token):
+    def authorize_file(self, path, token, *, share_unlock=None):
         with self._transaction():
             node, _, chain = self._resolve(path)
             if node["kind"] != "file":
                 raise NotFileError("Not a file")
-            return self._authorized(chain, token) is not None
+            return self._authorized(chain, token, share_unlock) is not None
 
     # ----------------------------------------------------------- deletions
 
@@ -2742,7 +2845,12 @@ class MongoStore:
 
     @staticmethod
     def _validate_share_record(share: object) -> dict[str, Any]:
-        if not isinstance(share, dict) or set(share) - {"label"} != {
+        if not isinstance(share, dict) or set(share) - {
+            "label",
+            "password_hash",
+            "open_count",
+            "opens_since",
+        } != {
             "id",
             "node_id",
             "token_hash",
@@ -2753,6 +2861,12 @@ class MongoStore:
         _validate_id(share["id"])
         _validate_id(share["node_id"], allow_root=True)
         _validate_share_hashes([share["token_hash"]])
+        if "password_hash" in share:
+            _validate_share_password_hash(share["password_hash"])
+        if "open_count" in share:
+            _strict_int(share["open_count"], "share open count")
+        if "opens_since" in share:
+            _validate_timestamp(share["opens_since"])
         created = _validate_timestamp(share["created_at"])
         expiry = (
             _validate_timestamp(share["expires_at"])

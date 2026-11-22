@@ -144,18 +144,19 @@
     font-variant-numeric: tabular-nums;
     overflow-wrap: anywhere;
 }
-.performance-facts small {
-    display: block;
+.performance-facts dd + dd {
     margin-top: 7px;
     color: var(--muted);
     font-size: 12px;
+    font-weight: 400;
     line-height: 1.6;
+    text-align: start;
 }
 .performance-section {
     margin-top: 28px;
 }
 
-/* Applied limits are grouped within one disclosure. */
+/* Automatic limits grouped by what they affect. */
 .tuning-intro {
     color: var(--muted);
     font-size: 13.5px;
@@ -195,31 +196,25 @@
     border: 0;
 }
 .tuning-fact-item {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-}
-.tuning-fact-top {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
     align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-}
-.tuning-fact-top dt {
+    gap: 3px 12px;
     font-size: 13px;
+    color: var(--ink);
+}
+.tuning-fact-item dt {
     font-weight: 550;
-    color: var(--ink);
-    margin: 0;
 }
-.tuning-fact-top dd {
-    font-size: 13.5px;
+.tuning-fact-item dd {
+    margin: 0;
     font-weight: 650;
-    color: var(--ink);
     font-variant-numeric: tabular-nums;
-    margin: 0;
 }
-.tuning-fact-detail {
-    font-size: 11.5px;
+.tuning-fact-item .tuning-fact-detail {
+    grid-column: 1 / -1;
+    font-size: 12px;
+    font-weight: 400;
     color: var(--muted);
     line-height: 1.45;
 }
@@ -326,29 +321,6 @@
     font-size: 12px;
     color: var(--muted);
 }
-.performance-workload {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px 24px;
-    margin: 12px 0;
-}
-.performance-workload > div {
-    min-width: 0;
-    padding-inline-start: 12px;
-    border-inline-start: 1px solid var(--line);
-}
-.performance-workload dt {
-    color: var(--muted);
-    font-size: 12px;
-    margin-bottom: 2px;
-}
-.performance-workload dd {
-    margin: 0;
-    color: var(--ink);
-    font-size: 24px;
-    font-weight: 650;
-    font-variant-numeric: tabular-nums;
-}
 .performance-waits {
     grid-column: 1 / -1;
     list-style: none;
@@ -413,7 +385,7 @@
 .performance-overview-grid .performance-facts dd {
     font-size: 14px;
 }
-.performance-overview-grid .performance-facts small {
+.performance-overview-grid .performance-facts dd + dd {
     grid-column: 1 / -1;
     margin: 0;
 }
@@ -664,37 +636,16 @@
 .performance-all-time h3 {
     margin-bottom: 8px;
 }
-.performance-chart-legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 20px;
-    margin: 0 0 12px;
-    font-size: 12px;
-    color: var(--muted);
-}
-.performance-chart-legend > span::before {
-    width: 20px;
-    height: 0;
-    border-radius: 0;
-    background: transparent;
-    border-top: 2px solid var(--action);
-}
-.performance-chart-legend > .chart-series-secondary::before {
-    background: transparent;
-    border-top: 2px dashed var(--muted);
-}
 .performance-chart-plot {
     position: relative;
-}
-.performance-chart-plot > svg {
-    cursor: crosshair;
 }
 .performance-chart-tooltip {
     position: absolute;
     display: grid;
     gap: 3px;
-    width: 280px;
-    max-width: calc(100% - 16px);
+    inset-block-start: 4px;
+    max-width: calc(100% - 8px);
+    overflow-wrap: anywhere;
     padding: 8px 10px;
     border: 1px solid var(--line);
     border-radius: 6px;
@@ -705,6 +656,32 @@
     box-shadow: 0 2px 8px #00000015;
     pointer-events: none;
     font-variant-numeric: tabular-nums;
+}
+.performance-chart-tooltip[data-side="start"] {
+    inset-inline-start: 4px;
+}
+.performance-chart-tooltip[data-side="end"] {
+    inset-inline-end: 4px;
+}
+.performance-chart-tooltip-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 12px;
+}
+.performance-chart-tooltip-scope {
+    color: var(--muted);
+}
+.performance-chart-inspect.mantine-UnstyledButton-root {
+    grid-area: 1 / 2;
+    min-width: 0;
+    border-radius: 4px;
+    cursor: crosshair;
+    touch-action: pan-y pinch-zoom;
+}
+.performance-chart-inspect:focus-visible {
+    outline: 2px solid var(--action);
+    outline-offset: 2px;
 }
 @media (max-width: 620px) {
     .performance-history-controls {
@@ -768,6 +745,7 @@
     top: 86.15%;
 }
 .performance-chart-plot > svg {
+    grid-area: 1 / 2;
     display: block;
     height: 100%;
     width: 100%;
@@ -806,65 +784,6 @@
     color: var(--muted);
     font-size: 11px;
     font-variant-numeric: tabular-nums;
-}
-.performance-chart .performance-chart-scrubber {
-    display: block;
-}
-.performance-metric-chart .performance-chart-scrubber input[type="range"] {
-    appearance: none;
-    width: 100%;
-    border: 0;
-    padding: 0;
-    background: transparent;
-    min-height: 28px;
-    margin: 6px 0 0;
-    accent-color: var(--action);
-    cursor: pointer;
-}
-.performance-chart-scrubber input[type="range"]::-webkit-slider-runnable-track {
-    height: 2px;
-    background: var(--line);
-}
-.performance-chart-scrubber input[type="range"]::-webkit-slider-thumb {
-    appearance: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--muted);
-    margin-top: -5px;
-}
-.performance-chart-scrubber input[type="range"]::-moz-range-track {
-    height: 2px;
-    background: var(--line);
-}
-.performance-chart-scrubber input[type="range"]::-moz-range-progress {
-    height: 2px;
-    background: var(--line);
-}
-.performance-chart-scrubber input[type="range"]::-moz-range-thumb {
-    width: 12px;
-    height: 12px;
-    border: 0;
-    border-radius: 50%;
-    background: var(--muted);
-}
-.performance-chart-readout {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px 16px;
-    color: var(--muted);
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-}
-.performance-chart-readout strong {
-    color: var(--ink);
-    font-weight: 500;
-    margin-left: 5px;
-}
-.performance-chart-readout .text-button {
-    min-height: 32px;
-    padding: 4px 8px;
 }
 .chart-series-primary::before,
 .chart-series-secondary::before {
@@ -1185,10 +1104,7 @@
     .performance-page > .performance-section-heading {
         flex-wrap: wrap;
         gap: 12px;
-        align-items: flex-start;
-    }
-    .performance-page > .performance-section-heading > div:first-child {
-        flex-basis: 100%;
+        align-items: center;
     }
     .performance-page .performance-history-controls {
         flex-wrap: nowrap;
@@ -1273,7 +1189,7 @@
         text-align: end;
         font-size: 14px;
     }
-    .performance-facts small {
+    .performance-facts dd + dd {
         grid-column: 1 / -1;
         margin-top: 0;
     }
@@ -1377,17 +1293,8 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 @media (max-width: 720px) {
-    .performance-page > .performance-toolbar {
-        gap: 12px;
-    }
-    .performance-page > .performance-toolbar .performance-view-tabs {
-        flex-basis: auto;
-    }
-    .performance-toolbar[data-view="telegram"] .performance-history-controls {
+    .performance-toolbar > .performance-history-controls {
         width: auto;
-    }
-    .performance-toolbar[data-view="telegram"] .performance-view-tabs {
-        flex: 1;
     }
     .performance-memory-details {
         grid-template-columns: 1fr;
@@ -1400,21 +1307,9 @@
     }
 }
 
-@media (max-width: 720px) {
-    .performance-page
-        > .performance-toolbar[data-view="telegram"]
-        > .performance-view-tabs {
-        flex: 1 1 auto;
-    }
-}
-
 .performance-history-availability {
     margin: 0 0 16px;
     line-height: 1.6;
-}
-.performance-chart-readout {
-    margin-top: 16px;
-    row-gap: 8px;
 }
 .performance-metric-chart .performance-chart-note {
     margin-top: 14px;

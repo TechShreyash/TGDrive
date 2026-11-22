@@ -1332,7 +1332,7 @@ def test_preview_and_media_require_owner_or_in_scope_share(app_client):
 
 def test_unsupported_preview_does_not_open_telegram(app_client):
     client, store, _runtime, _settings = app_client
-    item = store.add_file("/", "archive.zip", 7, 123)
+    item = store.add_file("/", "archive.7z", 7, 123)
     login(client)
     response = client.get("/api/v1/preview", params={"path": "/" + item["id"]})
     assert response.status_code == 200

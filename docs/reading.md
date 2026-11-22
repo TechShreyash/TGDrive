@@ -48,8 +48,10 @@ Owners and independently authenticated demo administrators save PDF pages in
 MongoDB for use across devices. Anonymous share and public-demo positions stay
 in separate browser-local storage; a share token cannot read owner progress.
 Only the page is restored, not zoom or layout. Failed saves do not block reading
-or create a local owner fallback. Closing saves are best effort; navigate to
-choose a new saved page if old progress is unavailable.
+or create a local owner fallback. Reopening in the same tab waits for a pending
+close save before reading the saved page. Closing saves are best effort when
+leaving the site. Navigate to choose a new saved page if old progress is
+unavailable.
 
 ## Bandwidth and compatibility
 

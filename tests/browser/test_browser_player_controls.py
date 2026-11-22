@@ -41,6 +41,71 @@ def _serve_media(
     page.route("**/file?*", serve)
 
 
+@pytest.mark.parametrize("clipboard", ["allowed", "blocked"])
+def test_playback_diagnostics_copy_or_select_without_file_identity(
+    server, desktop, clipboard
+):
+    _, page = desktop
+    page.set_viewport_size(
+        {"width": 390 if clipboard == "blocked" else 1536, "height": 844}
+    )
+    page.add_init_script(
+        "window.blockDiagnosticsClipboard = "
+        + ("true" if clipboard == "blocked" else "false")
+    )
+    page.add_init_script("""(() => {
+      Object.defineProperty(navigator, "clipboard", {value: {
+        writeText: text => {
+          if (window.blockDiagnosticsClipboard) {
+            return Promise.reject(new DOMException("Denied", "NotAllowedError"));
+          }
+          window.copiedDiagnostics = text;
+          return Promise.resolve();
+        }
+      }});
+    })()""")
+    _serve_media(page, (ROOT / "tests/fixtures/multitrack.mkv").read_bytes())
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    page.get_by_role("button", name="multitrack.mkv", exact=True).dblclick()
+    player = page.locator("movi-player")
+    page.wait_for_function("() => document.querySelector('movi-player')?.duration > 0")
+    player.locator(".movi-settings-btn").click()
+    action = player.get_by_role("button", name="Copy playback diagnostics", exact=True)
+    action.press("Enter")
+    if clipboard == "blocked":
+        dialog = page.get_by_role("dialog", name="Playback diagnostics", exact=True)
+        field = dialog.get_by_role("textbox", name="Playback diagnostics", exact=True)
+        expect(field).to_be_focused()
+        report = field.input_value()
+        assert field.evaluate("node => node.selectionEnd - node.selectionStart") == len(
+            report
+        )
+        page.screenshot(path=ARTIFACTS / "playback-diagnostics-fallback.png")
+        field.press("Escape")
+        expect(dialog).to_have_count(0)
+        expect(player).to_be_visible()
+    else:
+        expect(
+            page.get_by_text("Playback diagnostics copied.", exact=True)
+        ).to_be_visible()
+        report = page.evaluate("window.copiedDiagnostics")
+    for label in (
+        "Build",
+        "Mode",
+        "Container",
+        "Video codec",
+        "Position",
+        "Rate",
+        "Buffered time ranges",
+    ):
+        assert label + ":" in report
+    assert re.search(r"Build: [\d.]+ \([A-Za-z0-9_-]+\)", report)
+    assert "Matroska" in report
+    assert "multitrack.mkv" not in report and server.url not in report
+    assert "auth=" not in report and "path=" not in report
+
+
 def test_chapters_belong_to_autohiding_player_controls(
     server: Server, desktop: tuple[Any, Any], tmp_path: Path
 ) -> None:
@@ -88,17 +153,20 @@ def test_chapters_belong_to_autohiding_player_controls(
     player.evaluate("""element => {
       element.__previewFrameReads = 0;
       const preview = element.player.getPreviewFrame.bind(element.player);
+      const released = new Promise(resolve => {
+        element.__releaseChapterPreviews = resolve;
+      });
       element.player.getPreviewFrame = (...args) => {
         element.__previewFrameReads++;
-        return preview(...args);
+        return released.then(() => preview(...args));
       };
     }""")
+    assert player.evaluate("element => element.__previewFrameReads") == 0
     chapter.click()
     panel = player.get_by_role("region", name="Chapters", exact=True)
     expect(panel).to_be_visible()
     expect(panel.locator(".movi-timeline-noframe")).to_have_count(2)
     expect(panel.locator("img")).to_have_count(0)
-    assert player.evaluate("element => element.__previewFrameReads") == 0
     expect(
         panel.get_by_role("button", name="Second chapter 0:02", exact=True)
     ).to_be_visible()
@@ -107,6 +175,7 @@ def test_chapters_belong_to_autohiding_player_controls(
     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
     expect(panel).to_be_visible()
     page.screenshot(path=ARTIFACTS / "chapters-integrated-mobile.png", full_page=False)
+    player.evaluate("element => element.__releaseChapterPreviews()")
     panel.get_by_role("button", name="Second chapter 0:02", exact=True).click()
     expect(panel).to_be_visible()
     page.wait_for_function(
@@ -245,8 +314,9 @@ def test_seek_audio_exceptions_do_not_deadlock(
     assert page.evaluate("window.exceptionSeeks") == 1
 
 
+@pytest.mark.parametrize("early_wait", [False, True], ids=["watchdog", "waiting-event"])
 def test_frozen_picture_holds_audio_and_recovers_on_real_frames(
-    server: Server, desktop: tuple[Any, Any]
+    server: Server, desktop: tuple[Any, Any], early_wait: bool
 ) -> None:
     _, page = desktop
     login(page, server.url)
@@ -255,53 +325,148 @@ def test_frozen_picture_holds_audio_and_recovers_on_real_frames(
     player = page.locator("movi-player")
     page.wait_for_function("()=>document.querySelector('movi-player')?.duration>4")
     player.locator("button.movi-play-pause").click()
-    page.wait_for_function("()=>document.querySelector('movi-player')?.currentTime>0.3")
-    player.evaluate("""el=>{
-      // Stop real picture presentation while the audio clock keeps moving.
-      // No manufactured waiting/state-change event should be needed for feedback.
+    page.wait_for_function(
+        """() => {
+            const el = document.querySelector('movi-player');
+            return el?.currentTime > 0.3 && el.player.videoRenderer.getQueueSize() > 0;
+        }"""
+    )
+    player.evaluate(
+        """(el, earlyWait)=>{
+      // Withhold decoded pictures without intercepting the engine's refill recovery.
       const renderer=el.player.videoRenderer;
-      window.restorePresentation=renderer.startPresentationLoop.bind(renderer);
-      renderer.startPresentationLoop=()=>{};
-      renderer.stopPresentationLoop();
-      window.frozenFrameCount=el.getVideoPlaybackQuality().totalVideoFrames;
-    }""")
+      // Keep one decoded picture pending for the early event. An empty renderer
+      // after a full file read can legitimately be treated as an audio-only tail.
+      if(earlyWait)renderer.stopPresentationLoop();
+      const frames=renderer.frameQueue.splice(earlyWait ? 1 : 0);
+      const queueFrame=renderer.queueFrame.bind(renderer);
+      renderer.queueFrame=frame=>frames.push(frame);
+      window.releaseVideoFrames=()=>{
+        renderer.queueFrame=queueFrame;
+        for(const frame of frames.splice(0))queueFrame(frame);
+      };
+      // Movi's quality totals include dropped frames and can reset on refill.
+      window.presentedSinceFreeze=0;
+      const presented=()=>{
+        window.presentedSinceFreeze++;
+        el.requestVideoFrameCallback(presented);
+      };
+      el.requestVideoFrameCallback(presented);
+      if(earlyWait)el.dispatchEvent(new Event('waiting'));
+    }""",
+        early_wait,
+    )
     status = page.locator(".advanced-state")
     expect(status).to_be_visible(timeout=4000)
     expect(status).to_contain_text("received")
     assert status.bounding_box()["height"] < 120
     expect(status.locator("p")).to_have_count(0)
     expect(status).not_to_contain_text("%")
-    assert player.evaluate(
-        "el=>el.getVideoPlaybackQuality().totalVideoFrames===window.frozenFrameCount"
-    )
-    page.wait_for_function(
-        "()=>document.querySelector('movi-player')?.player.getState()==='buffering'"
-    )
-    held = player.evaluate(
-        "el=>({time:el.currentTime,audio:el.player.audioRenderer.getAudioClock()})"
-    )
+    assert page.evaluate("window.presentedSinceFreeze") == 0
+    playback_clocks = """el=>({
+        state: el.player.getState(),
+        time: el.currentTime,
+        audioTime: el.player.audioRenderer.audioContext.currentTime,
+        audioState: el.player.audioRenderer.audioContext.state
+    })"""
+    held = player.evaluate(playback_clocks)
+    assert held["state"] == "buffering"
     page.wait_for_timeout(300)
+    after_hold = player.evaluate(playback_clocks)
+    assert after_hold["audioState"] == "suspended"
     assert player.evaluate("el=>!el.paused"), "Buffering must preserve play intent"
-    assert abs(player.evaluate("el=>el.currentTime") - held["time"]) < 0.1
-    assert (
-        abs(
-            player.evaluate("el=>el.player.audioRenderer.getAudioClock()")
-            - held["audio"]
-        )
-        < 0.1
-    )
+    assert abs(after_hold["time"] - held["time"]) < 0.1
+    assert abs(after_hold["audioTime"] - held["audioTime"]) < 0.1
     expect(page.locator(".advanced-player-host")).to_have_attribute("aria-busy", "true")
+    assert page.evaluate("window.presentedSinceFreeze") == 0
     # The existing refill path must restart presentation and sound together.
-    player.evaluate("""el=>{
-      el.player.videoRenderer.startPresentationLoop=window.restorePresentation;
-    }""")
+    page.evaluate("window.releaseVideoFrames()")
     expect(status).to_have_count(0, timeout=5000)
-    assert player.evaluate(
-        "el=>el.getVideoPlaybackQuality().totalVideoFrames>window.frozenFrameCount"
-    )
+    assert page.evaluate("window.presentedSinceFreeze") > 0
+    assert player.evaluate(playback_clocks)["audioState"] == "running"
     expect(page.locator(".advanced-player-host")).to_have_attribute(
         "aria-busy", "false"
     )
+
+
+def test_sparse_video_frames_do_not_stall_playback(server, desktop, tmp_path):
+    _, page = desktop
+    media = tmp_path / "sparse.mp4"
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg is not None
+    subprocess.run(  # noqa: S603 - fixed self-generated media fixture
+        [
+            ffmpeg,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=160x90:rate=1/3",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-t",
+            "9",
+            "-c:v",
+            "libx264",
+            "-g",
+            "1",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(media),
+        ],
+        check=True,
+    )
+    _serve_media(page, media.read_bytes(), "video/mp4")
+    login(page, server.url)
+    poster = page.evaluate(
+        "()=>document.createElement('canvas').toDataURL('image/jpeg').split(',')[1]"
+    )
+    page.route(
+        "**/api/v1/poster?*",
+        lambda route: route.fulfill(
+            body=base64.b64decode(poster), content_type="image/jpeg"
+        ),
+    )
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    page.get_by_role("button", name="movtext-subtitles.mp4", exact=True).dblclick()
+    player = page.locator("movi-player")
+    page.wait_for_function("()=>document.querySelector('movi-player')?.duration>8")
+    player.evaluate("""el=>{
+        window.sparseVideoStates=[];
+        window.sparseVideoBuffering=false;
+        el.addEventListener('statechange',event=>{
+            if (event.detail === 'playing' || window.sparseVideoStates.length)
+                window.sparseVideoStates.push(event.detail);
+        });
+        new MutationObserver(()=>{
+            if (window.sparseVideoStates.length &&
+                document.querySelector('.advanced-state[data-phase="buffering"]'))
+                window.sparseVideoBuffering=true;
+        }).observe(document.body, {
+            childList:true,subtree:true,attributeFilter:['data-phase']
+        });
+    }""")
+    player.locator("button.movi-play-pause").click()
+    page.wait_for_function("()=>document.querySelector('movi-player').currentTime>1.5")
+    expect(page.locator('.advanced-state[data-phase="seeking"]')).to_have_count(
+        0, timeout=500
+    )
+    page.wait_for_function(
+        """()=>{const el=document.querySelector('movi-player');
+        return el.currentTime>6.2 &&
+            el.getVideoPlaybackQuality().totalVideoFrames>=3}""",
+        timeout=11000,
+    )
+    expect(page.locator(".advanced-state")).to_have_count(0)
+    assert "seeking" not in player.evaluate("()=>window.sparseVideoStates")
+    assert not player.evaluate("()=>window.sparseVideoBuffering")
 
 
 @pytest.mark.parametrize("playing", [False, True])

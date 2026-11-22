@@ -234,7 +234,13 @@ export const api = {
         ),
     sharedNodes: (query: NodeQuery, auth: string, signal?: AbortSignal) =>
         request<NodePage>(
-            "/api/v1/shared/nodes?" + nodeParams({ ...query, auth }),
+            "/api/v1/shared/nodes?" +
+                nodeParams({
+                    ...query,
+                    parent_id:
+                        query.parent_id === "/root" ? "/" : query.parent_id,
+                    auth,
+                }),
             undefined,
             { signal },
         ),
@@ -316,7 +322,8 @@ export const api = {
             conflict,
             allow_public_exposure,
         }),
-    shares: () => request<{ shares: Share[] }>("/api/v1/shares"),
+    shares: (signal?: AbortSignal) =>
+        request<{ shares: Share[] }>("/api/v1/shares", undefined, { signal }),
     shareLink: (path: string, share_id?: string) =>
         request<{
             auth: string;
@@ -329,10 +336,11 @@ export const api = {
         expires_in_days: number | null,
         label = "",
         expires_at?: string,
+        password?: string,
     ) =>
         request<{ auth: string; path: string; expires_at: string | null }>(
             "/api/v1/shares",
-            { path, expires_in_days, label, expires_at },
+            { path, expires_in_days, label, expires_at, password },
         ),
     revoke: (path: string, share_id?: string) =>
         request("/api/v1/shares", { path, share_id }, { method: "DELETE" }),

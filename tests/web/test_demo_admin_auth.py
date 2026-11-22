@@ -71,6 +71,20 @@ def sign_in(client, password, **extra):
     return client.post("/api/checkPassword", json={"pass": password, **extra})
 
 
+def test_demo_visitor_cannot_confirm_bot_intake_review(tmp_path, monkeypatch):
+    with auth_client(tmp_path) as (client, _, runtime):
+        review = AsyncMock()
+        monkeypatch.setattr(
+            runtime.transfers, "review_bot_intake", review, raising=False
+        )
+        assert sign_in(client, VISITOR).status_code == 200
+        response = client.post(
+            "/api/v1/jobs/uncertain/review-bot-intake", json={}, headers=ORIGIN
+        )
+        assert response.status_code == 403
+        review.assert_not_awaited()
+
+
 @pytest.mark.parametrize("password,privileged", [(VISITOR, False), (ADMIN, True)])
 def test_same_login_form_grants_only_the_passwords_signed_access(
     tmp_path, password, privileged, monkeypatch

@@ -99,6 +99,11 @@ MongoDB also caches frequently used data in its own memory. Collections hold nod
 ordered file parts), shares, operation IDs, jobs and receipts, deletion intents, private settings and
 sessions, backup records and the runtime ownership lease.
 
+Password-protected shares store an Argon2id hash in the catalog and its
+recovery snapshots. Each unlock cookie signs the share token, expiry, and
+current password hash. Access checks validate the cookie and share scope on
+each request, so changing the hash or revoking the link invalidates access.
+
 TGDrive has no configured item-count quota. Catalog size depends on names,
 search tokens, file parts, indexes and retained work; database and recovery
 resource limits still apply. Use provider quota monitoring rather than a fixed
@@ -158,9 +163,10 @@ an uncertain acknowledgement, retrying with the same operation ID is safe.
 The ownership lease is a renewable lock that permits one installation to write. It
 renews in the background and is checked inside writes.
 Recovery of unfinished uploads still requires their local staged bytes.
-When startup defers Telegram recovery, the reconnect loop retries failed storage
-and bot startup after 30 seconds. It reuses the bot instance without registering
-duplicate message handlers.
+The reconnect loop retries Telegram startup when the storage connection or main
+bot is unavailable. A main bot lifecycle failure leaves the drive ready when
+storage is already available. Bot retries reuse the bot instance and registered
+handlers. A failed reconnect attempt waits 30 seconds before the next attempt.
 Automatic initialization runs only under the ownership lock and refuses saved
 drive records or recovery state. The catalog, channel binding and initial
 connection settings commit in one transaction. Those initial connections are
@@ -435,21 +441,39 @@ See [deviceUploadConcurrency.ts](../website/src/features/transfers/deviceUploadC
 | Destination gone before commit | Cancel/reconcile unpublished remote work |
 | Database persistence fails | Retain staged bytes and remote identities for retry |
 | URL retrieval interrupted | May fetch again from byte zero; live byte progress is advisory, while reservations and lifecycle changes are journaled |
-| Bot-mode ingestion | Separate path without the browser queue's full durability contract |
+| Bot-mode ingestion | Journaled source metadata and one supervised receive/publish pipeline at a time |
 
-Bot imports copy an allowed private-chat attachment into the storage channel,
-then record its message ID, name and size in MongoDB. Their operation identity
-includes the bot account, source chat and incoming message ID: token rotation for
-the same account preserves it; replacing the bot account uses a separate identity.
-Reprocessing the same message reuses its identity; a new forward
+Bot intake persists source account/chat/message identity, destination ID and the
+chosen encryption mode in the existing transfer journal before acknowledging the
+queue. A single supervised worker runs each whole receive/publication pipeline;
+pending rows have no staging reservation. Encrypted source reads use the receiving
+main bot; encrypted publication uses the existing upload pool. Background priority
+and observed active foreground source requests make bot receipt yield to origin
+demand. This does not preempt bytes already on the network or measure every
+cache-served viewer.
+Optional deployment-only BOT_INTAKE_CHANNEL enables a separate private plaintext
+intake copy for the active encrypted import. Its immutable channel/message
+identity and cleanup obligation are journaled; the existing pooled reader fetches
+chunks at background priority. Exact temporary cache entries and remote messages
+require cleanup, including after terminal transfer states. A dispatch without a
+confirmed message ID blocks the queue until the owner reviews the intake channel
+and acknowledges the outcome in Transfers. The journal records the acknowledgement
+before waking the queue. The original dispatch identity is never replayed.
+Without explicit configuration, private source receipt stays on the main bot.
+
+A replay of the same incoming message reuses its transfer identity; a new forward
 is a separate import with [keep-both naming](usage.md#upload-through-your-telegram-bot).
+Queued work that has yet to start is restored after the main bot binds. Started
+work interrupted by a stop or crash becomes Failed on startup and requires an
+explicit retry. Incomplete owned download partials are removed before receipt
+restarts. Fully staged uploads keep the normal upload recovery path. Shutdown
+drains registry work before disconnecting the bot.
 
-Once catalog writing starts, errors preserve the Telegram copy because a lost
-acknowledgement can follow a successful commit. Earlier failures delete the copy
-only when the operation is not recorded and the protection
-check allows deletion. Failed lookups also preserve it. An uncertain import may
-leave an unlisted copy in the channel; bot imports have no automatic durable
-reconciliation, so the owner must check the drive before resending.
+Unencrypted copies persist dispatch and returned-message identities. An ambiguous
+dispatched copy stops for owner review rather than blindly copying or deleting
+again. Lost catalog acknowledgements can follow successful writes, so uncertain
+remote outcomes are preserved. This does not guarantee automatic reconciliation
+of every Telegram-side effect.
 
 URL starts return a job before source I/O. Source retrieval has its own scheduler,
 staging file and storage claims, and releases its slot before Telegram upload.

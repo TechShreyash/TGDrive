@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { PasswordInput } from "@mantine/core";
 import {
     Upload,
     ChevronDown,
@@ -23,7 +24,11 @@ import {
     type Transfer,
 } from "./transfers";
 import { historyStatus } from "./transferHistory";
-import { isArchiveTransfer } from "./transferTasks";
+import {
+    botCleanupPending,
+    transferBlocksRetry,
+    isArchiveTransfer,
+} from "./transferTasks";
 import { deviceUploadMessage, needsDeviceUpload } from "./deviceUploadStatus";
 import {
     summarizeBatches,
@@ -37,7 +42,7 @@ import {
     getTimezone,
 } from "../../shared/types";
 import { errorMessage } from "../../shared/api";
-import { Modal, Spinner } from "../../shared/components";
+import { ErrorNotice, Modal, Spinner } from "../../shared/components";
 import {
     transferDetails,
     transferProgress,
@@ -46,6 +51,7 @@ import {
 } from "./progress";
 import "./TransferPanel.css";
 import TorrentFilePicker from "./TorrentFilePicker";
+import { PdfPasswordFields } from "../files/PdfPasswordDialog";
 
 export default function TransferPanel({
     items,
@@ -175,6 +181,15 @@ export default function TransferPanel({
         );
 
     const cancellable = items.filter(canCancelTransfer);
+    const cancelAll = cancellable.length > 0 && (
+        <button
+            className="text-button"
+            onClick={() => setCancelKeys(cancellable.map((item) => item.key))}
+        >
+            Cancel All
+        </button>
+    );
+    const CategoryHeading = expandedPage ? "h2" : "h3";
     const cancelCount = cancelKeys
         ? batches.filter((batch) =>
               batch.items.some(
@@ -252,43 +267,29 @@ export default function TransferPanel({
             }
             aria-label="Transfers"
         >
-            <header
-                className="transfer-heading"
-                hidden={expandedPage && !cancellable.length}
-            >
-                <h2
-                    id="transfer-summary"
-                    className={expandedPage ? "sr-only" : undefined}
-                >
-                    {(!collapsed || expandedPage) && <Upload size={18} />}
-                    {expandedPage ? (
-                        batches.length +
+            {expandedPage && cancellable.length > 0 && (
+                <p id="transfer-summary" className="sr-only">
+                    {batches.length +
                         (batches.length === 1
                             ? " transfer shown"
-                            : " transfers shown")
-                    ) : collapsed ? (
-                        <CollapsedTransferSummary
-                            batches={batches}
-                            deviceMessage={deviceMessage}
-                        />
-                    ) : (
-                        heading
-                    )}
-                </h2>
-                <div className="inline-actions">
-                    {cancellable.length > 0 && (
-                        <button
-                            className="text-button"
-                            onClick={() =>
-                                setCancelKeys(
-                                    cancellable.map((item) => item.key),
-                                )
-                            }
-                        >
-                            Cancel All
-                        </button>
-                    )}
-                    {!expandedPage && (
+                            : " transfers shown")}
+                </p>
+            )}
+            {!expandedPage && (
+                <header className="transfer-heading">
+                    <h2 id="transfer-summary">
+                        {!collapsed && <Upload size={18} />}
+                        {collapsed ? (
+                            <CollapsedTransferSummary
+                                batches={batches}
+                                deviceMessage={deviceMessage}
+                            />
+                        ) : (
+                            heading
+                        )}
+                    </h2>
+                    <div className="inline-actions">
+                        {cancelAll}
                         <button
                             id="transfer-toggle"
                             className="text-button"
@@ -313,28 +314,31 @@ export default function TransferPanel({
                                 <ChevronDown size={15} />
                             )}
                         </button>
-                    )}
-                </div>
-            </header>
+                    </div>
+                </header>
+            )}
             <div
                 id="transfer-list"
                 className="transfer-list"
                 hidden={collapsed && !expandedPage}
             >
-                {groups.map((group) => (
+                {groups.map((group, index) => (
                     <section
                         className="transfer-category"
                         data-category={group.key}
                         key={group.key}
                         aria-label={group.label}
                     >
-                        <h3
-                            className="transfer-category-title"
-                            hidden={!expandedPage && groups.length === 1}
-                        >
-                            {group.label}
-                            <span>{group.count}</span>
-                        </h3>
+                        <header className="transfer-category-heading">
+                            <CategoryHeading
+                                className="transfer-category-title"
+                                hidden={!expandedPage && groups.length === 1}
+                            >
+                                {group.label}
+                                <span>{group.count}</span>
+                            </CategoryHeading>
+                            {expandedPage && index === 0 && cancelAll}
+                        </header>
                         {group.key === "finished" && finishedControls}
                         {group.key === "finished" &&
                             !group.count &&
@@ -527,7 +531,7 @@ export function CollapsedTransferSummary({
         (batch) => !batch.active && batch.queued > 0,
     ).length;
     const attention = batches.filter(
-        (batch) => batch.failed || batch.awaiting,
+        (batch) => batch.failed || batch.awaiting || batch.cleanup,
     ).length;
     const cancelling = batches.filter((batch) =>
         batch.items.some((item) => item.state === "cancelling"),
@@ -777,7 +781,7 @@ export function BatchTransfer({
     const mixedStatuses =
         [
             activeCount,
-            batch.failed + batch.awaiting,
+            batch.failed + batch.awaiting + batch.cleanup,
             deviceStage ? receivedCount : batch.completed,
             batch.cancelled,
         ].filter((count) => count > 0).length > 1;
@@ -797,7 +801,9 @@ export function BatchTransfer({
             filter === "all" ||
             (filter === "active" && activeFile(item)) ||
             (filter === "attention" &&
-                (item.state === "error" || item.state === "awaiting_file")) ||
+                (botCleanupPending(item) ||
+                    item.state === "error" ||
+                    item.state === "awaiting_file")) ||
             (filter === "completed" &&
                 (deviceStage ? received(item) : item.state === "completed")) ||
             (filter === "cancelled" && item.state === "cancelled"),
@@ -808,7 +814,7 @@ export function BatchTransfer({
         {
             key: "attention",
             label: "Needs Attention",
-            count: batch.failed + batch.awaiting,
+            count: batch.failed + batch.awaiting + batch.cleanup,
         },
         {
             key: "completed",
@@ -832,7 +838,7 @@ export function BatchTransfer({
             data-status={
                 !batch.pending
                     ? "finished"
-                    : batch.failed || batch.awaiting
+                    : batch.failed || batch.awaiting || batch.cleanup
                       ? "attention"
                       : "active"
             }
@@ -980,7 +986,9 @@ export function BatchTransfer({
                     )}
                     <span className="transfer-batch-throughput">
                         {displayRate && (
-                            <span>{formatBytes(displayRate)}/s</span>
+                            <span className="transfer-speed">
+                                {formatBytes(displayRate)}/s
+                            </span>
                         )}
                         {displayEta !== undefined && (
                             <span
@@ -1003,6 +1011,7 @@ export function BatchTransfer({
                     batch.items.some(
                         (item) =>
                             item.state === "error" &&
+                            !transferBlocksRetry(item) &&
                             !item.historyOnly &&
                             (item.jobId || item.file),
                     )) && (
@@ -1023,6 +1032,7 @@ export function BatchTransfer({
                         {batch.items.some(
                             (item) =>
                                 item.state === "error" &&
+                                !transferBlocksRetry(item) &&
                                 !item.historyOnly &&
                                 (item.jobId || item.file),
                         ) && (
@@ -1127,6 +1137,22 @@ function TransferRow({
     run: (task: Promise<unknown>) => void;
     onChooseFile: (key: string) => void;
 }) {
+    const [reviewOpen, setReviewOpen] = useState(false);
+    const [reviewSaving, setReviewSaving] = useState(false);
+    const [retryPassword, setRetryPassword] = useState<string | null>(null);
+    const [retryNewPassword, setRetryNewPassword] = useState("");
+    const [retrySaving, setRetrySaving] = useState(false);
+    const [retryError, setRetryError] = useState("");
+    const retryForm = useRef<HTMLFormElement>(null);
+    useEffect(() => {
+        if (retryError && !retrySaving)
+            retryForm.current?.querySelector("input")?.focus();
+    }, [retryError, retrySaving]);
+    const retryOperation = item.pdfPasswordOperation;
+    const retryMissingPassword =
+        (retryOperation !== "add" && !retryPassword) ||
+        (!!retryOperation && retryOperation !== "remove" && !retryNewPassword);
+    const reviewJobId = item.botIntakeReviewRequired ? item.jobId : undefined;
     const fullLocation = item.location?.available
         ? item.location.folder_label || ""
         : item.location?.reason || "";
@@ -1172,7 +1198,18 @@ function TransferRow({
         !received &&
         !finished &&
         status !== "queued" &&
+        !(item.state === "error" && item.stage === "interrupted") &&
         meter.fraction !== undefined;
+    const interruptionHelp = item.interruptedUploadRecovery
+        ? {
+              staged: "Retry uses the file already staged on the server.",
+              finish_saving: "Retry finishes saving the existing upload.",
+              original_required:
+                  "The staged file is missing. Cancel this transfer, then upload the original again.",
+              restore_staging:
+                  "Restore the staged file on the server before retrying this upload.",
+          }[item.interruptedUploadRecovery]
+        : undefined;
     const needsOriginal =
         !["remote", "torrent"].includes(item.kind || "") &&
         (item.state === "awaiting_file" ||
@@ -1204,7 +1241,7 @@ function TransferRow({
             }}
         >
             <div className="transfer-state-icon">
-                {item.state === "error" ? (
+                {item.state === "error" || botCleanupPending(item) ? (
                     <AlertCircle size={19} />
                 ) : received || item.state === "completed" ? (
                     <Check size={19} />
@@ -1258,7 +1295,10 @@ function TransferRow({
                         </button>
                     </div>
                 ) : (
-                    (received || !finished) && (
+                    (received ||
+                        !finished ||
+                        botCleanupPending(item) ||
+                        item.stage === "bot_intake_reviewed") && (
                         <span
                             className={
                                 "transfer-phase" +
@@ -1290,9 +1330,6 @@ function TransferRow({
                     )}
                 {!checkingSource && (
                     <div className="transfer-row-details">
-                        {liveMetrics && (
-                            <TransferMetrics item={item} now={now} />
-                        )}
                         {showPercent && liveMetrics && (
                             <span className="transfer-batch-percent">
                                 {formatProgressPercent(meter.fraction!)}
@@ -1320,12 +1357,9 @@ function TransferRow({
                                       meter.total,
                                   )}
                         </span>
-                        {!received &&
-                            !liveMetrics &&
-                            !finished &&
-                            status !== "queued" && (
-                                <TransferMetrics item={item} now={now} />
-                            )}
+                        {!received && !finished && status !== "queued" && (
+                            <TransferMetrics item={item} now={now} />
+                        )}
                         {showTimestamp && finished && validRecordedAt && (
                             <time
                                 className="transfer-history-time"
@@ -1382,8 +1416,156 @@ function TransferRow({
                         }
                     />
                 )}
-                {item.state !== "cancelled" && item.error && (
-                    <span className="transfer-error">{item.error}</span>
+                {(item.state !== "cancelled" || botCleanupPending(item)) &&
+                    item.stage !== "bot_intake_reviewed" &&
+                    item.error && (
+                        <span className="transfer-error">{item.error}</span>
+                    )}
+                {item.state === "error" &&
+                    !item.historyOnly &&
+                    interruptionHelp && (
+                        <span className="transfer-device-status">
+                            {interruptionHelp}
+                        </span>
+                    )}
+                {reviewJobId && (
+                    <button
+                        type="button"
+                        className="text-button transfer-intake-review"
+                        onClick={() => setReviewOpen(true)}
+                    >
+                        Confirm intake channel reviewed
+                    </button>
+                )}
+                {reviewOpen && reviewJobId && (
+                    <Modal
+                        title="Confirm intake channel reviewed"
+                        initialFocus="[data-keep-paused]"
+                        onClose={() => {
+                            if (!reviewSaving) setReviewOpen(false);
+                        }}
+                    >
+                        <p>
+                            The bot queue is paused. Check the private intake
+                            channel in Telegram. If you can identify the
+                            temporary copy of {item.name}, remove it there.
+                        </p>
+                        <p>
+                            Confirm review to let the bot process the next file.
+                            This import stays failed.
+                        </p>
+                        <div className="dialog-actions">
+                            <button
+                                type="button"
+                                className="secondary-button"
+                                data-keep-paused
+                                disabled={reviewSaving}
+                                onClick={() => setReviewOpen(false)}
+                            >
+                                Keep queue paused
+                            </button>
+                            <button
+                                type="button"
+                                className="primary-button"
+                                disabled={reviewSaving}
+                                onClick={() => {
+                                    setReviewSaving(true);
+                                    run(
+                                        transfers
+                                            .reviewBotIntake(reviewJobId)
+                                            .then(() => setReviewOpen(false))
+                                            .finally(() =>
+                                                setReviewSaving(false),
+                                            ),
+                                    );
+                                }}
+                            >
+                                {reviewSaving
+                                    ? "Confirming…"
+                                    : "Confirm review"}
+                            </button>
+                        </div>
+                    </Modal>
+                )}
+                {retryPassword !== null && (
+                    <Modal
+                        title={
+                            retryOperation
+                                ? {
+                                      add: "Retry adding PDF password",
+                                      change: "Retry changing PDF password",
+                                      remove: "Retry removing PDF password",
+                                  }[retryOperation]
+                                : "Retry password-protected ZIP"
+                        }
+                        description={item.name}
+                        onClose={() => !retrySaving && setRetryPassword(null)}
+                    >
+                        <form
+                            ref={retryForm}
+                            onSubmit={(event) => {
+                                event.preventDefault();
+                                if (retryMissingPassword || retrySaving) return;
+                                setRetryError("");
+                                setRetrySaving(true);
+                                void transfers
+                                    .retry(
+                                        item.key,
+                                        retryPassword || undefined,
+                                        retryNewPassword || undefined,
+                                    )
+                                    .then(() => setRetryPassword(null))
+                                    .catch((error: unknown) =>
+                                        setRetryError(errorMessage(error)),
+                                    )
+                                    .finally(() => setRetrySaving(false));
+                            }}
+                        >
+                            {retryOperation ? (
+                                <PdfPasswordFields
+                                    operation={retryOperation}
+                                    password={retryPassword}
+                                    setPassword={setRetryPassword}
+                                    newPassword={retryNewPassword}
+                                    setNewPassword={setRetryNewPassword}
+                                    busy={retrySaving}
+                                />
+                            ) : (
+                                <PasswordInput
+                                    label="ZIP password"
+                                    value={retryPassword}
+                                    required
+                                    maxLength={255}
+                                    autoComplete="off"
+                                    disabled={retrySaving}
+                                    onChange={(event) =>
+                                        setRetryPassword(
+                                            event.currentTarget.value,
+                                        )
+                                    }
+                                />
+                            )}
+                            <ErrorNotice message={retryError} />
+                            <div className="dialog-actions">
+                                <button
+                                    className="secondary-button"
+                                    type="button"
+                                    disabled={retrySaving}
+                                    onClick={() => setRetryPassword(null)}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    className="primary-button"
+                                    disabled={
+                                        retryMissingPassword || retrySaving
+                                    }
+                                >
+                                    Retry
+                                </button>
+                            </div>
+                        </form>
+                    </Modal>
                 )}
             </div>
             <div className="transfer-item-actions">
@@ -1398,14 +1580,26 @@ function TransferRow({
                     </button>
                 )}
                 {item.state === "error" &&
+                    !transferBlocksRetry(item) &&
                     !item.historyOnly &&
                     !needsOriginal && (
                         <button
-                            className="icon-button"
+                            className={
+                                item.stage === "bot_intake_timeout"
+                                    ? "text-button transfer-recovery-button"
+                                    : "icon-button"
+                            }
                             aria-label={"Retry " + item.name}
-                            onClick={() => run(transfers.retry(item.key))}
+                            onClick={() => {
+                                if (item.archivePasswordRequired) {
+                                    setRetryError("");
+                                    setRetryNewPassword("");
+                                    setRetryPassword("");
+                                } else run(transfers.retry(item.key));
+                            }}
                         >
                             <RotateCcw size={17} />
+                            {item.stage === "bot_intake_timeout" && "Retry"}
                         </button>
                     )}
                 {canCancelTransfer(item) &&
@@ -1488,6 +1682,12 @@ export function TransferMetrics({
     now: number;
 }) {
     const details = transferDetails(item, now);
+    const retryIn =
+        item.stage === "retry_wait" &&
+        item.retryAt != null &&
+        Number.isFinite(item.retryAt)
+            ? Math.ceil(item.retryAt - now / 1000)
+            : 0;
     const meter = transferProgress(item);
     const remaining =
         ["receiving", "uploading"].includes(item.state) &&
@@ -1528,11 +1728,9 @@ export function TransferMetrics({
                     No recent progress
                 </span>
             )}
-            {details.timing === "waiting" && (
+            {details.timing === "waiting" && retryIn > 0 && (
                 <span className="transfer-timing-state">
-                    {item.stage === "source_retry_wait"
-                        ? "Waiting to retry source"
-                        : "Waiting for Telegram"}
+                    Retry in {formatDuration(retryIn)}
                 </span>
             )}
             {details.timing === "finishing" && (

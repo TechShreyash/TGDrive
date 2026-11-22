@@ -1,111 +1,332 @@
+.performance-page > [data-slot="tabs-panel"]:not([data-selected]) {
+    display: none;
+}
 .performance-dashboard {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px 20px;
-    margin-bottom: 24px;
-}
-.performance-dashboard > .performance-sample-time {
-    grid-column: 1 / -1;
-    margin-bottom: 0;
+    gap: 12px;
+    margin-bottom: 18px;
 }
 .performance-dashboard > section {
     min-width: 0;
-    padding: 16px;
-    border: 1px solid var(--line);
-    border-radius: 12px;
+    padding: 12px 16px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 14px;
+    background: var(--surface);
+}
+.performance-attention,
+.performance-wait-list > li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px 12px;
 }
 .performance-dashboard h3 {
-    margin: 0 0 8px;
+    margin: 0 0 4px;
     font-family: inherit;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
     line-height: 1.3;
     color: var(--ink);
 }
-.performance-dashboard p {
+.performance-dashboard h4 {
+    margin: 0 0 2px;
+    color: var(--ink);
     font-size: 13px;
-    line-height: 1.5;
+    font-weight: 600;
+}
+.performance-dashboard p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.performance-wait-list {
+    margin: 0;
+    list-style: none;
+    padding: 0;
+}
+.performance-wait-list p {
+    text-wrap: pretty;
+}
+.performance-wait-list > li + li {
+    border-top: 1px solid var(--line-subtle);
+    padding-top: 8px;
+    margin-top: 8px;
+}
+.performance-transfer-summary {
+    font-variant-numeric: tabular-nums;
+}
+.performance-dashboard .performance-transfer-alert {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--warning);
+}
+.performance-transfer-alert > svg {
+    flex: none;
+}
+.performance-transfer-summary p + p {
+    margin-block-start: 3px;
+}
+.performance-dashboard .performance-next-action {
+    min-height: 44px;
+    padding-inline: 12px;
+    font-size: 13px;
+    white-space: normal;
+    text-align: center;
+}
+.performance-page .performance-update {
+    margin: 0 0 12px;
+    color: var(--muted);
+    font-size: 12px;
+}
+.performance-page .performance-update[data-stale="true"] {
+    color: var(--warning);
+}
+.performance-page > .performance-toolbar .performance-view-tabs {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 1px;
+    padding: 0;
+    border-radius: 0;
+    background: none;
+}
+.performance-page > .performance-toolbar .performance-view-tabs button {
+    min-height: 44px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 8px 8px 0 0;
+    box-shadow: inset 0 -2px transparent;
+    color: var(--muted);
+    background: transparent;
+    font-size: 13px;
+    font-weight: 550;
+}
+.performance-page > .performance-toolbar .performance-view-tabs button:hover {
+    background: var(--hover);
+}
+.performance-page
+    > .performance-toolbar
+    .performance-view-tabs
+    button[data-selected] {
+    color: var(--action);
+    box-shadow: inset 0 -2px var(--action);
+}
+.performance-page > .performance-toolbar.performance-section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 4px;
+    margin-bottom: 14px;
+}
+.performance-history-panel {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+}
+.performance-history-panel .performance-measurements-heading {
+    margin-top: 0;
+    gap: 4px 16px;
+}
+.performance-measurements-heading h3 {
+    margin: 0 0 4px;
+}
+.performance-history-title {
+    flex: 1 1 240px;
+    min-width: 0;
+}
+.performance-page .performance-history-panel .performance-history-availability {
+    margin: 0;
+}
+.performance-page
+    .performance-history-panel
+    .performance-metric-chart.mantine-Paper-root {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 14px;
+    margin: 0;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-subtle);
+}
+.performance-page .performance-history-panel .performance-chart-heading {
+    min-height: 32px;
+    padding: 0;
+    margin: 0 0 6px;
+    gap: 4px 12px;
+    border: 0;
+}
+.performance-history-panel .performance-chart-heading > strong {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+.performance-page
+    .performance-history-panel
+    .performance-resource-charts:not([hidden]) {
+    margin: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+}
+.performance-history-panel .performance-metric-chart {
+    --performance-axis-width: 64px;
+}
+.performance-history-panel .performance-chart-plot {
+    grid-template-columns: var(--performance-axis-width) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 8px;
+}
+.performance-history-panel
+    .performance-resource-charts
+    .performance-chart-plot {
+    height: 104px;
+}
+.performance-history-panel .performance-chart-times {
+    margin-inline-start: calc(var(--performance-axis-width) + 8px);
+    margin-inline-end: 0;
+}
+@media (min-width: 1160px) {
+    .performance-history-panel {
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    }
+    .performance-history-panel
+        > :not(.performance-network-chart, .performance-resource-charts) {
+        grid-column: 1 / -1;
+    }
+    .performance-history-panel > .performance-network-chart {
+        grid-column: 1;
+        align-self: stretch;
+        display: flex;
+        flex-direction: column;
+    }
+    .performance-history-panel
+        > .performance-network-chart
+        .performance-chart-plot {
+        flex: 1 0 auto;
+    }
+}
+.performance-metric-title {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 8px;
 }
 .network-readings {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
     gap: 16px;
-    margin-block: 16px;
+    margin-block: 0 12px;
 }
 .network-readings > div {
     min-width: 0;
 }
+.network-readings > div + div {
+    border-inline-start: 1px solid var(--line-subtle);
+    padding-inline-start: 16px;
+}
 .network-readings dt {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 0;
     color: var(--muted);
     font-size: 13px;
 }
-.network-readings dt svg {
-    color: var(--action);
+.network-readings dt::before {
     flex-shrink: 0;
 }
 .network-readings dd {
-    margin: 8px 0 0;
-    font-size: clamp(24px, 2.5vw, 32px);
-    font-weight: 650;
-    line-height: 1.2;
+    margin: 3px 0 0;
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.35;
     font-variant-numeric: tabular-nums;
 }
 .network-readings dd[data-unavailable="true"] {
-    font-size: 18px;
+    font-size: 14px;
     color: var(--muted);
 }
-.performance-waiting {
-    background: var(--surface-subtle);
+.performance-tuning-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 20px;
+    margin-bottom: 12px;
 }
-.performance-waiting ul {
-    padding-inline-start: 20px;
-    margin-block: 8px;
-}
-.performance-waiting p {
-    margin: 0;
-}
-.performance-dashboard .inline-link {
+.performance-tuning-links > a {
     display: inline-flex;
     align-items: center;
     min-height: 44px;
 }
-.performance-summary-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 20px;
-    font-size: 13px;
+.performance-page
+    :is(
+        .performance-facts dd,
+        .performance-facts dt,
+        .performance-transfer-summary,
+        .performance-update
+    ) {
+    overflow-wrap: anywhere;
 }
-@media (max-width: 900px) {
-    .performance-dashboard {
-        grid-template-columns: minmax(0, 1fr);
+.performance-page .performance-resource-charts {
+    margin-block-start: 16px;
+}
+@media (max-width: 540px) {
+    .performance-history-panel .performance-history-controls select {
+        min-height: 44px;
+    }
+
+    .performance-page > .performance-toolbar .performance-view-tabs button {
+        min-inline-size: 44px;
+        padding-inline: 4px;
+        font-size: 13px;
+        white-space: nowrap;
+    }
+}
+@media (max-width: 360px) {
+    .performance-page > .performance-toolbar .performance-view-tabs button {
+        padding-inline: 2px;
+        font-size: 12px;
+        line-height: 1.2;
+        white-space: normal;
     }
 }
 @media (max-width: 540px) {
+    .network-readings {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+    .network-readings > div + div {
+        padding-inline-start: 10px;
+    }
     .network-readings dt {
-        align-items: start;
-        min-height: 40px;
+        line-height: 1.3;
+        min-height: 30px;
+        font-size: 12px;
     }
 }
 
 .performance-page .tuning-section + .performance-all-time {
-    margin-block-start: 24px;
+    margin-block-start: 18px;
 }
 .performance-page .tuning-intro {
     margin-block: 8px 16px;
 }
-.performance-page .performance-detail-note[open] > summary {
-    margin-bottom: 12px;
+.performance-page .performance-tuning-unavailable {
+    margin: 0 0 16px;
+}
+.performance-page .performance-detail-note > h4 {
+    margin: 12px 0 8px;
+    color: var(--ink);
+    font-size: 14px;
+    font-weight: 600;
 }
 .performance-sample-time {
     color: var(--muted);
     font-size: 13px;
     margin-block: 4px 20px;
-}
-.performance-page .performance-network-chart {
-    margin-block-end: 20px;
 }
 .performance-page
     .performance-network-chart
@@ -130,16 +351,283 @@
 }
 .performance-page
     .performance-network-chart
-    :is(.performance-chart-legend, .performance-chart-readout)
+    :is(.network-readings > div, .performance-chart-tooltip-row)
     > .chart-series-primary::before {
     background: var(--action);
+    height: 2px;
 }
 .performance-page
     .performance-network-chart
-    :is(.performance-chart-legend, .performance-chart-readout)
+    :is(.network-readings > div, .performance-chart-tooltip-row)
     > .chart-series-secondary::before {
     background: transparent;
     height: 0;
     border-top: 2px dashed var(--ink);
     border-radius: 0;
+}
+
+.performance-page .performance-storage-panel .performance-resource-summary {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+    gap: 1px;
+    overflow: clip;
+    border: 1px solid var(--line-subtle);
+    border-radius: 12px;
+    background: var(--line-subtle);
+}
+.performance-page
+    .performance-storage-panel
+    .performance-resource-summary
+    .performance-usage {
+    gap: 6px;
+    border: 0;
+    border-radius: 0;
+    background: var(--surface);
+}
+.performance-resource-details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+    gap: 12px 24px;
+}
+.performance-page .performance-storage-panel .performance-memory-details {
+    display: block;
+    margin-block: 8px 14px;
+    border-block-start: 1px solid var(--line-subtle);
+}
+.performance-page .performance-storage-panel .performance-memory-details > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+    align-items: baseline;
+    gap: 3px 12px;
+    padding: 8px 0;
+    border: 0;
+    border-block-end: 1px solid var(--line-subtle);
+    border-radius: 0;
+    background: transparent;
+}
+.performance-page
+    .performance-storage-panel
+    .performance-memory-details
+    dd:first-of-type {
+    max-width: 13rem;
+    margin: 0;
+    font-size: 14px;
+    text-align: end;
+    font-variant-numeric: tabular-nums;
+}
+.performance-page
+    .performance-storage-panel
+    .performance-memory-details
+    dd
+    + dd {
+    grid-column: 1 / -1;
+    margin: 0;
+    text-align: start;
+}
+.performance-staging-title a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+}
+
+.performance-page .performance-toolbar .performance-update {
+    margin: 0;
+    padding-block: 4px;
+}
+.performance-page .performance-dashboard {
+    column-gap: 24px;
+    row-gap: 0;
+    padding-block: 4px 14px;
+    border-bottom: 1px solid var(--line);
+}
+.performance-page .performance-dashboard > section {
+    border: 0;
+    padding: 10px 0;
+    background: transparent;
+}
+.performance-page .performance-dashboard h3 {
+    font-size: 14px;
+    color: var(--muted);
+    font-weight: 500;
+}
+.performance-page .performance-dashboard h4,
+.performance-page .performance-transfer-summary strong {
+    font-size: 16px;
+    line-height: 1.4;
+}
+.performance-page .performance-wait-list p {
+    margin-top: 2px;
+}
+.performance-page [role="tabpanel"] h3 {
+    font-family: inherit;
+}
+.performance-page
+    :is(
+        .performance-history-title,
+        .performance-staging-title,
+        .performance-section-title,
+        .performance-account-heading,
+        .performance-drive-summary,
+        .performance-section,
+        .performance-all-time
+    )
+    h3,
+.performance-page #resource-detail-heading,
+.performance-page #automatic-tuning-heading {
+    font-size: 17px;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    line-height: 1.4;
+}
+.performance-page .performance-staging-title {
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0 12px;
+}
+.performance-page .performance-staging {
+    padding-block: 12px 18px;
+    border-block: 1px solid var(--line);
+}
+.performance-staging-layout {
+    display: grid;
+    gap: 5px 32px;
+    align-items: start;
+}
+.performance-page .performance-staging-layout > .performance-usage {
+    padding: 12px 16px;
+    background: var(--surface-subtle);
+    border-radius: 10px;
+}
+.performance-page .performance-staging-layout .performance-memory-details {
+    margin: 0;
+}
+.performance-page
+    .performance-staging-layout
+    .performance-memory-details
+    > div {
+    padding: 6px 0;
+}
+.performance-page .performance-staging > .performance-sample-time {
+    margin: 0 0 12px;
+    font-size: 12px;
+}
+.performance-page .performance-storage-panel .performance-cache-link {
+    padding-block: 0;
+    border: 0;
+    margin-bottom: 0;
+}
+.performance-page
+    .performance-storage-panel
+    .performance-memory-details
+    dd
+    + dd {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.45;
+}
+.performance-page .performance-drive-summary {
+    margin-block: 16px 20px;
+    padding: 14px 16px;
+    border: 1px solid var(--line-subtle);
+    border-radius: 12px;
+    background: var(--surface-subtle);
+}
+.performance-drive-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    margin-bottom: 8px;
+}
+.performance-drive-heading h3 {
+    margin: 0;
+}
+.performance-drive-summary dl {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px 16px;
+    margin: 0;
+}
+.performance-drive-summary dt {
+    font-size: 12px;
+    color: var(--muted);
+}
+.performance-drive-summary dd {
+    margin: 3px 0 0;
+    overflow-wrap: anywhere;
+    font-size: 18px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+}
+.performance-drive-summary dd + dd {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--muted);
+}
+@media (max-width: 600px) {
+    .performance-drive-summary dl {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .performance-drive-heading a {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+    }
+}
+.performance-page .performance-tuning-links {
+    margin-block: 4px 20px;
+    border-bottom: 1px solid var(--line);
+}
+.performance-page [role="tabpanel"] .performance-all-time,
+.performance-page [role="tabpanel"] .tuning-section,
+.performance-page [role="tabpanel"] .performance-account-section {
+    background: transparent;
+    border: 0;
+    padding-inline: 0;
+    box-shadow: none;
+}
+.performance-page .performance-accounts-grid > .performance-health {
+    display: grid;
+    gap: 3px;
+    border-inline-start: 3px solid var(--state);
+    padding: 6px 12px;
+    border-radius: 0;
+}
+.performance-page .performance-health strong {
+    font-size: 15px;
+}
+.performance-page .performance-health strong::before {
+    display: none;
+}
+.performance-page .performance-account-capacity {
+    border-block-end: 1px solid var(--line);
+    border-radius: 0;
+}
+@media (min-width: 1080px) {
+    .performance-dashboard {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .performance-page .performance-dashboard > section + section {
+        border-inline-start: 1px solid var(--line);
+        padding-inline-start: 24px;
+        border-radius: 0;
+    }
+    .performance-staging-layout {
+        grid-template-columns: minmax(0, 0.7fr) minmax(0, 1fr);
+    }
+}
+@media (max-width: 720px) {
+    .performance-page > .performance-toolbar.performance-section-heading {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0;
+    }
+    .performance-page .performance-dashboard > section + section {
+        border-block-start: 1px solid var(--line-subtle);
+        border-radius: 0;
+    }
+    .performance-page .performance-dashboard {
+        padding-block: 0 6px;
+    }
 }

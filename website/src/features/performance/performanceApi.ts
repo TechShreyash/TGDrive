@@ -319,13 +319,16 @@ export function performanceChanges(
     try {
         new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
     } catch {
-        throw new Error("Use a valid timezone, such as Asia/Kolkata.");
+        throw new InvalidTimezoneError(
+            "Use a valid timezone, such as Asia/Kolkata.",
+        );
     }
     if (timezone !== saved.timezone) changes.timezone = timezone;
     if (draft.auto_preload !== saved.auto_preload)
         changes.auto_preload = draft.auto_preload;
     return changes;
 }
+export class InvalidTimezoneError extends Error {}
 export interface CachedFile {
     id: string;
     last_download?: number;
@@ -451,7 +454,10 @@ export interface PerformanceSnapshot {
     };
     diagnosis?: PerformanceDiagnosis | null;
     tuning?: {
+        example?: boolean;
         running: boolean;
+        interval_seconds?: number;
+        measurements?: { sampled_at?: number };
         values: Record<string, number>;
         reasons: Record<string, string>;
     } | null;
@@ -538,7 +544,13 @@ export interface PerformanceSnapshot {
         };
         staging_budget_bytes: number;
     };
-    drive: { files: number; folders: number; total_bytes: number };
+    drive: {
+        files: number;
+        folders: number;
+        total_bytes: number;
+        trashed_files?: number;
+        trashed_bytes?: number;
+    };
     database?: {
         used_bytes: number;
         index_bytes: number;

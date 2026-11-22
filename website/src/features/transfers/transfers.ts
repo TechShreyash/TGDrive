@@ -13,9 +13,12 @@ import type {
     FolderUploadMetadata,
 } from "../../shared/types";
 import {
+    botCleanupPending,
+    botIntakeBlocksRetry,
     isArchiveTransfer,
     isServerImport,
     transferTaskId,
+    transferBlocksRetry,
 } from "./transferTasks";
 import { sampleProgress, type ProgressSample } from "./progress";
 import { BatchProgressTracker } from "./batchProgress";
@@ -68,9 +71,14 @@ export interface Transfer {
     serverStatus?: string;
     speedBytesPerSecond?: number | null;
     etaSeconds?: number | null;
+    retryAt?: number | null;
     progressUpdatedAt?: number | null;
     serverObservedAt?: number;
     historyOnly?: boolean;
+    botIntakeReviewRequired?: boolean;
+    interruptedUploadRecovery?: Job["interrupted_upload_recovery"];
+    archivePasswordRequired?: boolean;
+    pdfPasswordOperation?: Job["pdf_password_operation"];
     /** Browser-only receipt: server-discovered jobs never open this device's popup. */
     initiatedHere?: boolean;
     location?: TransferLocation;
@@ -210,7 +218,9 @@ export function retainTransferBatches(items: Transfer[]): Transfer[] {
     for (const [id, rows] of groups) {
         if (
             rows.some(
-                (item) => !["completed", "cancelled"].includes(item.state),
+                (item) =>
+                    botCleanupPending(item) ||
+                    !["completed", "cancelled"].includes(item.state),
             )
         )
             keep.add(id);
@@ -302,6 +312,7 @@ export function canCancelTransfer(item: Transfer): boolean {
         !item.historyOnly &&
         item.kind !== "delete" &&
         item.stage !== "backup_pending" &&
+        !botIntakeBlocksRetry(item) &&
         !["completed", "cancelled"].includes(item.state)
     );
 }
@@ -354,7 +365,7 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
                           " of " +
                           (job.source_max_attempts || 4)
                         : job.phase === "retry_wait"
-                          ? "Waiting for Telegram; retry scheduled"
+                          ? "Waiting for Telegram · retries automatically"
                           : ["checking_source", "downloading"].includes(
                                   job.phase,
                               ) && job.download_mode === "waiting_storage"
@@ -377,7 +388,15 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
                                     : job.status === "queued"
                                       ? "Queued for Telegram"
                                       : "Uploading to Telegram";
-    if (isArchiveTransfer(job)) {
+    if (job.kind === "pdf_password") {
+        if (state === "error") phase = "PDF password change failed";
+        else if (state === "completed")
+            phase = "PDF copy available in your drive";
+        else if (job.phase === "downloading" && state === "uploading")
+            phase = "Reading PDF from your drive";
+        else if (job.phase === "rewriting_pdf" && state === "uploading")
+            phase = "Saving PDF password changes";
+    } else if (isArchiveTransfer(job)) {
         if (state === "error")
             phase =
                 job.kind === "archive"
@@ -435,6 +454,25 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
         const { stored, total } = job.telegram_parts;
         phase += " · " + stored + "/" + total + " Parts in Channel";
     }
+    if (state === "uploading" && job.kind === "telegram") {
+        if (job.phase === "waiting_for_staging")
+            phase = "Waiting for temporary storage";
+        if (job.phase === "waiting_for_telegram")
+            phase = "Waiting for Telegram to reconnect";
+    }
+    if (state === "error" && job.phase === "interrupted")
+        phase = "Interrupted by restart";
+    if (state === "error" && job.phase === "bot_intake_timeout")
+        phase = "Bot import failed";
+    if (job.phase === "bot_intake_cleanup") {
+        phase =
+            state === "completed"
+                ? "File saved · temporary copy cleanup pending"
+                : state === "cancelled"
+                  ? "Cancelled · temporary copy cleanup pending"
+                  : "Bot import needs review · bot queue paused";
+    }
+    if (job.phase === "bot_intake_reviewed") phase = "Intake channel reviewed";
     if (job.queue && job.queue.position > 0) {
         phase += " · Queue position " + job.queue.position;
         if (job.queue.estimated_wait_seconds != null)
@@ -473,10 +511,15 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
         total: job.total ?? 0,
         error: job.error || undefined,
         stage: job.phase,
+        botIntakeReviewRequired: job.bot_intake_review_required,
+        interruptedUploadRecovery: job.interrupted_upload_recovery,
+        archivePasswordRequired: job.archive_password_required,
+        pdfPasswordOperation: job.pdf_password_operation,
         torrentChoice: job.torrent_choice,
         serverStatus: job.status,
         speedBytesPerSecond: job.speed_bytes_per_second,
         etaSeconds: job.eta_seconds,
+        retryAt: job.retry_at,
         progressUpdatedAt: job.progress_updated_at,
         serverObservedAt: Date.now(),
         ...(job.created_at ? { createdAt: job.created_at * 1000 } : {}),
@@ -901,6 +944,7 @@ export class TransferManager {
             (item) =>
                 !item.jobId ||
                 !this.dismissed.has(item.jobId) ||
+                botCleanupPending(item) ||
                 !["completed", "cancelled"].includes(item.state) ||
                 unfinished.has(transferTaskId(item)),
         );
@@ -1532,13 +1576,21 @@ export class TransferManager {
             errors,
         };
     }
-    async retry(key: string) {
+    async reviewBotIntake(jobId: string) {
+        await request<Job>(
+            "/api/v1/jobs/" + encodeURIComponent(jobId) + "/review-bot-intake",
+            {},
+        );
+        this.refreshJobs();
+    }
+
+    async retry(key: string, password?: string, newPassword?: string) {
         const item = this.items.find((item) => item.key === key);
-        if (!item) return;
+        if (!item || transferBlocksRetry(item)) return;
         if (item.jobId) {
             const payload = await request<{ id: string }>(
                 "/api/v1/jobs/" + encodeURIComponent(item.jobId) + "/retry",
-                {},
+                { password, new_password: newPassword },
             );
             this.update(key, {
                 jobId: payload.id,
@@ -1653,12 +1705,18 @@ export class TransferManager {
     }
     clearFinished() {
         for (const item of this.items)
-            if (item.jobId && ["completed", "cancelled"].includes(item.state))
+            if (
+                item.jobId &&
+                !botCleanupPending(item) &&
+                ["completed", "cancelled"].includes(item.state)
+            )
                 this.dismissed.add(item.jobId);
         const unfinished = new Set(
             this.items
                 .filter(
-                    (item) => !["completed", "cancelled"].includes(item.state),
+                    (item) =>
+                        botCleanupPending(item) ||
+                        !["completed", "cancelled"].includes(item.state),
                 )
                 .map(transferTaskId),
         );
@@ -1675,6 +1733,7 @@ export class TransferManager {
                         (!item.jobId &&
                             !isServerImport(item) &&
                             item.state === "error") ||
+                        botCleanupPending(item) ||
                         !["completed", "cancelled", "error"].includes(
                             item.state,
                         ),
@@ -2384,17 +2443,27 @@ export class TransferManager {
             const clearedKeys = new Set<string>();
             for (const job of payload.jobs) {
                 // Deletions are a single file-operation notice, never upload transfers.
-                if (job.kind === "delete" || this.dismissed.has(job.id))
+                if (
+                    job.kind === "delete" ||
+                    (this.dismissed.has(job.id) &&
+                        job.phase !== "bot_intake_cleanup")
+                )
                     continue;
                 if (
                     historyRevision !== this.historyRevision &&
+                    job.phase !== "bot_intake_cleanup" &&
                     ["completed", "cancelled", "error"].includes(job.status)
                 )
                     continue;
                 let item = this.items.find(
                     (item) => item.jobId === job.id || item.uploadId === job.id,
                 );
-                if (job.history_cleared && !item) continue;
+                if (
+                    job.history_cleared &&
+                    !item &&
+                    job.phase !== "bot_intake_cleanup"
+                )
+                    continue;
                 if (!item) {
                     item = {
                         key: crypto.randomUUID(),

@@ -1,11 +1,28 @@
 import type { Transfer } from "./transfers";
 
+export function botCleanupPending(item: Pick<Transfer, "stage">): boolean {
+    return item.stage === "bot_intake_cleanup";
+}
+
+export function botIntakeBlocksRetry(item: Pick<Transfer, "stage">): boolean {
+    return botCleanupPending(item) || item.stage === "bot_intake_reviewed";
+}
+
+export function transferBlocksRetry(
+    item: Pick<Transfer, "stage" | "interruptedUploadRecovery">,
+): boolean {
+    return (
+        botIntakeBlocksRetry(item) ||
+        item.interruptedUploadRecovery === "original_required"
+    );
+}
+
 export function isServerImport(item: Pick<Transfer, "kind">): boolean {
     return item.kind === "remote" || item.kind === "torrent";
 }
 
 export function isArchiveTransfer(item: Pick<Transfer, "kind">): boolean {
-    return item.kind === "archive" || item.kind === "extract";
+    return item.kind === "archive" || item.kind === "extract" || item.kind === "pdf_password";
 }
 
 /** Folder selections are one task; ordinary files each keep their own identity. */

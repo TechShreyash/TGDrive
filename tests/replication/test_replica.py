@@ -2606,3 +2606,18 @@ async def test_recovery_admission_keeps_authenticated_resource_and_key_errors_di
         assert not list(staging.glob("*"))
     finally:
         await dispose(replica, store)
+
+
+@pytest.mark.asyncio
+async def test_configure_rejects_shared_intake_channel_before_provider_writes(tmp_path):
+    from tgdrive.settings.managed_settings import SettingsProblem
+
+    configured, store, remote, replica, _ = setup(tmp_path)
+    configured.bot_intake_channel = BACKUP
+    try:
+        before = list(remote.calls)
+        with pytest.raises(SettingsProblem, match="BOT_INTAKE_CHANNEL"):
+            await replica.configure(BACKUP, TOKEN, True)
+        assert remote.calls == before
+    finally:
+        await dispose(replica, store)

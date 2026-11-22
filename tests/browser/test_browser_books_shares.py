@@ -61,6 +61,7 @@ def test_selective_reader_controls_and_mobile_layout(
         "path"
     ]
     page.goto(server.url + "/?path=" + folder)
+    page.mouse.move(width - 1, 650)
     page.get_by_role("button", name=name, exact=True).press("Enter")
     expect(
         page.get_by_role("group", name="Reader controls", exact=True)
@@ -68,9 +69,16 @@ def test_selective_reader_controls_and_mobile_layout(
     assert page.locator(".file-preview").evaluate(
         "node => getComputedStyle(node).colorScheme"
     ) == page.locator("html").evaluate("node => getComputedStyle(node).colorScheme")
+    header = page.locator(".preview-header")
+    expect(header.locator(".preview-close")).to_have_css(
+        "background-color", "rgba(0, 0, 0, 0)"
+    )
     assert page.locator(".book-toolbar").evaluate(
-        "node => getComputedStyle(node).backgroundColor"
-    ) == ("rgb(38, 41, 45)" if theme == "dark" else "rgb(238, 241, 245)")
+        "node => getComputedStyle(node).backgroundColor !== "
+        'getComputedStyle(node.closest(".preview-header")).backgroundColor'
+    )
+    bounds = header.bounding_box()
+    assert bounds and bounds["height"] <= (54 if width > 720 else 103), bounds
     expect(
         page.get_by_role(
             "region",

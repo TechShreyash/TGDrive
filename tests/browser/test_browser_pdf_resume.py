@@ -248,3 +248,50 @@ def test_anonymous_pdf_page_stays_local_and_storage_failure_keeps_reader_usable(
         assert _saved(owner, server, identity, 6) == before
     finally:
         context.close()
+
+
+def test_reopening_pdf_waits_for_its_last_page_to_save(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    dialog, identity = _open_pdf(page)
+    _page(dialog, 3)
+    _saved(page, server, identity, 3)
+    url = "**/api/v1/files/" + identity + "/pdf-progress"
+    pending = []
+    reads = []
+
+    def delay_close(route):
+        if route.request.method == "PUT":
+            if route.request.post_data_json["final"]:
+                pending.append(route)
+            else:
+                # Leave only the close write able to persist the last page.
+                route.fulfill(status=503, json={"detail": "Synthetic delay"})
+        else:
+            reads.append(route.request)
+            route.continue_()
+
+    page.route(url, delay_close)
+    _page(dialog, 10)
+    with page.expect_request(
+        lambda req: req.method == "PUT" and req.post_data_json["final"]
+    ):
+        dialog.get_by_role("button", name="Close Preview", exact=True).click()
+    dialog, _ = _open_pdf(page)
+    expect(dialog.locator("canvas").first).to_be_visible()
+    assert len(pending) == 1
+    assert pending[0].request.post_data_json["page_number"] == 10
+    assert not reads, (
+        "The newly opened reader fetched an earlier page before the close save"
+    )
+    with page.expect_response(
+        lambda response: (
+            response.url.endswith("/pdf-progress") and response.request.method == "GET"
+        )
+    ):
+        pending.pop().continue_()
+    expect(dialog.get_by_label("Page", exact=True)).to_have_value("10")
+    assert_rendered_pdf_page(page, "long.pdf", 10)
+    page.reload()
+    expect(preview_dialog(page).get_by_label("Page", exact=True)).to_have_value("10")

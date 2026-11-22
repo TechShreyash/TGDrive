@@ -1,0 +1,85 @@
+.performance-account-list {
+    container: account-capacity / inline-size;
+    position: relative;
+}
+
+.performance-account-label {
+    display: none;
+}
+
+@container account-capacity (width < 900px) {
+    .performance-page
+        .performance-account-capacity
+        .performance-account-list
+        .performance-table {
+        display: block;
+        min-width: 0;
+    }
+
+    .performance-account-list thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+    }
+
+    .performance-account-list tbody {
+        display: grid;
+        gap: 10px;
+    }
+
+    .performance-page .performance-account-list tbody tr {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: start;
+        gap: 12px;
+        padding: 12px;
+        border: 1px solid var(--line-subtle);
+        border-radius: 12px;
+        background: var(--surface);
+    }
+
+    .performance-page
+        .performance-account-capacity
+        .performance-account-list
+        tbody
+        :is(th, td) {
+        width: auto;
+        min-width: 0;
+        max-width: none;
+        padding: 0;
+        border: 0;
+        overflow-wrap: anywhere;
+        font-size: 13px;
+    }
+
+    .performance-page
+        .performance-account-capacity
+        .performance-account-list
+        tbody
+        th[scope="row"] {
+        width: auto;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        font-size: 14px;
+    }
+
+    .performance-account-list .performance-account-waits {
+        font-weight: 600;
+    }
+
+    .performance-account-list .performance-account-label {
+        display: block;
+        margin-bottom: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+    }
+}
+
+@container account-capacity (480px <= width < 900px) {
+    .performance-page .performance-account-list tbody tr {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}

@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import {
+    type MouseEvent,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from "react";
 import { ChevronRight, Download, RefreshCw } from "lucide-react";
 import { api, errorMessage, request } from "../../shared/api";
 import { ErrorNotice, FileIcon, Spinner } from "../../shared/components";
@@ -10,6 +16,8 @@ import {
     type NodePage,
 } from "../../shared/types";
 import Preview from "../previews/Preview";
+import SharedUnlock, { needsSharePassword } from "./SharedUnlock";
+import { useShareOpen } from "./useShareOpen";
 import "./EmbedView.css";
 
 export async function loadEmbeddedShare(
@@ -52,8 +60,33 @@ export default function EmbedView() {
     const [preview, setPreview] = useState<DriveItem | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [locked, setLocked] = useState(false);
+    const [needsTopLevel, setNeedsTopLevel] = useState(false);
+    const checkingUnlock = useRef(false);
     const [attempt, setAttempt] = useState(0);
+    useShareOpen(
+        !loading &&
+            !locked &&
+            !error &&
+            current.path === root &&
+            Boolean(listing || preview),
+        auth,
+        root,
+    );
     const activeLoad = useRef<AbortController | null>(null);
+    const viewport = useRef<HTMLElement>(null);
+    const currentCrumb = useRef<HTMLButtonElement>(null);
+    const focusAfterNavigation = useRef(false);
+    const focusAfterMore = useRef<{
+        button: HTMLButtonElement;
+        itemId: string;
+    } | null>(null);
+    const navigate = (nextTrail: typeof trail) => {
+        activeLoad.current?.abort();
+        focusAfterNavigation.current = true;
+        setLoading(true);
+        setTrail(nextTrail);
+    };
     useEffect(() => {
         const controller = new AbortController();
         activeLoad.current = controller;
@@ -65,6 +98,7 @@ export default function EmbedView() {
         void loadEmbeddedShare(current.path, auth, controller.signal)
             .then((result) => {
                 if (controller.signal.aborted) return;
+                checkingUnlock.current = false;
                 if (result.file) {
                     setPreview(result.file);
                     document.title = result.file.name + " · TGDrive";
@@ -83,15 +117,46 @@ export default function EmbedView() {
                 }
             })
             .catch((cause) => {
-                if (!controller.signal.aborted) setError(errorMessage(cause));
+                if (!controller.signal.aborted) {
+                    if (needsSharePassword(cause)) {
+                        setNeedsTopLevel(
+                            checkingUnlock.current && window.parent !== window,
+                        );
+                        setLocked(true);
+                    } else setError(errorMessage(cause));
+                    checkingUnlock.current = false;
+                }
             })
             .finally(() => {
                 if (!controller.signal.aborted) setLoading(false);
             });
         return () => controller.abort();
     }, [current.path, auth, attempt]);
+    useEffect(() => {
+        if (loading || !focusAfterNavigation.current) return;
+        focusAfterNavigation.current = false;
+        viewport.current?.scrollTo(0, 0);
+        currentCrumb.current?.focus({ preventScroll: true });
+    }, [loading]);
+    useLayoutEffect(() => {
+        const pending = focusAfterMore.current;
+        focusAfterMore.current = null;
+        if (!pending) return;
+
+        const focused = document.activeElement;
+        // On the last page, removing Show more leaves focus on the body.
+        if (
+            focused === pending.button ||
+            (!pending.button.isConnected && focused === document.body)
+        )
+            viewport.current
+                ?.querySelector<HTMLButtonElement>(
+                    `[data-item-id="${CSS.escape(pending.itemId)}"] .embed-item`,
+                )
+                ?.focus();
+    }, [listing]);
     const items = listing?.items || [];
-    const showMore = async () => {
+    const showMore = async (event: MouseEvent<HTMLButtonElement>) => {
         const controller = activeLoad.current;
         if (
             !listing?.next_cursor ||
@@ -101,6 +166,8 @@ export default function EmbedView() {
         )
             return;
         const cursor = listing.next_cursor;
+        const button = event.currentTarget;
+        const keyboard = event.detail === 0;
         setMore("loading");
         try {
             const id = current.path.slice(7).split("/").filter(Boolean).at(-1);
@@ -115,6 +182,11 @@ export default function EmbedView() {
             );
             if (controller.signal.aborted || activeLoad.current !== controller)
                 return;
+            const first =
+                next.items[0] ??
+                (next.next_cursor ? undefined : listing.items.at(-1));
+            if (first && keyboard && document.activeElement === button)
+                focusAfterMore.current = { button, itemId: first.id };
             setListing((previous) =>
                 previous?.next_cursor === cursor
                     ? {
@@ -124,19 +196,49 @@ export default function EmbedView() {
                     : previous,
             );
             setMore("idle");
-        } catch {
-            if (!controller.signal.aborted && activeLoad.current === controller)
-                setMore("error");
+        } catch (cause) {
+            if (
+                !controller.signal.aborted &&
+                activeLoad.current === controller
+            ) {
+                if (needsSharePassword(cause)) setLocked(true);
+                else setMore("error");
+            }
         }
     };
+    if (locked)
+        return (
+            <SharedUnlock
+                auth={auth}
+                embed
+                needsTopLevel={needsTopLevel}
+                onUnlocked={() => {
+                    checkingUnlock.current = true;
+                    setLocked(false);
+                    setAttempt(attempt + 1);
+                }}
+            />
+        );
     return (
-        <main className="embed-view" id="main-content" tabIndex={-1}>
+        <main
+            ref={viewport}
+            className="embed-view"
+            id="main-content"
+            tabIndex={-1}
+        >
             {folder && (
                 <header className="embed-header">
                     <nav aria-label="Shared folder path">
                         <ol>
                             {trail.map((crumb, index) => (
-                                <li key={crumb.path}>
+                                <li
+                                    key={crumb.path}
+                                    data-compact-hidden={
+                                        index > 0 && index < trail.length - 2
+                                            ? true
+                                            : undefined
+                                    }
+                                >
                                     {index > 0 && (
                                         <ChevronRight
                                             size={16}
@@ -144,16 +246,24 @@ export default function EmbedView() {
                                         />
                                     )}
                                     <button
+                                        ref={
+                                            crumb === current
+                                                ? currentCrumb
+                                                : undefined
+                                        }
                                         type="button"
+                                        title={crumb.name}
                                         aria-current={
-                                            index === trail.length - 1
+                                            crumb === current
                                                 ? "page"
                                                 : undefined
                                         }
-                                        disabled={loading}
-                                        onClick={() =>
-                                            setTrail(trail.slice(0, index + 1))
-                                        }
+                                        onClick={() => {
+                                            if (crumb !== current)
+                                                navigate(
+                                                    trail.slice(0, index + 1),
+                                                );
+                                        }}
                                     >
                                         {crumb.name}
                                     </button>
@@ -203,7 +313,7 @@ export default function EmbedView() {
                                 className="embed-item item-name-button"
                                 onClick={() =>
                                     item.type === "folder"
-                                        ? setTrail([
+                                        ? navigate([
                                               ...trail,
                                               {
                                                   path: "/share_" + item.id,
@@ -242,8 +352,9 @@ export default function EmbedView() {
                             <button
                                 type="button"
                                 className="secondary-button"
-                                disabled={more === "loading"}
-                                onClick={() => void showMore()}
+                                aria-disabled={more === "loading"}
+                                aria-busy={more === "loading"}
+                                onClick={(event) => void showMore(event)}
                             >
                                 {more === "loading" && <Spinner />}
                                 {more === "error"

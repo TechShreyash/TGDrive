@@ -9,7 +9,7 @@ defaults, or save lower ceilings to leave more room for other applications.
 
 | I want to… | Where |
 | --- | --- |
-| See what TGDrive chose and why | **Performance tab → Automatic tuning** ([how it works](performance.md#automatic-tuning)) |
+| See what TGDrive chose and why | **Performance → Tuning → Automatic tuning** ([how it works](performance.md#automatic-tuning)) |
 | Limit resource use on a shared host | [Cache ceilings](#cache-settings) · [Transfer limits](#transfer-limits) · [Docker limits](#cap-tgdrive-with-docker-limits) |
 | Turn playback preloading on or off | [Cache settings](#cache-settings) |
 | Split files into smaller Telegram documents | [Transfer limits](#transfer-limits) |
@@ -65,9 +65,10 @@ after confirmation. See [rebuild progress and limits](thumbnails.md#rebuild-exis
 Save before starting more work. A lower staging ceiling preserves unchanged
 or shrinking claims for already admitted work. New or growing claims must fit
 the new ceiling, other reservations and actual free space. Encrypted bot imports
-reserve their declared size before receiving bytes and share this budget with
-browser uploads and other imports. When space is unavailable, TGDrive refuses
-the new import before downloading it. Startup values set uploads per bot, URL
+reserve their declared size when their turn starts and share this budget with
+browser uploads and other imports. Queued bot files hold source metadata rather
+than reserving disk for the whole batch. An active bot import waits for staging
+space before downloading; cancelling it releases its place. Startup values set uploads per bot, URL
 downloads and Telegram request ceilings. **Bot uploads** (folder and encryption) also live on this page. [Staging policy](performance.md#automatic-tuning).
 
 **File transfer speeds** has two independent controls: **Upload from server**

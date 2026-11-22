@@ -270,3 +270,23 @@ def test_backing_probe_paths_are_deployment_only_and_excluded_from_exports(tmp_p
 def test_backing_probe_config_requires_absolute_paths(path):
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **settings_values(DATA_BACKING_CAPACITY_DIR=path))
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_shared_intake_is_disabled_without_a_channel(value):
+    settings = Settings(_env_file=None, **settings_values(BOT_INTAKE_CHANNEL=value))
+    assert settings.bot_intake_channel is None
+
+
+def test_shared_intake_channel_is_deployment_only():
+    settings = Settings(
+        _env_file=None, **settings_values(BOT_INTAKE_CHANNEL=-1001234567899)
+    )
+    assert settings.bot_intake_channel == -1001234567899
+    assert "BOT_INTAKE_CHANNEL" not in settings.model_dump(by_alias=True)
+
+
+@pytest.mark.parametrize("value", [0, 123, -1001234567890, "not-a-channel"])
+def test_shared_intake_rejects_invalid_or_storage_channel(value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **settings_values(BOT_INTAKE_CHANNEL=value))

@@ -4,6 +4,7 @@
 
 Start in **My Files**: upload a small file, open it, then try sharing it.
 [Watch the walkthroughs](showcase.md) if you prefer a visual introduction.
+If login fails, focus returns to the password field so you can correct it.
 
 | Task | Jump to |
 | --- | --- |
@@ -42,7 +43,11 @@ Telegram progress. A full device bar still needs server confirmation.
 
 Time remaining estimates only the displayed stage; it disappears during stale
 progress, blocked work and final confirmation. **Hide/Show** collapses the desktop
-panel. On phones, the status button opens **Transfers**.
+panel. On phones, the status button opens **Transfers** for work started in
+this browser. The **Transfers** tab includes server jobs from other devices.
+In short landscape and other views with little vertical space, routine uploads
+use the tab count. Uploads from this browser that need attention still get a
+status button.
 
 [Upload screenshots and walkthrough](showcase.md) ·
 [Background progress updates](performance.md#browser-progress-and-health-checks)
@@ -105,6 +110,9 @@ account uses documents of at most **2000 MiB**. Keep the
 Device intake and Telegram uploading run independently. Device concurrency
 adapts automatically; start with the defaults. Extra bots or upload slots can
 help some workloads but do not bypass Telegram waits or guarantee more speed.
+Transfers shows the current stage and a retry countdown when the server has a
+deadline. In **Performance → Tuning**, choose **Upload and download speed limits**
+to configure the two directions independently.
 [Transfer settings](configuration.md#transfer-limits) · [Find a bottleneck](performance-tuning.md#find-the-bottleneck)
 
 ## Browse and organize
@@ -112,21 +120,33 @@ help some workloads but do not bypass Telegram waits or guarantee more speed.
 | Action | How |
 | --- | --- |
 | Open | Double-click with a mouse, press Enter on a focused name, or tap on touch |
-| Select several items | **Select**, then choose rows/check boxes; **Done** or Escape clears selection |
+| Select an item | Click with a mouse or touch and hold. On a public link, a mouse click focuses the name. |
+| Select several items | Click an item, then Shift-click another to select the range on the current page. Ctrl-click (Command-click on Mac) adds or removes an item. You can also choose **Select** or touch and hold an item, then use the rows or checkboxes. **Done** or Escape clears selection. |
 | Create a folder | **New → New folder** |
 | Rename, move or trash | Item menu or selection actions |
 | Sort/change view | Name, Date Added or File Size; List/Grid; **View and sort** on phones |
-| Filter by type | Chips above the list: **All**, **Photos and videos**, **Documents**, **Audio**, **Other** |
+| Filter by type | Chips above the list or **All types** when the file area is narrow. The control shows the active filter. |
 
 Folders stay first when sorting; click an active column to reverse order. Large
 folders load 200 items first and more as you page. Sort and type filters apply
 to the whole folder and return to page 1. Until a folder is fully loaded, every
 type chip stays visible; a filter with no matches shows **Choose All to see
 everything in this folder**, and **Recently added** appears only once the folder
-is fully loaded. A new browser opens in Grid; your view choice is remembered after that. Name conflicts offer **keep both** or **skip**.
+is fully loaded. A new browser opens in List view and remembers your choice
+when you switch views. Grid shows the file name, preview, and actions. It fits
+up to five cards per row and uses fewer columns as the available space narrows.
+Use List to compare file sizes and added dates. Name conflicts offer
+**keep both** or **skip**.
+
+On phones and smaller tablets, use **Toggle Navigation** to open the sidebar.
+On a phone you can also open an item's action menu to read its full name.
 
 If a page fails to load, choose **Try Again**. On later pages, **Previous Page**
 returns to loaded items.
+
+Use the arrow keys in **View and sort** and **Appearance**, or type the start of
+an option's name. Escape closes the menu and returns focus to its button.
+Ctrl-click or Command-click a sidebar link or breadcrumb to open it in a new tab.
 
 Supported uploads generate covers automatically. For missing covers or a full
 rebuild, see [thumbnails](thumbnails.md).
@@ -144,6 +164,17 @@ Opening counts previews, playback and downloads by the owner, at most once per
 file every 10 minutes. Share-link and embed visitors are never recorded. Files in
 Trash are left out. Recording an open is best effort and does not block file
 access; busy or failed tracking can leave an open out of Recent.
+
+Right-click a file or folder, or press **Shift+F10** while its name has focus,
+to open its actions. The three-dot button opens the same actions. Public
+shared folders offer **Open** and, for files, **Download**.
+
+### Move files and folders
+
+**Move** shows the source separately from the destination. If your selection
+comes from several folders, the destination picker starts at **My Files**.
+Check the full destination path before choosing **Move Here**. If that folder
+becomes unavailable, **Choose another folder** keeps the same items selected.
 
 ### Starred files and folders
 
@@ -168,8 +199,22 @@ outside a text field. Switching pages clears the query. On phones, use the searc
 ## Open, preview, and download
 
 Open a file to preview; **Download** gets the original. Escape or browser Back
-closes the preview. Use fullscreen where supported. If the device cannot decode
-a file, download it for a suitable app.
+closes the preview. When a format has no browser preview, the file details put
+**Download File** above the metadata. In a very short window, the download
+action comes before the file details. If a preview fails, **Try Preview Again**
+or **Reload Viewer** appears above the error details. Use fullscreen where supported. If the
+device cannot decode a video, choose **Play compatible version** when offered,
+or download the original for a suitable app. The compatible version starts
+playing when ready. If your browser requests another gesture, use the player's
+Play control.
+
+Compatible playback converts requested portions on the server to H.264/AAC at up
+to 720p, including supported ProRes MOV and WMV sources. It uses the first audio
+track; original subtitle/track and quality choices are unavailable in this mode.
+The original file stays unchanged and saved progress still belongs to that file.
+Conversion uses server CPU and bandwidth. Busy servers, insufficient memory or
+files outside the conversion limits can still require an original download.
+[Conversion limits](performance.md#compatible-video-playback).
 
 | File | Preview |
 | --- | --- |
@@ -179,17 +224,36 @@ a file, download it for a suitable app.
 | Supported text/code | Read-only text, first 256 KiB |
 | EPUB | Chapters, Reading options and saved reading position |
 | CBZ/CBR | Comic pages, page fit and right-to-left reading |
+| ZIP | Browse files and nested folders without extracting; file sizes and password-protected entries are shown |
 | Unsupported formats | Original download |
 
+DOCX previews show headings and body text. XLSX previews let you switch between
+visible worksheets and show up to the first 100 rows and 20 columns per sheet.
+Swipe horizontally or focus the worksheet and use the arrow keys to see more
+columns. Row numbers stay visible while scrolling. Download the original for
+formatting, charts, or the rest of a larger file.
+
+To add, change, or remove a PDF password, choose **PDF password** from the
+file's actions. Enter the current password when changing or removing it.
+TGDrive saves a protected or unlocked copy in the same folder and keeps
+the original. If the current password is incorrect, open **Transfers** and
+choose **Retry** to enter the passwords again.
+Follow the operation in **Transfers**. PDFs up to 256 MiB are supported.
+
+ZIP previews read directory metadata rather than file contents. They support
+single-volume ZIP/ZIP64 archives with up to 10,000 entries and a 2 MiB directory.
+Encrypted file contents can still be listed when their directory is readable;
+the preview does not unlock or extract them. Download the original if its
+directory is damaged, encrypted or exceeds these preview limits.
+
 Videos open paused; opening a file never starts playback. Once a saved position
-is known, **Play** resumes there. **Start over** returns to the beginning. A
+is known, **Play** resumes there. Use the timeline to return to the beginning. A
 position within the first or final two seconds starts at zero instead.
 
 If you press Play before saved progress arrives, playback continues without a
 late jump. A valid later bookmark offers **Continue from…** or **Keep playing
 from here**; seeking manually also chooses your new position. A failed progress
-read offers retry without replacing the old bookmark. After playback resumes,
-**Resumed at… / Start over** appears briefly.
+read offers retry without replacing the old bookmark.
 
 Signed-in owners and demo administrators save video and PDF positions in MongoDB
 for continuation on another device, including independently authenticated shared
@@ -259,6 +323,12 @@ playback even with a fast connection; use **Download Original** for another play
 
 </details>
 
+The video player's **Settings → Copy playback diagnostics** copies the build,
+player mode, playback position and available buffering readings. You can also
+copy them from the playback recovery controls. If clipboard permission is
+unavailable, TGDrive shows selectable text. A report leaves out file names,
+paths, URLs and access tokens.
+
 ## Share and revoke
 
 1. Use the item's share action and optionally add a label.
@@ -276,9 +346,13 @@ shares open the shared file browser and offer **Copy Embed Link** for an iframe.
 **Copy Download Link** creates an attachment URL for download managers. Older
 direct `/file` links remain usable for file bytes.
 
-**Anyone with the link can read its contents.** Folder links include accessible
-current and future descendants. Labels organize links; they do not restrict
-access to named people. Each item can have up to 100 independent links.
+Folder links include accessible current and future descendants. To require a
+password, enter one when creating the link or edit the link in **Shared Links**.
+Recipients open the link in a browser and enter its password before viewing or
+downloading. If unlocking fails, focus returns to the password field for another
+attempt. The browser unlock lasts up to eight hours. Changing the password
+or revoking the link ends existing unlocks immediately. Labels organize links,
+and each item can have up to 100 independent links.
 
 Links survive moves/renames. Moving into a shared folder asks for confirmation;
 moving out removes inherited access but keeps explicit links. Trash revokes links
@@ -291,6 +365,12 @@ disabled. If the app cannot reconstruct a URL after a signing-secret change,
 its original copy remains valid until expiry/revocation; create a replacement
 from **My Files** and revoke the old one separately.
 
+**Link opens** counts a visit after the public share or embed displays. A later
+visit or page reload counts again. Failed unlocks, child navigation, pagination
+and file downloads do not add an open. Only the owner sees the total and its
+start date. Refresh Shared Links to see new totals. Counts go into the next
+catalog snapshot. Older links start counting with their first tracked visit.
+
 For a download manager, choose **Copy Download Link**. It creates or reuses a
 separate share labelled **Download link**; new ones expire after one day. Keep
 the URL private and manage it in **Shared Links**.
@@ -299,6 +379,9 @@ the URL private and manage it in **Shared Links**.
 
 For a file, use its ordinary **Share Link** as the iframe's `src`. For a folder,
 choose **Copy Embed Link**. Both use the existing share's access and expiry.
+If a browser cannot keep the unlock inside a password-protected embed, use
+**Open in a new tab** and enter the password there.
+
 For example, replace the URL here with your copied link:
 
 ```html
@@ -315,10 +398,15 @@ For example, replace the URL here with your copied link:
 ```
 
 Files open in the viewer; folders allow browsing, previews and downloads without
-owner login. Folders load an initial page; **Show more** appends another batch.
-TGDrive must remain reachable. The embed uses the same share's
-access, expiry and revocation; copying it creates no additional link.
-Anyone viewing the containing page can obtain the link.
+owner login. Folders load an initial page. **Show more** appends another
+batch. With keyboard activation, focus stays on the button during loading
+and moves to the first new item when the batch arrives.
+In a small frame, long paths show the shared root, parent, and current folder.
+TGDrive must remain reachable. The embed uses the link's access, password,
+expiry and revocation. For a password-protected embed, HTTPS lets browsers
+store a separate unlock for the embedding site. Use **Open in a new tab** if
+the browser blocks cookies in an iframe. Anyone viewing the containing page
+can obtain the link.
 
 If blocked, allow TGDrive in your site's frame policy and framing of **`/embed`
 only** in TGDrive's proxy; keep owner pages protected.
@@ -330,6 +418,8 @@ only** in TGDrive's proxy; keep owner pages protected.
 **All / Successful / Failed / Cancelled**, or search names across history pages.
 Each page holds 20 tasks; a folder counts once and expands to its files.
 Completed files offer **Show in folder**; folder batches offer **Show folder**.
+**Cancel All** appears next to the first group when there is work you can
+cancel. It opens a confirmation before changing any transfers.
 
 Returning to **Transfers** from another page keeps the outer history page and
 filter, showing the last loaded rows while checking for updates. Leaving clears
@@ -359,11 +449,15 @@ devices' server jobs. Clearing the panel does not erase saved history.
 **Create ZIP:** choose **Select**, select files/folders, then **Create ZIP**.
 Name the ZIP and start. It is saved as a normal file in the shown destination;
 download it when finished. A folder's menu also offers **Create ZIP**. Structure
-and empty folders are preserved; originals remain.
+and empty folders are preserved; originals remain. Enter a ZIP password to
+encrypt the files with AES-256. ZIP filenames remain visible.
 
 **Extract:** open the archive's menu → **Extract archive**, choose the current
 folder or a new folder, then start. Existing names are kept alongside new
-outputs; the original archive remains.
+outputs; the original archive remains. For an encrypted ZIP, enter its password.
+TGDrive uses the password for that attempt. If the password is wrong, TGDrive
+removes the partial extraction and keeps the downloaded ZIP for retry.
+Open **Transfers** and choose **Retry** to enter the password again.
 
 | Extract | Extensions |
 | --- | --- |
@@ -377,8 +471,9 @@ closed while TGDrive runs. Work downloads source bytes and uploads outputs,
 using temporary server disk and Telegram bandwidth. Outputs in a shared folder
 inherit its access; review the warning.
 
-Encrypted/multi-volume archives, unsafe or duplicate paths, links and empty
-regular files are rejected; some RAR features/large dictionaries are unsupported.
+Split archives, encrypted formats other than ZIP, unsafe or duplicate paths,
+links and empty regular files are rejected. Some RAR features and large
+dictionaries are unsupported.
 ZIP creation uses no compression. Docker includes the archive reader; other
 installations need libarchive.
 
@@ -390,7 +485,7 @@ cancelling and starting again, keeping earlier outputs.
 ## Preload a file for smoother playback and downloads
 
 1. Choose **My Files → file ⋯ → Preload file**.
-2. Follow **Monitor → Preloads**. Look for **Fully cached** with full coverage
+2. Open **Preloads**. Look for **Fully cached** with full coverage
    on the original file's row; **Partial** rows show a small coverage bar.
    A row such as **Poster for Movie.mkv** identifies a preview image.
    **Poster cached** means only that image is complete, not the original video.
@@ -506,13 +601,16 @@ links when they need only selected files. For access while your laptop is off,
 
 ## Find your way around
 
+Expand **Tools and settings** in the sidebar to reach owner tools. Opening a
+tool directly reveals its active link in the group.
+
 | Page | Purpose |
 | --- | --- |
 | **My Files / Recent / Starred / Trash** | Browse, reopen, bookmark or restore files |
 | **Transfers / Shared Links** | Follow work or manage access |
-| **Monitor → Performance / Preloads** | Inspect resources or prepare cached files |
-| **Management → Connections / Storage and Backups** | Manage accounts, saved data and recovery |
-| **Configuration** | Cache, transfer limits, timezone and bot upload destination |
+| **Performance / Preloads** | Inspect resources or prepare cached files |
+| **Connections / Backups** | Manage accounts, saved data and recovery |
+| **Settings** | Cache, transfer limits, timezone and bot upload destination. Saves apply to the selected section. |
 
 Choose Light, Dark or System in the appearance menu. **Refresh / Check Again**
 stay disabled while working, then confirm or show an error. Retry failed refreshes;
@@ -520,7 +618,7 @@ configuration drafts are retained, while management actions wait for a successfu
 
 ## Settings and connections
 
-Use **Management → Connections** to refresh credentials/channel access, manage
+Use **Connections** to refresh credentials/channel access, manage
 accounts, add storage bots or connect a Premium account. **Refresh** requests
 checks; each account row shows its own result or error. Keep one working storage bot.
 
@@ -541,7 +639,7 @@ settings service is admitted.
 
 ### Storage and backup
 
-**Storage and Backups → Saved to MongoDB** confirms the catalog is saved, not that
+**Backups → Saved to MongoDB** confirms the catalog is saved, not that
 unfinished uploads are complete. **Temporary storage** holds unfinished work on
 server disk, not your total Telegram storage.
 
@@ -556,22 +654,25 @@ Each backup is pinned in your channel and opens only with your encryption key.
 Your server operator chooses which Telegram users may use the bot
 ([bot access settings](configuration.md#telegram-bot-access)). Use its **private chat**:
 
-1. On the website, choose **Configuration → Transfer limits → Bot uploads →
+1. On the website, choose **Settings → Transfer limits → Bot uploads →
    Change folder**, then **Use this folder** (or **Use default folder**).
 2. Send or forward files, photos, video or audio to the bot. Send photos as files
    to preserve quality.
-3. Each file gets one status message that updates in place, about every
+3. The bot acknowledges each queued file. When its turn starts, a progress
+   message updates in place, about every
    4 seconds and at 5% steps when the total is known. Unknown totals show received
    bytes. Status moves from **Receiving · 42%** to **Saving**, **Finalizing** or **Verifying**,
    then **Saved ✓** with the name, size and folder. When the website address is
    known, an **Open in TGDrive** button opens that folder. Several files can be
-   sent at once; each gets its own status message.
+   sent at once; each gets its own status message and waits its turn.
 
 Users who are not allowed cannot import files. The bot can reply with their
 Telegram user ID so the owner can allow them.
 
 Default: **My Files / TGDriveBotModeFiles**, created on first use. All allowed
-users share the destination; changes apply to new imports without restart.
+users share the destination. Each queued file keeps its chosen folder and
+encryption mode. Wait for pending bot imports to finish or cancel them before
+changing these settings; no restart is needed.
 Moving/deleting it pauses new imports until an available folder is chosen.
 Repeated sends create copies; conflicting names are kept alongside existing ones.
 
@@ -581,17 +682,68 @@ Telegram-side copies that stay unencrypted and readable to anyone with channel
 access. If encrypted importing is unavailable, encryption-on fails instead of
 falling back to a plaintext copy. [Encryption details](reference.md#stored-file-encryption).
 
-Encrypted bot imports appear in the website **Transfers** panel: first
-**Receiving from Telegram bot** with bytes and speed, then the usual Telegram
-upload. Cancel there, or reply **/cancel** to the original file message in the
-bot chat. Cancellation can require cleanup and does not delete already saved
-files. Direct Telegram copies cannot be cancelled through this command; check
-Transfers if no matching encrypted import is found.
+Bot files join the website **Transfers** queue. TGDrive processes one bot file
+through its entire receive-and-save pipeline before starting the next; sending
+50 files does not start 50 downloads. Other website transfers and streams still
+use their existing schedulers and shared speed/storage limits.
 
-Sending the same message again reuses its transfer
-instead of downloading twice. A server restart during the download marks it
-failed and deletes the partial file; send the file again. A failed upload keeps
-the downloaded file so **Retry** works.
+The bot confirms the queued file's folder and encryption mode. When temporary
+upload storage is full, the first file waits for space and appears as
+**Waiting for temporary storage** in Transfers. Encrypted imports then progress
+from **Receiving from Telegram bot** to the usual Telegram upload. Cancel in Transfers, or reply **/cancel** to the original file
+message in the bot chat. Cancellation can require cleanup and does not delete
+already saved files. A copy with an uncertain Telegram outcome may require owner
+review; check the drive before resending it.
+
+If Telegram times out during a retryable import, Transfers shows **Failed**
+and “Telegram timed out. Try again.” The bot points you to **Retry** in
+Transfers when Telegram can deliver its reply. Use that action to continue the
+same import.
+
+Reprocessing the same incoming message reuses its transfer instead of downloading
+twice. After restart, files still waiting to start resume when the main bot
+reconnects. An interrupted running import shows **Failed** and waits for **Retry**.
+An incomplete download restarts from zero. A fully received upload retains its
+staged file for retry. Telegram must still retain the source attachment and allow
+the bot to read it.
+
+### Pool bot downloads through a private intake channel
+
+To let available storage clients fetch different chunks of an encrypted bot
+import, configure **BOT_INTAKE_CHANNEL** with a separate private channel ID.
+Add the main bot and every participating storage bot to that channel; the main
+bot needs permission to post and delete its temporary messages. Keep this channel
+separate from the drive's storage channel and independent backup channel.
+Recreate the app after changing this deployment setting.
+
+**Temporary copies are plaintext.** Channel members can read incoming originals
+until they are deleted, even when **Encrypt bot uploads** is on. Source chunks
+also pass through the server's private local media cache and upload staging.
+Only enable this on a channel whose membership you control. Final drive files
+still follow your encryption setting.
+
+For its active file, the queue copies the source to the intake channel and uses
+the pooled reader to receive it into staging, with foreground scheduling and
+the shared download-speed limit. Adding bots can increase
+available download capacity; it cannot guarantee a particular speed. Other files
+wait their turn. With no intake channel configured, receipt uses the main bot as
+before. Encryption-off imports keep their direct Telegram copy path.
+
+Temporary messages and their exact cache entries are cleaned up when no longer
+needed. Network or permission failures can delay deletion; pending cleanup must
+be resolved before temporary plaintext can be considered removed. An uncertain
+copy result is kept for review instead of blindly duplicating or deleting files.
+The bot queue pauses until known copies are cleaned up or the owner reviews an
+unknown copy outcome. For an unknown outcome, check the private intake channel in
+Telegram and remove the temporary copy there if you can identify it. In
+**Transfers**, choose **Confirm intake channel reviewed** on the affected row and
+confirm to let the next file proceed. TGDrive records your confirmation and keeps
+the transfer outcome. Confirming does not retry the import or delete messages.
+Website transfers and streaming keep their own scheduling.
+Pending cleanup records remain visible in Transfers even after the final file is
+saved or the import is cancelled. Clearing history preserves these records, and
+restarting preserves the next retry time for known copies.
+The sender's original private-chat message is never a cleanup target.
 
 If the bot says **Upload could not be confirmed**, check the drive before
 resending: its database write may have succeeded.

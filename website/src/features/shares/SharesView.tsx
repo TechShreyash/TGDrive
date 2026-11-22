@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { PasswordInput, Tooltip } from "@mantine/core";
 import {
     Link,
+    LockKeyhole,
     Copy,
     FolderOpen,
     RefreshCw,
@@ -59,6 +61,7 @@ function shareDescription(share: Share) {
     return [
         share.name || "Shared Item",
         share.label,
+        share.password_required && "Password protected",
         expiryDescription(share),
         "Created " + formatTimestamp(share.created_at),
     ]
@@ -111,6 +114,9 @@ export default function SharesView({
         embed: boolean;
     } | null>(null);
     const [editing, setEditing] = useState<Share | null>(null);
+    const [locatingId, setLocatingId] = useState<string>();
+    const locateRequest = useRef<AbortController | null>(null);
+    useEffect(() => () => locateRequest.current?.abort(), []);
     // Expiry changes while this page is open, without a database refresh.
     const [, tick] = useState(0);
     useEffect(() => {
@@ -241,21 +247,29 @@ export default function SharesView({
         }
     };
     const locate = async (share: Share) => {
+        if (locateRequest.current) return;
+        if (!share.id) {
+            onError("Refresh Shared Links before managing this entry.");
+            return;
+        }
+        const controller = new AbortController();
+        locateRequest.current = controller;
+        setLocatingId(share.id);
         try {
-            if (!share.id)
-                throw new Error(
-                    "Refresh Shared Links before managing this entry.",
-                );
-            const latest = (await api.shares()).shares.find(
+            const latest = (await api.shares(controller.signal)).shares.find(
                 (row) => row.id === share.id,
             );
+            if (controller.signal.aborted) return;
             if (!latest)
                 throw new Error(
                     "This shared item is no longer available. Refresh the list.",
                 );
             onLocate(latest);
         } catch (cause) {
-            onError(errorMessage(cause));
+            if (!controller.signal.aborted) onError(errorMessage(cause));
+        } finally {
+            locateRequest.current = null;
+            if (!controller.signal.aborted) setLocatingId(undefined);
         }
     };
     const copiedShare = shares.find(
@@ -367,10 +381,11 @@ export default function SharesView({
                     <div className="share-columns" aria-hidden="true">
                         <span>Shared item</span>
                         <span>Link dates</span>
+                        <span>Link opens</span>
                         <span>Actions</span>
                     </div>
                     <ul className="shares-rows" aria-label="Shared Links">
-                        {visible.map((share) => {
+                        {visible.map((share, index) => {
                             const ended = shareExpired(share);
                             const name = share.name || "Shared Item";
                             const copyIssue = shareCopyIssue(share);
@@ -380,7 +395,11 @@ export default function SharesView({
                             const detailsId = share.id
                                 ? `share-details-${share.id}`
                                 : undefined;
+                            const expiryTooltipId = `share-expiry-${index}`;
                             const description = shareDescription(share);
+                            const locating =
+                                locatingId !== undefined &&
+                                locatingId === share.id;
                             const expiryDate = new Date(
                                 typeof share.expires_at === "number"
                                     ? share.expires_at * 1000
@@ -413,6 +432,8 @@ export default function SharesView({
                                             className="share-name"
                                             title={name}
                                             aria-describedby={detailsId}
+                                            aria-busy={locating}
+                                            aria-disabled={!!locatingId}
                                             onClick={() => void locate(share)}
                                         >
                                             {name}
@@ -437,6 +458,15 @@ export default function SharesView({
                                             )}
                                             {share.folder_label || "My Files"}
                                         </span>
+                                        {share.password_required && (
+                                            <span
+                                                className="share-protection"
+                                                aria-hidden="true"
+                                            >
+                                                <LockKeyhole size={12} />
+                                                Password protected
+                                            </span>
+                                        )}
                                         <span
                                             className="sr-only"
                                             id={detailsId}
@@ -444,58 +474,94 @@ export default function SharesView({
                                             {description}
                                         </span>
                                     </div>
-                                    <div className="share-dates">
-                                        <div
-                                            className={
-                                                "share-expiry" +
-                                                (ended ? " ended" : "")
-                                            }
-                                        >
-                                            {share.expires_at ? (
-                                                <time
-                                                    dateTime={
-                                                        Number.isFinite(
-                                                            expiryDate.getTime(),
-                                                        )
-                                                            ? expiryDate.toISOString()
-                                                            : undefined
-                                                    }
-                                                    tabIndex={0}
-                                                    aria-label={`${ended ? "Expired" : "Expires"} ${formatTimestamp(share.expires_at)}`}
-                                                >
-                                                    <span className="share-expiry-label">
-                                                        {ended
-                                                            ? "Expired"
-                                                            : "Expires"}
-                                                    </span>
-                                                    {formatDate(
-                                                        share.expires_at,
-                                                    )}
-                                                    <span
-                                                        className="share-expiry-tooltip"
-                                                        role="tooltip"
+                                    <div className="share-stats">
+                                        <div className="share-dates">
+                                            <div
+                                                className={
+                                                    "share-expiry" +
+                                                    (ended ? " ended" : "")
+                                                }
+                                            >
+                                                {share.expires_at ? (
+                                                    <time
+                                                        dateTime={
+                                                            Number.isFinite(
+                                                                expiryDate.getTime(),
+                                                            )
+                                                                ? expiryDate.toISOString()
+                                                                : undefined
+                                                        }
+                                                        tabIndex={0}
+                                                        aria-describedby={
+                                                            expiryTooltipId
+                                                        }
                                                     >
-                                                        {formatTimestamp(
+                                                        <span className="share-expiry-label">
+                                                            {ended
+                                                                ? "Expired"
+                                                                : "Expires"}
+                                                        </span>
+                                                        {formatDate(
                                                             share.expires_at,
                                                         )}
-                                                    </span>
-                                                </time>
-                                            ) : (
-                                                "No expiry"
-                                            )}
+                                                        <span
+                                                            className="share-expiry-tooltip"
+                                                            id={expiryTooltipId}
+                                                            role="tooltip"
+                                                            aria-hidden="true"
+                                                        >
+                                                            {formatTimestamp(
+                                                                share.expires_at,
+                                                            )}
+                                                        </span>
+                                                    </time>
+                                                ) : (
+                                                    "No expiry"
+                                                )}
+                                            </div>
+                                            <time
+                                                className="share-created"
+                                                dateTime={share.created_at}
+                                                title={
+                                                    "Created " +
+                                                    formatTimestamp(
+                                                        share.created_at,
+                                                    )
+                                                }
+                                            >
+                                                Created {createdTime(share)}
+                                            </time>
                                         </div>
-                                        <time
-                                            className="share-created"
-                                            dateTime={share.created_at}
+                                        <div
+                                            className="share-opens"
                                             title={
-                                                "Created " +
-                                                formatTimestamp(
-                                                    share.created_at,
-                                                )
+                                                share.opens_since
+                                                    ? "Tracking since " +
+                                                      formatTimestamp(
+                                                          share.opens_since,
+                                                      )
+                                                    : "Tracking starts with the next open"
                                             }
                                         >
-                                            Created {createdTime(share)}
-                                        </time>
+                                            <strong>
+                                                {(
+                                                    share.open_count ?? 0
+                                                ).toLocaleString()}
+                                            </strong>
+                                            <span>
+                                                {share.open_count === 1
+                                                    ? " open"
+                                                    : " opens"}
+                                            </span>
+                                            <span className="share-open-since">
+                                                {share.opens_since
+                                                    ? "Since " +
+                                                      formatDate(
+                                                          share.opens_since,
+                                                      )
+                                                    : "New tracking"}
+                                            </span>
+                                        </div>
                                     </div>
                                     <div className="share-row-actions">
                                         {(share.type === "folder"
@@ -521,7 +587,7 @@ export default function SharesView({
                                                         ? "Embed link"
                                                         : "Link") + " copied"
                                                   : "Copy " + linkName;
-                                            return (
+                                            const control = (
                                                 <span
                                                     key={linkName}
                                                     className={
@@ -544,12 +610,12 @@ export default function SharesView({
                                                     }
                                                     aria-label={
                                                         copyIssue
-                                                            ? `Copy ${linkName} unavailable for ${share.label || name}. ${copyIssue}`
+                                                            ? `Copy ${linkName} unavailable for ${share.label || name}`
                                                             : undefined
                                                     }
-                                                    aria-describedby={
+                                                    aria-description={
                                                         copyIssue
-                                                            ? detailsId
+                                                            ? copyIssue
                                                             : undefined
                                                     }
                                                     onClick={
@@ -558,13 +624,6 @@ export default function SharesView({
                                                                   event.currentTarget.focus()
                                                             : undefined
                                                     }
-                                                    onKeyDown={(event) => {
-                                                        if (
-                                                            event.key ===
-                                                            "Escape"
-                                                        )
-                                                            event.currentTarget.blur();
-                                                    }}
                                                 >
                                                     <button
                                                         className={
@@ -616,15 +675,26 @@ export default function SharesView({
                                                             />
                                                         )}
                                                     </button>
-                                                    {copyIssue && (
-                                                        <span
-                                                            className="share-copy-explanation"
-                                                            role="tooltip"
-                                                        >
-                                                            {copyIssue}
-                                                        </span>
-                                                    )}
                                                 </span>
+                                            );
+                                            return copyIssue ? (
+                                                <Tooltip
+                                                    key={linkName}
+                                                    label={copyIssue}
+                                                    className="share-copy-explanation"
+                                                    floatingStrategy="fixed"
+                                                    events={{
+                                                        focus: true,
+                                                        hover: true,
+                                                        touch: true,
+                                                    }}
+                                                    multiline
+                                                    w={230}
+                                                >
+                                                    {control}
+                                                </Tooltip>
+                                            ) : (
+                                                control
                                             );
                                         })}
                                         {share.id && (
@@ -655,12 +725,18 @@ export default function SharesView({
                                                 "Show " + name + " in folder"
                                             }
                                             aria-describedby={detailsId}
+                                            aria-busy={locating}
+                                            aria-disabled={!!locatingId}
                                             onClick={() => void locate(share)}
                                         >
-                                            <FolderOpen
-                                                size={18}
-                                                aria-hidden="true"
-                                            />
+                                            {locating ? (
+                                                <Spinner />
+                                            ) : (
+                                                <FolderOpen
+                                                    size={18}
+                                                    aria-hidden="true"
+                                                />
+                                            )}
                                         </button>
                                         <button
                                             className="icon-button"
@@ -820,6 +896,8 @@ function EditShare({
     const [never, setNever] = useState(!share.expires_at);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
+    const [password, setPassword] = useState("");
+    const [removePassword, setRemovePassword] = useState(false);
     const save = async () => {
         if (busy) return;
         setBusy(true);
@@ -829,10 +907,13 @@ function EditShare({
                 share_id: string;
                 label?: string;
                 expires_at?: string | null;
+                password?: string | null;
             } = { share_id: share.id! };
             if (label !== (share.label || "")) changes.label = label;
             if (never !== !share.expires_at || (!never && expiry !== localDate))
                 changes.expires_at = never ? null : dateTimeInputToISO(expiry);
+            if (removePassword) changes.password = null;
+            else if (password) changes.password = password;
             await request("/api/v1/shares", changes, { method: "PATCH" });
             onSaved();
         } catch (cause) {
@@ -862,7 +943,7 @@ function EditShare({
                     value={label}
                     onChange={(event) => setLabel(event.target.value)}
                 />
-                <label className="checkbox-label">
+                <label className="share-expiry-toggle">
                     <input
                         type="checkbox"
                         checked={never}
@@ -884,10 +965,32 @@ function EditShare({
                         />
                     </>
                 )}
-                <p className="muted">
-                    Changes apply only to this link. Anyone with the link can
-                    use it.
-                </p>
+                <PasswordInput
+                    label={
+                        share.password_required
+                            ? "New share password (optional)"
+                            : "Share password (optional)"
+                    }
+                    value={password}
+                    maxLength={255}
+                    disabled={busy || removePassword}
+                    autoComplete="new-password"
+                    onChange={(event) => setPassword(event.currentTarget.value)}
+                />
+                {share.password_required && (
+                    <label className="checkbox-label">
+                        <input
+                            type="checkbox"
+                            checked={removePassword}
+                            disabled={busy}
+                            onChange={(event) => {
+                                setRemovePassword(event.target.checked);
+                                if (event.target.checked) setPassword("");
+                            }}
+                        />
+                        Remove password requirement
+                    </label>
+                )}
                 <ErrorNotice message={error} />
                 <div className="dialog-actions">
                     <button

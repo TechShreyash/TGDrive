@@ -1,6 +1,7 @@
 import Preview from "../previews/Preview";
 import type { VideoProgressMode } from "../previews/video/videoWatchProgress";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { PasswordInput } from "@mantine/core";
 import {
     Folder,
     ChevronRight,
@@ -35,8 +36,10 @@ import { embedUrl } from "../shares/embedLinks";
 import { shareUrl } from "../shares/SharesView";
 import "./ActionDialog.css";
 import ArchiveDialog, { type ArchiveDialogState } from "./ArchiveDialog";
+import PdfPasswordDialog from "./PdfPasswordDialog";
 export type ActionDialogState =
     | ArchiveDialogState
+    | { type: "pdf-password"; item: DriveItem }
     | { type: "folder" }
     | { type: "rename"; item: DriveItem }
     | { type: "url" }
@@ -87,6 +90,7 @@ export default function ActionDialog({
     const [error, setError] = useState("");
     const [expires, setExpires] = useState("7");
     const [shareLabel, setShareLabel] = useState("");
+    const [sharePassword, setSharePassword] = useState("");
     const [customExpiry, setCustomExpiry] = useState("");
     const [link, setLink] = useState("");
     const [expiry, setExpiry] = useState<string | null>(null);
@@ -107,6 +111,14 @@ export default function ActionDialog({
             setBusy(false);
         }
     };
+    if (dialog.type === "pdf-password")
+        return (
+            <PdfPasswordDialog
+                item={dialog.item}
+                onNotice={onNotice}
+                onClose={onClose}
+            />
+        );
     if (dialog.type === "archive" || dialog.type === "extract")
         return (
             <ArchiveDialog
@@ -341,7 +353,7 @@ export default function ActionDialog({
                 tone="blue"
                 description={
                     <>
-                        Anyone with the link can{" "}
+                        Recipients can{" "}
                         {dialog.item.type === "folder"
                             ? "view and download this folder’s current and future contents"
                             : "view and download this file"}
@@ -364,6 +376,7 @@ export default function ActionDialog({
                                     expires === "custom"
                                         ? dateTimeInputToISO(customExpiry)
                                         : undefined,
+                                    sharePassword || undefined,
                                 );
                                 setLink(
                                     shareUrl(
@@ -373,6 +386,7 @@ export default function ActionDialog({
                                     ),
                                 );
                                 setExpiry(result.expires_at);
+                                setSharePassword("");
                             });
                         }}
                     >
@@ -386,6 +400,15 @@ export default function ActionDialog({
                             placeholder="For example, Alex or project review"
                             onChange={(event) =>
                                 setShareLabel(event.target.value)
+                            }
+                        />
+                        <PasswordInput
+                            label="Share password (optional)"
+                            value={sharePassword}
+                            maxLength={255}
+                            autoComplete="new-password"
+                            onChange={(event) =>
+                                setSharePassword(event.currentTarget.value)
                             }
                         />
                         <fieldset className="share-expiry-options">
@@ -744,20 +767,77 @@ function MoveDialog({
     onClose: () => void;
     onChanged: () => void;
 }) {
-    const [path, setPath] = useState("/");
+    const sameParent = items.every(
+        (item) => (item.path || "/") === (items[0]?.path || "/"),
+    );
+    const initialPath = sameParent ? items[0]?.path || "/" : "/";
+    const [path, setPath] = useState(initialPath);
     const [folders, setFolders] = useState<DriveItem[]>([]);
-    const [trail, setTrail] = useState([{ path: "/", name: "My Files" }]);
+    const [trail, setTrail] = useState(() => [
+        { path: "/", name: "My Files" },
+        ...(initialPath === "/"
+            ? []
+            : [
+                  {
+                      path: initialPath,
+                      name: items[0]?.parent_names?.at(-1) || "Current folder",
+                  },
+              ]),
+    ]);
+    const [source, setSource] = useState(() => [
+        "My Files",
+        ...(initialPath === "/"
+            ? []
+            : items[0]?.parent_names || ["Current folder"]),
+    ]);
     const [loading, setLoading] = useState(true);
+    const [listingFailed, setListingFailed] = useState(false);
+    const [listingAttempt, setListingAttempt] = useState(0);
+    const rootCrumb = useRef<HTMLButtonElement>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const [conflict, setConflict] = useState("keep_both");
     const [exposure, setExposure] = useState(false);
     const [allow, setAllow] = useState(false);
-    useEffect(() => {
-        let ignore = false;
+    const selectDestination = (next: typeof trail) => {
         setLoading(true);
         setFolders([]);
         setError("");
+        const nextPath = next.at(-1)?.path ?? "/";
+        if (nextPath === path) setListingAttempt((attempt) => attempt + 1);
+        setPath(nextPath);
+        setTrail(next);
+    };
+    useEffect(() => {
+        if (path !== initialPath || initialPath === "/") return;
+        let ignore = false;
+        void api
+            .nodes({ parent_id: initialPath, limit: 1, type: "folder" })
+            .then((result) => {
+                if (!ignore && result.folder?.breadcrumbs) {
+                    setSource([
+                        "My Files",
+                        ...result.folder.breadcrumbs
+                            .slice(1)
+                            .map((crumb) => crumb.name),
+                    ]);
+                    setTrail([
+                        { path: "/", name: "My Files" },
+                        ...result.folder.breadcrumbs.slice(1).map((crumb) => ({
+                            path: crumb.path,
+                            name: crumb.name,
+                        })),
+                    ]);
+                }
+            })
+            .catch(() => {});
+        return () => {
+            ignore = true;
+        };
+    }, [initialPath, path]);
+    useEffect(() => {
+        let ignore = false;
+        setListingFailed(false);
         setExposure(false);
         setAllow(false);
         void api
@@ -780,7 +860,14 @@ function MoveDialog({
                 }
             })
             .catch((error) => {
-                if (!ignore) setError(errorMessage(error));
+                if (!ignore) {
+                    setListingFailed(true);
+                    setError(
+                        error instanceof ApiError && error.status === 404
+                            ? "This destination is no longer available."
+                            : errorMessage(error),
+                    );
+                }
             })
             .finally(() => {
                 if (!ignore) setLoading(false);
@@ -788,7 +875,7 @@ function MoveDialog({
         return () => {
             ignore = true;
         };
-    }, [path, items]);
+    }, [path, items, listingAttempt]);
     const move = async () => {
         setBusy(true);
         setError("");
@@ -818,6 +905,26 @@ function MoveDialog({
                 setError(
                     "This move would make some files accessible through a public folder link. Confirm below to continue.",
                 );
+            } else if (error instanceof ApiError && error.status === 404) {
+                try {
+                    await api.nodes({
+                        parent_id: path,
+                        limit: 1,
+                        type: "folder",
+                    });
+                    setError(errorMessage(error));
+                } catch (checkError) {
+                    if (
+                        checkError instanceof ApiError &&
+                        checkError.status === 404
+                    ) {
+                        setListingFailed(true);
+                        setFolders([]);
+                        setExposure(false);
+                        setAllow(false);
+                        setError("This destination is no longer available.");
+                    } else setError(errorMessage(error));
+                }
             } else setError(errorMessage(error));
         } finally {
             setBusy(false);
@@ -833,11 +940,16 @@ function MoveDialog({
             }
             icon={<FolderInput />}
             tone="amber"
-            description="Choose a different destination folder. Existing files are never overwritten."
+            description="Existing files are never overwritten."
             onClose={() => {
                 if (!busy) onClose();
             }}
         >
+            <dl className="move-source">
+                <dt>From</dt>
+                <dd>{sameParent ? source.join(" / ") : "Different folders"}</dd>
+            </dl>
+            <div className="move-destination-label">Destination</div>
             <nav
                 className="move-breadcrumbs"
                 aria-label="Destination breadcrumb"
@@ -845,33 +957,50 @@ function MoveDialog({
                 {trail.map((crumb, index) => (
                     <button
                         key={crumb.path}
+                        ref={index === 0 ? rootCrumb : undefined}
                         className="text-button"
+                        aria-current={
+                            index === trail.length - 1 ? "location" : undefined
+                        }
+                        disabled={busy}
                         onClick={() => {
-                            setPath(crumb.path);
-                            setTrail(trail.slice(0, index + 1));
+                            if (crumb.path !== path)
+                                selectDestination(trail.slice(0, index + 1));
                         }}
                     >
-                        {index > 0 && <ChevronRight size={13} />} {crumb.name}
+                        {index > 0 && (
+                            <ChevronRight size={13} aria-hidden="true" />
+                        )}
+                        <span>{crumb.name}</span>
                     </button>
                 ))}
             </nav>
-            <div className="folder-picker" aria-busy={loading}>
+            <div
+                className={
+                    listingFailed && !loading ? undefined : "folder-picker"
+                }
+                aria-busy={loading}
+            >
                 {loading ? (
                     <p>
                         <Spinner /> Loading folders…
                     </p>
+                ) : listingFailed ? (
+                    <ErrorNotice message={error} />
                 ) : folders.length ? (
                     folders.map((folder) => (
                         <button
                             key={folder.id}
-                            onClick={() => {
-                                const next = itemPath(folder);
-                                setPath(next);
-                                setTrail([
+                            disabled={busy}
+                            onClick={() =>
+                                selectDestination([
                                     ...trail,
-                                    { path: next, name: folder.name },
-                                ]);
-                            }}
+                                    {
+                                        path: itemPath(folder),
+                                        name: folder.name,
+                                    },
+                                ])
+                            }
                         >
                             <Folder size={19} />
                             <span>{folder.name}</span>
@@ -882,31 +1011,33 @@ function MoveDialog({
                     <p className="muted">No folders inside this destination.</p>
                 )}
             </div>
-            <fieldset className="dialog-choice-options">
-                <legend>Name Conflicts</legend>
-                <div>
-                    <button
-                        type="button"
-                        aria-pressed={conflict === "keep_both"}
-                        onClick={() => setConflict("keep_both")}
-                    >
-                        Keep Both
-                    </button>
-                    <button
-                        type="button"
-                        aria-pressed={conflict === "skip"}
-                        onClick={() => setConflict("skip")}
-                    >
-                        Skip Existing
-                    </button>
-                </div>
-                <p className="muted">
-                    {conflict === "keep_both"
-                        ? "Add a number to the moved item if its name is already used."
-                        : "Leave items with matching names in their original location."}
-                </p>
-            </fieldset>
-            <ErrorNotice message={error} />
+            {!listingFailed && (
+                <fieldset className="dialog-choice-options">
+                    <legend>Name Conflicts</legend>
+                    <div>
+                        <button
+                            type="button"
+                            aria-pressed={conflict === "keep_both"}
+                            onClick={() => setConflict("keep_both")}
+                        >
+                            Keep Both
+                        </button>
+                        <button
+                            type="button"
+                            aria-pressed={conflict === "skip"}
+                            onClick={() => setConflict("skip")}
+                        >
+                            Skip Existing
+                        </button>
+                    </div>
+                    <p className="muted">
+                        {conflict === "keep_both"
+                            ? "Add a number to the moved item if its name is already used."
+                            : "Leave items with matching names in their original location."}
+                    </p>
+                </fieldset>
+            )}
+            {!listingFailed && <ErrorNotice message={error} />}
             {exposure && (
                 <label className="check-field">
                     <input
@@ -927,18 +1058,31 @@ function MoveDialog({
                 >
                     Cancel
                 </button>
-                <button
-                    className="primary-button"
-                    disabled={
-                        busy ||
-                        loading ||
-                        items.every((item) => (item.path || "/") === path) ||
-                        (exposure && !allow)
-                    }
-                    onClick={() => void move()}
-                >
-                    {busy ? <Spinner /> : <Move size={16} />} Move Here
-                </button>
+                {listingFailed && !loading ? (
+                    <button
+                        type="button"
+                        className="primary-button"
+                        onClick={() => {
+                            selectDestination(trail.slice(0, 1));
+                            rootCrumb.current?.focus();
+                        }}
+                    >
+                        {path === "/" ? "Try again" : "Choose another folder"}
+                    </button>
+                ) : (
+                    <button
+                        className="primary-button"
+                        disabled={
+                            busy ||
+                            loading ||
+                            (sameParent && initialPath === path) ||
+                            (exposure && !allow)
+                        }
+                        onClick={() => void move()}
+                    >
+                        {busy ? <Spinner /> : <Move size={16} />} Move Here
+                    </button>
+                )}
             </div>
         </Modal>
     );

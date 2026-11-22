@@ -239,16 +239,24 @@ they can coexist and do not establish network capacity or a unique cause.
 | --- | --- | --- | --- |
 | `POST /api/v1/archives` | Owner | `paths`, `destination`, `name` | `{id, job}` for a ZIP job |
 | `POST /api/v1/archives/extract` | Owner | `path`, `destination`, `folder_name` (`null` extracts in place) | `{id, job}` for an extract job |
+| `POST /api/v1/pdfs/password` | Owner | `path`, `destination`, `operation` (`add`, `change`, or `remove`), `password` (current), `new_password`, `allow_public_exposure` | `{id, job}` for a separate PDF copy |
 
-Both accept `allow_public_exposure`. Follow and control the job with the
+Both accept `allow_public_exposure` and an optional `password` for ZIP.
+The retry endpoint accepts `password` when the job reports
+`archive_password_required`. Follow and control the job with the
 [job routes](#jobs). Supported formats are listed in
 [the user guide](usage.md#create-zips-and-extract-archives).
 
+PDF jobs require the current password for change and remove, and a new
+password for add and change. A retry may also need `new_password`. The server
+does not save these values. Input is limited to 256 MiB and output to the
+smaller of the upload limit and the original size plus 4 MiB.
+
 | Limit | Value |
 | --- | --- |
-| ZIP creation | Stored entries, no recompression |
+| ZIP creation | Stored entries, no recompression. Password-protected files use AES-256 |
 | Extraction formats | ZIP (Stored, Deflate, BZIP2, LZMA), 7z, RAR/RAR5, TAR, gzip/bzip2/xz/Zstandard |
-| Rejected | Encrypted or split archives, unsafe or duplicate paths, links, empty regular files |
+| Rejected | Encrypted formats other than ZIP, split archives, unsafe or duplicate paths, links, empty regular files |
 | Disk space | Shares `STAGING_BUDGET_BYTES` and `MIN_FREE_BYTES` with uploads; extraction needs the archive and its output together |
 | Entries | At most 1,000 files/folders, including implicit parent folders; applies to ZIP creation and extraction |
 | Paths | At most 64 components and 4,096 characters |
@@ -291,9 +299,11 @@ Access is **Owner** or **Share**; pass `path` and optional `auth` as for `/file`
 
 | Method and route | Purpose | Notes and errors |
 | --- | --- | --- |
-| `GET /api/v1/preview` | `kind`: `text`, `pdf`, `video`, `book` or `unsupported` | Text is at most 256 KiB |
-| `GET /api/v1/books` | Book index, or one chapter or page with `entry` | [Reader limits](architecture.md#book-reader-internals) |
+| `GET /api/v1/preview` | `kind`: `text`, `pdf`, `video`, `book`, `archive` or `unsupported` | Text is at most 256 KiB |
+| `GET /api/v1/books` | Book index, one chapter/page with `entry`, or ZIP contents | ZIP returns `kind: archive` and entries with `name`, `directory`, uncompressed `size` and `encrypted`; ZIP entry extraction is not exposed here. [Reader limits](architecture.md#book-reader-internals) |
 | `GET /api/v1/media` | Original plus real stored variants | `/file?quality=<id>` picks one; unknown IDs `404` |
+| `GET /api/v1/playback/compatibility.m3u8` | Short-window compatible video manifest | Owner/share access; path and optional auth; resource limits can return 413, 422 or 503 |
+| `GET /api/v1/playback/segment.ts` | One H.264/AAC compatible segment | Use signed URLs from the manifest; authorization rechecked; changed file 409, invalid signature 403, out-of-range segment 416 |
 | `GET /api/v1/thumbnail` | Cover JPEG up to 128 KiB | `204` none; `304` unchanged; `503 THUMBNAIL_BUSY` with `Retry-After: 5` |
 | `GET /api/v1/poster` | Stored video poster up to 1 MiB | `204` none; `304`; `503 POSTER_BUSY` with `Retry-After: 5` |
 | `GET /api/v1/file-status` | `request_id`: queue estimate, size, `phase`, `retry_after` | `TELEGRAM_QUEUE_FULL` matches a `503` from `/file` |
@@ -346,7 +356,8 @@ All routes are **Owner**.
 | `GET /api/v1/jobs` | All retained jobs, including finished ones and `history_cleared` markers | |
 | `GET /api/v1/jobs/{job_id}` | One job | `404` |
 | `POST /api/v1/jobs/{job_id}/cancel` | Cancel | May stay `cancelling` while Telegram work settles |
-| `POST /api/v1/jobs/{job_id}/retry` | Retry with the same operation identity | `409` for invalid transitions |
+| `POST /api/v1/jobs/{job_id}/retry` | Retry with the same operation identity | `409` for invalid transitions or unavailable staged data after an interrupted upload |
+| `POST /api/v1/jobs/{job_id}/review-bot-intake` | Owner confirms review of an uncertain temporary copy and releases the bot queue | Offered as `bot_intake_review_required` on the job. Repeating confirmation is safe. `409` if the copy is known or dispatch is still active |
 | `POST /api/v1/jobs/{job_id}/torrent-files` | `{"files": [indexes]}`: choose torrent files | `422` for empty, duplicate or out-of-range indexes |
 
 A job has `id`, `kind` (`upload`, `remote`, `delete`, `archive`, `extract`, …),
@@ -391,14 +402,16 @@ root can't be starred.
 
 | Method and route | Access | Purpose | Notes and errors |
 | --- | --- | --- | --- |
-| `GET /api/v1/shares` | Owner | All links, active and expired | Never returns tokens |
-| `POST /api/v1/shares` | Owner | `path`, optional `label`, `expires_in_days` (1–3650, default 7; `null` = never) or explicit `expires_at` | `201` with `auth`; up to 100 links per item |
+| `GET /api/v1/shares` | Owner | All links, active and expired | Reports `password_required`, `open_count`, and `opens_since`. Omits tokens and password hashes |
+| `POST /api/v1/shares` | Owner | `path`, optional `label`, `password`, `expires_in_days` (1–3650, default 7; `null` = never) or explicit `expires_at` | `201` with `auth`; up to 100 links per item |
 | `POST /api/v1/shares/link` | Owner | Copy an existing link by `share_id` or `path` | `409` unrecoverable or ambiguous; `410` expired |
-| `PATCH /api/v1/shares` | Owner | Required `share_id`, plus `label` and/or `expires_at` (`null` = never) | Update by link ID, not item path |
+| `PATCH /api/v1/shares` | Owner | `share_id` and any of `label`, `expires_at` (`null` = never), or `password` (`null` removes protection) | Update one link |
 | `DELETE /api/v1/shares` | Owner | Revoke one link by `share_id`, or all direct links by `path` | |
 | `POST /api/v1/download-links` | Owner | `path`: attachment URL plus `expires_at` for a download manager | Reuses a copyable "Download link" share with its current expiry; only a new share defaults to one day |
 | `POST /api/getFileShareAuth`, `/api/getFolderShareAuth` | Owner | Older link-creation routes | |
 | `GET /api/v1/embed` | Share | File metadata for the embed viewer | Token required even with an owner cookie |
+| `POST /api/v1/shared/unlock` | Share | `auth` and `password` | Sets an HTTP-only unlock cookie for up to eight hours. `403` invalid link or password, `429` retry later |
+| `POST /api/v1/shared/opens` | Share | Records a displayed visit using `auth`, the displayed item `path` and a random 32-character lowercase hex `event_id` | `204` for a counted or previously seen event. Standard share scope and password checks apply. Retry IDs are retained for up to one day and excluded from backups |
 | `GET`, `HEAD /file` | Owner, Share | File bytes; `Range`, `quality`, `preview=1`, `download=1` | `206`, `304`, `416`, `503` with `Retry-After` |
 
 URL formats:
@@ -418,6 +431,9 @@ URL formats:
   apply to cached bytes too, but can't recall bytes already sent.
 - Share tokens are HMACs of the share ID under `SESSION_SECRET`; only their hash is
   stored. Keep `SESSION_SECRET` to copy links again on a new installation.
+- Protected shares return `403` and `SHARE_PASSWORD_REQUIRED` until unlocked.
+  Continue to send `auth` and retain the cookie from the unlock response for
+  listings, previews, embeds, and file reads.
 
 Embedding steps: [the user guide](usage.md#embed-a-file-or-folder-in-a-website).
 Caching and read-ahead: [Performance](performance.md#shared-download-load-and-queues).

@@ -402,16 +402,27 @@ class TransferManager:
         return info
 
     async def start_archive(
-        self, *, paths, destination, name, allow_public_exposure=False
+        self, *, paths, destination, name, allow_public_exposure=False, password=None
     ):
         from tgdrive.transfers.archives import start_archive
 
         return await start_archive(
-            self, paths, destination, name, allow_public_exposure=allow_public_exposure
+            self,
+            paths,
+            destination,
+            name,
+            allow_public_exposure=allow_public_exposure,
+            password=password,
         )
 
     async def start_extraction(
-        self, *, path, destination, folder_name, allow_public_exposure=False
+        self,
+        *,
+        path,
+        destination,
+        folder_name,
+        allow_public_exposure=False,
+        password=None,
     ):
         from tgdrive.transfers.archives import start_extraction
 
@@ -421,6 +432,7 @@ class TransferManager:
             destination,
             folder_name,
             allow_public_exposure=allow_public_exposure,
+            password=password,
         )
 
     @_journalled
@@ -1136,6 +1148,17 @@ class TransferManager:
         if record.task is not None or record.terminal:
             return record
 
+        # Spawning synchronously gives concurrent replays one task to await.
+        self.registry.spawn(
+            record.id, lambda item: self._receive_telegram_file(item, download)
+        )
+        return record
+
+    async def _receive_telegram_file(self, record, download) -> None:
+        local_path = Path(record.context["local_path"])
+        destination = record.context["destination"]
+        file_name = record.context["name"]
+
         async def progress(current: int, total: int) -> None:
             if record.cancel_event.is_set():
                 raise TransferCancelled("Transfer cancelled")
@@ -1147,37 +1170,30 @@ class TransferManager:
                 checkpoint_progress=False,
             )
 
-        async def receive(item: TransferRecord) -> None:
-            try:
-                await self.registry.update(item.id, status=TransferStatus.RUNNING)
-                await download(local_path, progress)
-                if item.cancel_event.is_set():
-                    raise TransferCancelled("Transfer cancelled")
-                written = (await asyncio.to_thread(local_path.stat)).st_size
-                if written == 0:
-                    raise TransferEmptyFile(
-                        "Empty files cannot be uploaded to Telegram"
-                    )
-            except BaseException as exc:
-                with suppress(OSError):
-                    await asyncio.to_thread(local_path.unlink, missing_ok=True)
-                if isinstance(exc, TransferCancelled):
-                    await self.registry.update(
-                        item.id,
-                        status=TransferStatus.CANCELLED,
-                        error="Transfer cancelled",
-                    )
-                    return
-                raise
-            item.context.update(kind="upload", size=written, staging_written=written)
+        try:
             await self.registry.update(
-                item.id, phase="queued", current=0, total=written
+                record.id, status=TransferStatus.RUNNING, phase="downloading"
             )
-            await self._upload_path(item, local_path, destination, file_name, written)
-
-        # Spawning synchronously gives concurrent replays one task to await.
-        self.registry.spawn(record.id, receive)
-        return record
+            await download(local_path, progress)
+            if record.cancel_event.is_set():
+                raise TransferCancelled("Transfer cancelled")
+            written = (await asyncio.to_thread(local_path.stat)).st_size
+            if written == 0:
+                raise TransferEmptyFile("Empty files cannot be uploaded to Telegram")
+        except BaseException as exc:
+            with suppress(OSError):
+                await asyncio.to_thread(local_path.unlink, missing_ok=True)
+            if isinstance(exc, TransferCancelled):
+                await self.registry.update(
+                    record.id,
+                    status=TransferStatus.CANCELLED,
+                    error="Transfer cancelled",
+                )
+                return
+            raise
+        record.context.update(kind="upload", size=written, staging_written=written)
+        await self.registry.update(record.id, phase="queued", current=0, total=written)
+        await self._upload_path(record, local_path, destination, file_name, written)
 
     async def _verify_lineage(self, record: TransferRecord | None = None) -> None:
         if self._ensure_lineage is None:
@@ -1219,7 +1235,59 @@ class TransferManager:
                 await self.registry.persist(record)
             return
 
+    def _interrupted_upload_recovery(self, record: TransferRecord) -> str:
+        context = record.context
+        if context.get("metadata_committed"):
+            return "finish_saving"
+        path = context.get("local_path")
+        if path:
+            try:
+                data = Path(path).stat()
+            except FileNotFoundError, NotADirectoryError:
+                pass
+            except OSError:
+                return "restore_staging"
+            else:
+                if stat.S_ISREG(data.st_mode) and data.st_size == context.get("size"):
+                    return "staged"
+        if self._metadata_committed(record):
+            return "finish_saving"
+        parts = upload_effects(context.get("multipart_plan"))
+        if parts and all(
+            part.get("confirmed") or part.get("message_id") for part in parts
+        ):
+            return "finish_saving"
+        return (
+            "restore_staging"
+            if context.get("send_started") or context.get("remote_message_id")
+            else "original_required"
+        )
+
+    async def _refresh_interrupted_upload_recovery(
+        self, record: TransferRecord
+    ) -> str | None:
+        context = record.context
+        if (
+            record.status is not TransferStatus.ERROR
+            or record.phase != "interrupted"
+            or context.get("kind") != "upload"
+            or context.get("source_kind") not in {None, "upload"}
+            or context.get("bot_source")
+            or context.get("cancel_requested")
+        ):
+            return None
+        guidance = await _worker(self._interrupted_upload_recovery, record)
+        if record.context is not context or record.status is not TransferStatus.ERROR:
+            return None
+        if context.get("interrupted_upload_recovery") != guidance:
+            context["interrupted_upload_recovery"] = guidance
+            await self.registry.persist(record)
+        return guidance
+
     async def recover(self) -> None:
+        await self.registry.fail_interrupted_jobs()
+        for record in self.registry.list():
+            await self._refresh_interrupted_upload_recovery(record)
         # Failed rows do not spawn automatically, but their provider cooldowns
         # still constrain every new upload after a process restart.
         await restore_telegram_cooldowns(self.pool, self.registry.list())
@@ -1229,6 +1297,7 @@ class TransferManager:
             for row in self.registry.list()
             if row.status is TransferStatus.ERROR
             and row.context.get("restart_retryable") is True
+            and not row.bot_intake_copy_uncertain
             and row.context.get("kind")
             in {"upload", "remote", "torrent", "delete", "archive", "extract"}
             and not row.context.get("cancel_requested")
@@ -1262,7 +1331,7 @@ class TransferManager:
                 "or retry this transfer instead of cancelling it."
             )
         record = await self.registry.cancel(job_id)
-        if record.context.get("kind") in {"archive", "extract"}:
+        if record.context.get("kind") in {"archive", "extract", "pdf_password"}:
             from tgdrive.transfers.archives import cancel_children, discard_stage
 
             if record.status is TransferStatus.CANCELLED:
@@ -1306,10 +1375,49 @@ class TransferManager:
         return record
 
     @_journalled
-    async def retry_job(self, job_id: str) -> TransferRecord:
+    async def review_bot_intake(self, job_id: str) -> TransferRecord:
+        record = await self.registry.review_bot_intake(job_id)
+        intake = getattr(self, "_bot_intake", None)
+        if intake is not None:
+            intake.wake()
+        return record
+
+    @_journalled
+    async def retry_job(
+        self,
+        job_id: str,
+        *,
+        password: str | None = None,
+        new_password: str | None = None,
+    ) -> TransferRecord:
         record = self.registry.get(job_id)
         if not record.terminal and record.task is not None and not record.task.done():
             return record
+        guidance = await self._refresh_interrupted_upload_recovery(record)
+        if guidance == "original_required":
+            raise ValueError(
+                "The staged file is missing. Cancel this transfer, "
+                "then upload the original again."
+            )
+        if guidance == "restore_staging":
+            raise ValueError(
+                "The staged file is unavailable. "
+                "Restore it on the server before retrying."
+            )
+        if record.archive_needs_password and record.context.get(
+            "pdf_password_operation"
+        ):
+            from tgdrive.transfers.pdf_passwords import validate_passwords
+
+            validate_passwords(
+                record.context["pdf_password_operation"], password, new_password
+            )
+        elif record.archive_needs_password:
+            from tgdrive.transfers.archives import validate_password
+
+            validate_password(password)
+            if not password:
+                raise ValueError("Enter the ZIP password to retry.")
         if record.context.get("kind") == "torrent" and record.status in {
             TransferStatus.ERROR,
             TransferStatus.QUEUED,
@@ -1319,15 +1427,24 @@ class TransferManager:
         record = await self.registry.retry(job_id)
         if record.context.get("cancel_requested"):
             record.cancel_event.set()
-        await self._resume(record)
+        await self._resume(record, archive_password=password, new_password=new_password)
         return record
 
-    async def _resume(self, record: TransferRecord) -> None:
+    async def _resume(
+        self, record: TransferRecord, *, archive_password=None, new_password=None
+    ) -> None:
         context = record.context
-        if context.get("source_kind") in {"archive", "extract"}:
+        if context.get("bot_source"):
+            intake = getattr(self, "_bot_intake", None)
+            if intake is not None:
+                intake.wake()
+            return
+        if context.get("source_kind") in {"archive", "extract", "pdf_password"}:
             from tgdrive.transfers.archives import spawn_archive
 
-            spawn_archive(self, record)
+            spawn_archive(
+                self, record, password=archive_password, new_password=new_password
+            )
             return
         if context.get("kind") == "torrent":
             task = self.registry.spawn(record.id, self._torrent_pipeline)
@@ -1396,9 +1513,14 @@ class TransferManager:
             )
 
     def _metadata_committed(self, record: TransferRecord) -> bool:
+        operation_id = (
+            record.context.get("bot_operation_id", record.id)
+            if record.context.get("bot_encrypt") is False
+            else record.id
+        )
         return bool(
             record.context.get("metadata_committed")
-            or self.store.has_file_operation(record.id)
+            or self.store.has_file_operation(operation_id)
         )
 
     async def _protect_committed_upload(

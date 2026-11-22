@@ -31,23 +31,27 @@ export const archiveApi = {
         destination: string,
         name: string,
         allow_public_exposure: boolean,
+        password?: string,
     ) =>
         request<{ id: string; job: Job }>("/api/v1/archives", {
             paths,
             destination,
             name,
             allow_public_exposure,
+            password,
         }),
     extract: (
         path: string,
         destination: string,
         folder_name: string | null,
         allow_public_exposure: boolean,
+        password?: string,
     ) =>
         request<{ id: string; job: Job }>("/api/v1/archives/extract", {
             path,
             destination,
             folder_name,
             allow_public_exposure,
+            password,
         }),
 };

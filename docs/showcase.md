@@ -155,7 +155,7 @@ permanent removal from the catalog. Telegram originals remain.
 
 ## Preload and monitor
 
-Choose **Preload file**, then follow **Monitor → Preloads**. Cached data is
+Choose **Preload file**, then open **Preloads**. Cached data is
 disposable and is not a backup. These **local demo screens** show illustrative
 metrics, not deployment performance.
 [Preload guide](usage.md#preload-a-file-for-smoother-playback-and-downloads) · [Performance guide](performance.md)
@@ -175,7 +175,7 @@ metrics, not deployment performance.
 
 Choose playback preloading, file split size, bot uploads and timezone in
 **Configuration**. Resource budgets are automatic and appear under
-**Performance → Automatic tuning**. [Settings and defaults](configuration.md)
+**Performance → Tuning → Automatic tuning**. [Settings and defaults](configuration.md)
 
 <details>
 <summary>Cache, transfers and thumbnail rebuild — local demo</summary>

@@ -29,6 +29,15 @@ def full_demo_server(monkeypatch, request):
 
 
 def navigate(page, label):
+    if label in ("Cache settings", "Transfer limits", "Timezone"):
+        sections = page.get_by_role("navigation", name="Settings sections")
+        if not sections.is_visible():
+            fixtures.open_admin(page)
+            page.get_by_role("link", name="Settings", exact=True).click()
+        sections.get_by_role(
+            "link", name="Cache" if label == "Cache settings" else label, exact=True
+        ).click()
+        return
     fixtures.open_admin(page)
     page.get_by_role("link", name=label, exact=True).click()
 

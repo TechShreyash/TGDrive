@@ -26,25 +26,17 @@ def choose_pdf_fit(page, name):
 
 
 def expect_collapsed_fullscreen_toolbar(page):
-    page.wait_for_function(
-        "document.fullscreenElement === "
-        "document.querySelector('.preview-fullscreen-surface')"
-    )
+    expect(page.locator(".preview-fullscreen-surface:fullscreen")).to_be_visible()
     expect(page.locator(".preview-header")).to_be_hidden()
     expect(page.get_by_role("button", name="Show Toolbar", exact=True)).to_be_visible()
-    page.wait_for_function("""() => {
-      const surface = document.querySelector('.preview-surface');
-      const bounds = surface?.getBoundingClientRect();
-      return bounds && Math.abs(bounds.top) <= 1 &&
-        Math.abs(bounds.height - innerHeight) <= 1;
+    assert page.locator(".preview-surface").evaluate("""surface => {
+      const bounds = surface.getBoundingClientRect();
+      return Math.abs(bounds.top) <= 1 && Math.abs(bounds.height - innerHeight) <= 1;
     }""")
 
 
 def expect_expanded_fullscreen_toolbar(page):
-    page.wait_for_function(
-        "document.fullscreenElement === "
-        "document.querySelector('.preview-fullscreen-surface')"
-    )
+    expect(page.locator(".preview-fullscreen-surface:fullscreen")).to_be_visible()
     expect(page.locator(".preview-header")).to_be_visible()
     expect(
         page.get_by_role("button", name="Hide Toolbar", exact=True)
@@ -81,7 +73,7 @@ def test_pdf_real_fit_width_page_and_fullscreen(server, desktop, width):
     page.get_by_role("button", name="Zoom in", exact=True).click()
     expect(fit_width).to_have_attribute("aria-pressed", "false")
     choose_pdf_fit(page, "Fit Width")
-    options = page.locator('[aria-label="PDF View Options"]')
+    options = page.get_by_role("button", name="PDF View Options", exact=True)
     if options.get_attribute("aria-expanded") == "true":
         options.click()
     page.get_by_role("button", name="Enter Fullscreen", exact=True).click()
@@ -114,10 +106,62 @@ def test_pdf_real_fit_width_page_and_fullscreen(server, desktop, width):
     expect(show).to_be_focused()
     show.press("Enter")
     page.get_by_role("button", name="Exit Fullscreen", exact=True).click()
-    page.wait_for_function("!document.fullscreenElement")
+    expect(page.locator(":fullscreen")).to_have_count(0)
     expect(page.get_by_role("dialog")).to_be_visible()
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=ARTIFACTS / f"pdf-fit-controls-{width}.png")
+
+
+@pytest.mark.parametrize("width,height,header_limit", [(320, 568, 105), (568, 320, 64)])
+def test_phone_pdf_controls_keep_pages_and_keyboard_actions_reachable(
+    server, browser, width, height, header_limit
+):
+    with browser.new_context(
+        viewport={"width": width, "height": height}, has_touch=True, is_mobile=True
+    ) as context:
+        page = context.new_page()
+        login(page, server.url)
+        page.get_by_role("button", name="Preview samples", exact=True).tap()
+        file = page.get_by_role("button", name="sample.pdf", exact=True)
+        file.press("Enter")
+        viewer = page.get_by_role("dialog", name="sample.pdf", exact=True)
+        expect(viewer.locator(".pdf-page canvas").first).to_be_in_viewport(
+            timeout=20000
+        )
+        header = viewer.locator(".preview-header").bounding_box()
+        assert header and header["height"] <= header_limit
+
+        jump = viewer.get_by_label("Page", exact=True)
+        expect(jump).to_have_value("1")
+        jump.fill("1e3")
+        jump.press("Enter")
+        expect(jump).to_have_value("1")
+        jump.fill("2")
+        jump.press("Escape")
+        expect(jump).to_have_value("1")
+        jump.fill(" 2 ")
+        jump.press("Enter")
+        expect(jump).to_have_value("2")
+        jump.fill("999999")
+        jump.blur()
+        expect(jump).to_have_value("3")
+
+        options = viewer.get_by_role("button", name="PDF View Options", exact=True)
+        options.tap()
+        panel = viewer.get_by_role("dialog", name="PDF View Options", exact=True)
+        expect(panel).to_be_in_viewport(ratio=1)
+        assert panel.evaluate("element => element.closest('.preview-header') !== null")
+        status = viewer.get_by_role("status", name="PDF zoom", exact=True)
+        initial_zoom = status.inner_text()
+        panel.get_by_role("button", name="Zoom in", exact=True).tap()
+        expect(status).not_to_have_text(initial_zoom)
+        page.keyboard.press("Escape")
+        expect(panel).to_be_hidden()
+        expect(options).to_be_focused()
+        expect(viewer).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(viewer).to_have_count(0)
+        expect(file).to_be_focused()
 
 
 @pytest.mark.parametrize(
@@ -173,6 +217,11 @@ def test_supported_previews_enter_exit_fullscreen_and_close(
         expect(page.locator(".preview-quality")).to_be_visible()
     if name.endswith("epub"):
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        if width <= 720:
+            toolbar = page.get_by_role("group", name="Reader controls", exact=True)
+            bounds = toolbar.bounding_box()
+            assert bounds is not None
+            assert bounds["x"] + bounds["width"] >= width - 16
         page.screenshot(path=ARTIFACTS / f"book-fullscreen-expanded-{width}.png")
         expect(
             page.get_by_role("group", name="Reader controls", exact=True)

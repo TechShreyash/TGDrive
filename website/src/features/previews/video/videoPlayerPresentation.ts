@@ -1,5 +1,11 @@
 import type { MoviElement } from "movi-player/element/slim";
 
+export function videoFramePeriod(element: MoviElement | null): number {
+    const fps = element?.player?.trackManager.getActiveVideoTrack()?.frameRate;
+    // Bound the grace period if container metadata reports an implausibly low rate.
+    return fps && fps > 0 && Number.isFinite(fps) ? Math.min(10, 1 / fps) : 0;
+}
+
 type PresentationPlayer = {
     shadowRoot: ShadowRoot | null;
     player?: {
@@ -28,6 +34,9 @@ type PresentationPlayer = {
     syncTinyLayout(): void;
     showControls(): void;
     hideControls(): void;
+    _checkFrozenVideo(now: number): void;
+    _frozenSince: number;
+    _frozenLastFrames: number;
     closeAllBottomMenus(): void;
     focus(options?: FocusOptions): void;
 };
@@ -42,10 +51,33 @@ function compactPlayer(player: PresentationPlayer) {
 }
 
 /** Keep secondary actions behind the same Settings button on small players. */
+const diagnosticsActions = new WeakMap<PresentationPlayer, () => void>();
+
+function updateDiagnosticsAction(player: PresentationPlayer, root: Element) {
+    const action = diagnosticsActions.get(player);
+    if (!action || root.querySelector("[data-playback-diagnostics]")) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "movi-settings-row";
+    button.dataset.playbackDiagnostics = "";
+    const label = document.createElement("span");
+    label.className = "movi-settings-row-label";
+    label.textContent = "Copy playback diagnostics";
+    button.append(label);
+    button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        player.closeSettingsMenu();
+        player.focus({ preventScroll: true });
+        action();
+    });
+    root.append(button);
+}
+
 function updateCompactActions(player: PresentationPlayer) {
     const shadow = player.shadowRoot;
     const root = shadow?.querySelector(".movi-settings-root");
     if (!shadow || !root) return;
+    updateDiagnosticsAction(player, root);
     const compact = compactPlayer(player);
     const actions = [
         ["pip", "Picture in picture", ".movi-pip-btn"],
@@ -387,6 +419,24 @@ export function installVideoPresentation(constructor: typeof MoviElement) {
     const updateAmbient = prototype.updateAmbientUI;
     const syncTiny = prototype.syncTinyLayout;
     const hideControls = prototype.hideControls;
+    const checkFrozenVideo = prototype._checkFrozenVideo;
+    prototype._checkFrozenVideo = function (now) {
+        const element = this as unknown as MoviElement;
+        const core = element.player;
+        // The pinned engine checks for a freeze after 2.5s even when the next
+        // frame normally takes longer. Let it keep its own timers and recovery.
+        const interval =
+            (1000 * videoFramePeriod(element)) / (element.playbackRate || 1);
+        if (
+            interval > 2500 &&
+            this._frozenSince > 0 &&
+            now - this._frozenSince < interval &&
+            core?.getState() === "playing" &&
+            core.getRenderHealth()?.framesPresented === this._frozenLastFrames
+        )
+            return;
+        checkFrozenVideo.call(this, now);
+    };
 
     for (const method of [
         "updateAudioTrackMenu",
@@ -508,8 +558,13 @@ export function installVideoPresentation(constructor: typeof MoviElement) {
 }
 
 /** Keep native button activation out of the player's global Space shortcut. */
-export function attachVideoPresentation(player: MoviElement): () => void {
+export function attachVideoPresentation(
+    player: MoviElement,
+    copyDiagnostics: () => void,
+): () => void {
     const presentation = player as unknown as PresentationPlayer;
+    diagnosticsActions.set(presentation, copyDiagnostics);
+    updateCompactActions(presentation);
     let disposed = false;
     const guard = (event: KeyboardEvent) => {
         const openSettings = player.shadowRoot?.querySelector(
@@ -703,6 +758,7 @@ export function attachVideoPresentation(player: MoviElement): () => void {
         player.addEventListener(event, retainPictureSampling);
     return () => {
         disposed = true;
+        diagnosticsActions.delete(presentation);
         player.removeEventListener("keydown", guard, true);
         player.removeEventListener("focusin", resumeAutoHide);
         player.removeEventListener("focusout", resumeAutoHide);

@@ -189,6 +189,7 @@ class Runtime:
                 mongo=self.mongo.db.jobs,
                 mongo_backend=self.mongo,
             )
+            await self.registry.fail_interrupted_jobs()
             from tgdrive.settings.performance_preferences import (
                 get_performance_settings,
             )
@@ -282,6 +283,7 @@ class Runtime:
                         "Durable transfers are waiting for verified protection; "
                         "owner metadata and backup controls remain available"
                     )
+            bot_start_failed = False
             bot_client = build_bot_mode_client(self.settings) if lineage_ready else None
             if bot_client is not None:
                 bot_client.bind_send_gate(self.pool.pace_send, self.pool.defer_channel)
@@ -297,14 +299,22 @@ class Runtime:
                     before_delete=lambda: self.backup.verify_lineage(self.store),
                     transfers=self.transfers,
                 )
-                await self.bot_mode.start()
+                try:
+                    await self.bot_mode.start()
+                except Exception as error:
+                    bot_start_failed = True
+                    logger.warning(
+                        "Main bot startup failed (%s); retrying automatically",
+                        type(error).__name__,
+                    )
             self.backup.start(self.store)
             self.replica.start()
             self.ready = True
             self.governor.start()
-            if not lineage_ready:
+            if not lineage_ready or bot_start_failed:
                 self._reconnector = asyncio.create_task(
-                    self._reconnect(), name="telegram-reconnect"
+                    self._reconnect(storage_ready=lineage_ready),
+                    name="telegram-reconnect",
                 )
             logger.info("TGDrive runtime is ready")
         except BaseException as error:
@@ -400,18 +410,20 @@ class Runtime:
         self._check_upload_allowed()
         await self._verify_storage_channel()
 
-    async def _reconnect(self) -> None:
+    async def _reconnect(self, *, storage_ready: bool = False) -> None:
         store = self.store
         if store is None:
             return
         while self.ready:
             try:
-                await self.pool.start()
-                await self._verify_storage_channel()
-                await self.backup.backup(store)
-                if self.transfers is not None:
-                    await self.transfers.recover()
-                logger.info("Telegram connection and catalog lineage verified")
+                if not storage_ready:
+                    await self.pool.start()
+                    await self._verify_storage_channel()
+                    await self.backup.backup(store)
+                    if self.transfers is not None:
+                        await self.transfers.recover()
+                    storage_ready = True
+                    logger.info("Telegram connection and catalog lineage verified")
                 if self.bot_mode is None:
                     client = build_bot_mode_client(self.settings)
                     if client is not None:
@@ -520,12 +532,6 @@ class Runtime:
             await asyncio.gather(self._reconnector, return_exceptions=True)
             self._reconnector = None
         failures.extend(await self._close_media_resources())
-        if self.bot_mode is not None:
-            try:
-                await self.bot_mode.stop()
-            except Exception as exc:
-                logger.exception("Failed to stop bot mode")
-                failures.append(exc)
         if self.transfers is not None:
             try:
                 await self.transfers.close()
@@ -537,6 +543,12 @@ class Runtime:
                 await self.remote.close()
             except Exception as exc:
                 logger.exception("Failed to stop the remote transport")
+                failures.append(exc)
+        if self.bot_mode is not None:
+            try:
+                await self.bot_mode.stop()
+            except Exception as exc:
+                logger.exception("Failed to stop bot mode")
                 failures.append(exc)
         if getattr(self, "replica", None) is not None:
             try:
@@ -604,11 +616,11 @@ class Runtime:
             cleanup.push_async_callback(self.remote.close)
             if getattr(self, "replica", None) is not None:
                 cleanup.push_async_callback(self.replica.close)
-            if self.transfers is not None:
-                cleanup.push_async_callback(self.transfers.close)
             if self.bot_mode is not None:
                 cleanup.callback(self.bot_mode.close)
                 cleanup.push_async_callback(self.bot_mode.stop)
+            if self.transfers is not None:
+                cleanup.push_async_callback(self.transfers.close)
             cleanup.push_async_callback(self._close_media_resources)
             if getattr(self, "governor", None) is not None:
                 cleanup.push_async_callback(self.governor.stop)

@@ -47,7 +47,7 @@ The resource governor sizes budgets at startup, then re-measures the server ever
 5 seconds and applies resource changes live within saved owner ceilings. Owners
 can cap retained RAM cache, payload disk cache and staging, and set a protected
 free-space floor. Managed live values are not direct PATCH inputs. Open
-**Performance tab → Automatic tuning** to inspect the chosen
+**Performance → Tuning → Automatic tuning** to inspect the chosen
 values and reasons. The API returns
 current values, a reason for each value and the latest measurements under
 `tuning` in `GET /api/v1/performance`.
@@ -237,7 +237,7 @@ does not establish a server-cache miss.
 
 [Preload file](usage.md#preload-a-file-for-smoother-playback-and-downloads) prepares
 the whole original on the server, including multipart files. Wait for
-**Fully cached** and full coverage on the original's row in **Monitor → Preloads**
+**Fully cached** and full coverage on the original's row in **Preloads**
 before relying on it; **Poster cached** covers only the preview image.
 
 Preloading starts only when the whole file fits the effective RAM or disk cache
@@ -524,16 +524,25 @@ wait without byte/playback progress; a separate playback deadline still permits
 retry when arriving bytes do not make the decoder usable. Source and seek
 changes reset that wait tracking.
 
+A stored poster has a short startup budget. If the request takes longer,
+the player cancels it and decodes a picture from the video itself.
+
 The animated waiting status shows measured bytes received and current delivery
 speed when available. Bytes include repeated reads/seeks, not a whole-file
 completion percentage. The compact strip keeps retry inline and omits zero-speed
-text; advancing frames clear stale waits. Timeline ranges estimate the browser's
-buffer, separately from server cache. A whole-file preload is optional.
+text; advancing frames clear stale waits. The player uses the selected track's
+frame rate to distinguish an expected gap in sparse footage from a freeze.
+Timeline ranges estimate the browser's buffer separately from server cache.
+A whole-file preload is optional.
 
-If no presented picture advances for over 1.25 seconds, the wait debounce confirms
-a stall before holding scheduled audio and the playback clock. Fetching/decoding
-continue until the coordinated readiness gate can resume both. Intentional
-pauses/seeks, background audio, audio-only playback and completed video tails
+The wait debounce checks for a new picture after 1.25 seconds or after the
+expected interval between frames, whichever is longer. A confirmed freeze
+holds scheduled audio and the playback clock. Fetching and decoding
+continue until the coordinated readiness gate can resume both. The renderer
+gets a fresh frame deadline when it restarts. When sound and picture are
+bound, the refill keeps queued pictures following the last displayed frame.
+Advancing pictures clear the wait. Intentional pauses and seeks, background
+audio, audio-only playback and completed video tails
 remain independent; picture-in-picture still requires advancing pictures.
 
 Video-only files apply decoder backpressure rather than reading ahead for a
@@ -655,3 +664,37 @@ The loading overlay shows time spent waiting and bytes received for that seek,
 rather than repeating a cumulative count from earlier playback. It remains a
 waiting state until actual playback frames advance. Source delivery, codec/device
 support and decoding still affect seek latency.
+
+## Compatible video playback
+
+When original video decoding fails, **Play compatible version** requests an
+authorized HLS rendition generated from short source windows. The browser keeps
+its existing player, position identity and original download action. Conversion
+outputs are not retained as a second stored video.
+
+The fallback covers MP4/M4V, MOV, 3GP, MKV, WebM, AVI, WMV/ASF, MPEG program
+streams including VOB, MPEG transport streams (TS/MTS/M2TS), FLV, and Ogg video.
+Files named `.ts` or `.mts` open the video viewer only when their contents
+match an MPEG transport stream.
+
+The server permits one native conversion at a time with a bounded waiting queue.
+Each six-second segment uses at most 256 MiB of source fetches and produces at
+most 8 MiB of output; metadata probing has the same bounded source reader.
+A difficult file layout can exhaust this budget and require downloading the
+original. Finite videos up to 24 hours use a 4K pixel budget, including portrait:
+each side is at most 3840 pixels, with at most 8,294,400 pixels in total.
+The worker has a 512 MiB address-space ceiling, a 20-second CPU limit and a
+35-second active native-work timeout. Queue admission can add up to 15 seconds;
+cancellation cleanup is joined, and paced delivery can take longer. This is not
+an end-to-end response deadline. Admission requires at least 640 MiB of measured
+available memory; unavailable memory readings also refuse conversion. These
+bounds constrain conversion work; they do not guarantee that every codec can be
+converted on every server.
+
+Output uses H.264 up to 1280 by 720, with the first audio track in AAC when present. Embedded
+subtitle rendering, alternate tracks and original quality alternatives are not
+provided in the compatible rendition. Browser Media Source support is required.
+The installed FFmpeg tools perform conversion; no additional browser decoder is
+downloaded. Source reads and output delivery retain current authorization and
+file-transfer speed limits. Closing the request or losing access cancels owned
+conversion work.

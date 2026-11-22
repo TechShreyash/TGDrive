@@ -1,4 +1,4 @@
-# Product
+# TGDrive product brief
 
 <!-- impeccable:product-schema 1 -->
 
@@ -8,44 +8,70 @@ web
 
 ## Users
 
-- **Primary: self-hosters.** One person or a household running their own TGDrive on a laptop or server, using a private Telegram channel as file storage. They upload, organize, stream, read and share their own files from a desktop or phone browser.
-- **Secondary: share viewers.** People who open a read-only file or folder link, or an embedded viewer on someone's website. They have no account, may never have heard of TGDrive and only need to view or download.
+- **Drive owners** set up TGDrive, keep their files in their own Telegram
+  channel, and use the drive from desktop and phone browsers. They may know
+  little about Telegram bots, MongoDB, or recovery.
+- **Share viewers** open a file, folder, or embed from a link. They should be
+  able to identify the content and find the available view or download action
+  without knowing how TGDrive works.
 
 ## Product Purpose
 
-TGDrive makes a private Telegram channel work like a cloud drive: a file browser, previews, streaming, sharing and background transfers on top of storage the user already controls. Success means users trust it with their files, find things quickly and can recover the drive after a failure.
+Make files stored in Telegram easy to find, open, organize, and share. Keep
+those actions quick even when transfers or other background work are running.
 
 ## Positioning
 
-Storage lives in the user's own Telegram channel, files are encrypted before upload with a key only the user holds, and there is no fixed total-storage quota. It is free, open source and self-hosted, with every feature included.
+TGDrive is a self-hosted file drive. Put the current folder, its files, and
+their actions first. Keep service administration easy to reach when someone
+needs it.
 
 ## Operating Context
 
-- Used on desktop and phone browsers; the phone layout matters (see `docs/assets/mobile-drive.jpg`).
-- Long-running work (large split uploads, torrent imports, ZIP creation and extraction, preloads) continues on the server and is followed in Transfers.
-- Users set up Telegram, a bot and MongoDB themselves, so setup, connection and recovery screens are read by people who may not know Telegram internals.
+- **Files.** Keep the folder path, search, and New easy to find. Make the active
+  List or Grid choice obvious. Keep long filenames from displacing file actions.
+  Use 16:9 Grid previews with the filename and actions. Put dates and sizes in List.
+- **Transfers.** Show the filename, state, and next action. Make failures easy
+  to find and explain what the user can do about them. Keep transfer notices
+  clear of file controls and phone navigation.
+- **Performance.** Show what needs attention, where work is waiting when there
+  is evidence, and where to go next. Keep drive inventory distinct from server
+  RAM, disk, and cache. Put detailed readings beside the thing they explain.
+- **Previews and shares.** Give the file most of the space. Keep Close and the
+  relevant playback, reading, download, or retry controls reachable. Show share
+  viewers only the actions their link allows.
+- **Settings, connections, and backups.** Group controls by what the owner is
+  trying to do. For a connection or recovery problem, explain what happened and
+  give the next useful action.
 
 ## Capabilities and Constraints
 
-- Views: My Files, Starred, Trash, Shares, Activity, Connections, Storage, Settings, Preloads, Performance; plus public share pages, the embed view and Login.
-- Previews: video and audio streaming with Continue, photos, PDF, text, EPUB, CBZ/CBR.
-- Light, dark and system appearance; system is the default.
-- Telegram limits file size and availability; TGDrive does not guarantee permanent storage. Do not promise unlimited or permanent storage in UI copy.
+- TGDrive supports light, dark, and system appearance. Check text, icons, and
+  active states in both themes. Pair color with a label, shape, or another
+  visible cue where it carries meaning.
+- Optimize desktop for scanning. Keep phone navigation and touch targets
+  usable, with room for menus, long filenames, and error messages.
+- Telegram imposes file size and availability limits. Describe the limits
+  honestly and protect access to private files, credentials, and recovery data.
 
 ## Brand Commitments
 
-- Name: **TGDrive**. Tagline: "Your Telegram files, organized like a cloud drive."
-- Voice: plain, practical, honest about limits (see `README.md`).
+- Keep blue as the primary accent. Use shared type, spacing, and control styles
+  so screens feel like one app. Use the Settings page as the reference for
+  readable density and grouping.
+- Write short, direct labels. For errors, say what happened and what to do next.
 
 ## Evidence on Hand
 
-- Screenshots and tour video in `docs/assets/` (captured 28 October 2026), gallery in `docs/showcase.md`.
-- Public demo: <https://tgdrive.nexgenbots.us/>.
-- No testimonials, user counts or benchmarks exist; do not invent them.
+- Inspect the current local demo. The [showcase](docs/showcase.md) provides
+  older reference images that may differ from the current checkout.
+- For substantial UI changes, compare before and after with the same data and
+  theme. Include the reported viewport when available. Use 1536×695 for the
+  laptop baseline and 390×844 for a phone baseline, then exercise the affected
+  action with the relevant input method.
 
 ## Product Principles
 
-1. Never lose or expose a user's files; safety and recovery messaging beat visual polish.
-2. Show what is happening with long transfers honestly, including failures and what to do next.
-3. Share pages must make sense to someone who has never seen TGDrive.
-4. Everything works on a phone, not only on desktop.
+1. Protect files and make the consequences of sensitive actions clear.
+2. Give users the information they need to decide what to do next.
+3. Judge a change by how the actual workflow looks and works in the browser.

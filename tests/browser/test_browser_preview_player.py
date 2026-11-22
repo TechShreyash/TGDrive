@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -17,12 +20,15 @@ from tests.browser.test_browser_e2e import (
     login,
     preview_dialog,
 )
+from tests.browser.test_browser_player_controls import _serve_media
 
 pytestmark = pytest.mark.e2e
 pytest_plugins = ("tests.browser.test_browser_e2e",)
 
 
-def _seed_position(page: Any, server: Server, item_id: str) -> str:
+def _seed_position(
+    page: Any, server: Server, item_id: str, position_seconds: float = 1.5
+) -> str:
     url = server.url + f"/api/v1/files/{item_id}/video-progress"
     begin = page.request.post(url + "/session", data={})
     assert begin.ok, begin.text()
@@ -31,13 +37,190 @@ def _seed_position(page: Any, server: Server, item_id: str) -> str:
         data={
             "session_id": begin.json()["session_id"],
             "sequence": 1,
-            "position_seconds": 1.5,
+            "position_seconds": position_seconds,
             "duration_seconds": 5.0,
             "final": True,
         },
     )
     assert saved.ok, saved.text()
     return url
+
+
+@pytest.mark.parametrize("name", ["movtext-subtitles.mp4", "software-mpeg4.wmv"])
+def test_default_player_paints_a_new_picture_during_paused_seek(server, desktop, name):
+    _, page = desktop
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    page.route("**/api/v1/poster?*", lambda route: route.fulfill(status=204))
+    page.get_by_role("button", name=name, exact=True).dblclick()
+    player = preview_dialog(page).locator("movi-player")
+    expect(player).to_have_attribute("engine", "wasm")
+    page.evaluate("""() => {
+        window.pausedPicture = () => {
+            const player = document.querySelector("movi-player");
+            const source = player?.getCanvas();
+            if (!source?.width || !source.height || !player.paused || player.seeking)
+                return null;
+            const sample = document.createElement("canvas");
+            sample.width = sample.height = 16;
+            const context = sample.getContext("2d");
+            context.drawImage(source, 0, 0, 16, 16);
+            const pixels = context.getImageData(0, 0, 16, 16).data;
+            return pixels.some((value, index) => index % 4 !== 3 && value > 32)
+                ? sample.toDataURL() : null;
+        };
+    }""")
+    before = page.wait_for_function(
+        "() => window.pausedPicture()", timeout=30000
+    ).json_value()
+    target = player.evaluate("element => element.duration * 0.75")
+    player.evaluate(
+        "async (element, time) => { await element.player.seek(time); }", target
+    )
+    page.wait_for_function(
+        """({before, target}) => {
+            const player = document.querySelector("movi-player");
+            const picture = window.pausedPicture();
+            return picture && picture !== before &&
+                Math.abs(player.currentTime - target) < 0.15;
+        }""",
+        arg={"before": before, "target": target},
+        timeout=15000,
+    )
+    assert player.evaluate("element => element.paused")
+
+
+@pytest.mark.parametrize(
+    "width,height,fullscreen", [(1536, 695, False), (390, 844, True)]
+)
+def test_latest_paused_seek_paints_its_own_frame_and_remains_silent(
+    server, desktop, tmp_path, width, height, fullscreen
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": height})
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg is not None
+    media = tmp_path / "marked-frames.mp4"
+    subprocess.run(  # noqa: S603 - fixed self-generated local media
+        [
+            ffmpeg,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=red:s=160x90:r=24:d=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=green:s=160x90:r=24:d=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=blue:s=160x90:r=24:d=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-filter_complex",
+            "[0:v][1:v][2:v]concat=n=3:v=1:a=0[marked]",
+            "-map",
+            "[marked]",
+            "-map",
+            "3:a",
+            "-c:v",
+            "libx264",
+            "-g",
+            "12",
+            "-c:a",
+            "aac",
+            "-shortest",
+            "-movflags",
+            "faststart",
+            str(media),
+        ],
+        check=True,
+        timeout=30,
+    )
+    _serve_media(page, media.read_bytes(), "video/mp4")
+    page.route("**/api/v1/poster?*", lambda route: route.fulfill(status=204))
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+    page.get_by_role("button", name="movtext-subtitles.mp4", exact=True).dblclick()
+    player = preview_dialog(page).locator("movi-player")
+    page.wait_for_function("""() => {
+        const el = document.querySelector("movi-player");
+        return el?.duration > 2.9 && el.getCanvas()?.width && el.paused && !el.seeking;
+    }""")
+    if fullscreen:
+        preview_dialog(page).get_by_role(
+            "button", name="Enter Fullscreen", exact=True
+        ).click()
+        page.wait_for_function("() => Boolean(document.fullscreenElement)")
+        expect(player).to_have_js_property("paused", True)
+    player.evaluate("""el => {
+        const core = el.player;
+        const decoder = core.videoDecoder;
+        const flush = decoder.flush.bind(decoder);
+        const hold = new Promise(resolve => { window.finishOlderSeek = resolve; });
+        decoder.flush = async (...args) => {
+            decoder.flush = flush;
+            await flush(...args);
+            window.olderSeekHeld = true;
+            await hold;
+        };
+        const audio = core.audioRenderer;
+        const context = audio.audioContext;
+        const analyser = context.createAnalyser();
+        const samples = new Float32Array(analyser.fftSize);
+        audio.gainNode.connect(analyser);
+        window.pausedSoundPeak = 0;
+        const verifySilence = () => {
+            if (context.state === "running") {
+                analyser.getFloatTimeDomainData(samples);
+                for (const sample of samples)
+                    window.pausedSoundPeak = Math.max(
+                        window.pausedSoundPeak, Math.abs(sample)
+                    );
+            }
+            requestAnimationFrame(verifySilence);
+        };
+        requestAnimationFrame(verifySilence);
+        window.markedFrame = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = canvas.height = 1;
+            const context = canvas.getContext("2d");
+            context.drawImage(el.getCanvas(), 0, 0, 1, 1);
+            const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+            return {
+                r, g, b, time: el.currentTime, paused: el.paused, seeking: el.seeking,
+            };
+        };
+        window.firstSeek = core.seek(0.35);
+    }""")
+    page.wait_for_function("() => window.olderSeekHeld")
+    player.evaluate("""async el => {
+        const middle = el.player.seek(1.35);
+        await new Promise(resolve => setTimeout(resolve, 25));
+        const latest = el.player.seek(2.35);
+        await Promise.all([middle, latest]);
+    }""")
+    latest = page.wait_for_function(
+        """() => {
+        const f = window.markedFrame();
+        return f.paused && !f.seeking && Math.abs(f.time - 2.35) < 0.13 &&
+            f.b > f.r + 80 && f.b > f.g + 80 && f;
+    }""",
+        timeout=15000,
+    ).json_value()
+    page.evaluate("async () => { window.finishOlderSeek(); await window.firstSeek; }")
+    # Give a late flush or presentation callback time to update the actual canvas.
+    page.wait_for_timeout(400)
+    assert page.evaluate("window.markedFrame()") == latest
+    assert page.evaluate("window.pausedSoundPeak") < 0.003
+    page.screenshot(
+        path=ARTIFACTS / f"latest-paused-seek-{width}.png", animations="disabled"
+    )
 
 
 def test_video_stored_poster_is_sharp_and_released_when_preview_closes(
@@ -105,20 +288,25 @@ def test_video_missing_poster_decodes_representative_frame_without_watching(
     login(page, server.url)
     page.get_by_role("button", name="Preview samples", exact=True).dblclick()
     page.route("**/api/v1/poster?*", lambda route: route.fulfill(status=204))
+    file = page.get_by_role("button", name="movtext-subtitles.mp4", exact=True)
+    row = page.locator(".file-row").filter(has=file)
+    item_id = row.get_attribute("data-item-id")
+    assert item_id
+    # Track player requests after the file list finishes loading its own thumbnail.
+    expect(row.locator(".file-list-thumbnail img")).to_be_visible()
     thumbnails: list[str] = []
     page.on(
         "request",
         lambda request: (
             thumbnails.append(request.url)
             if "/api/v1/thumbnail?" in request.url
+            and parse_qs(urlsplit(request.url).query)
+            .get("path", [""])[0]
+            .rsplit("/", 1)[-1]
+            == item_id
             else None
         ),
     )
-    file = page.get_by_role("button", name="movtext-subtitles.mp4", exact=True)
-    item_id = file.locator("xpath=ancestor::*[@data-item-id][1]").get_attribute(
-        "data-item-id"
-    )
-    assert item_id
     position_url = _seed_position(page, server, item_id)
     file.dblclick()
     dialog = preview_dialog(page)
@@ -144,9 +332,10 @@ def test_video_missing_poster_decodes_representative_frame_without_watching(
     expect(player).to_have_attribute("postertime", "50%")
     assert thumbnails == []
     expect(player.locator(".movi-poster-overlay")).to_be_hidden()
+    # A bookmark in the first two seconds does not offer resume.
     expect(
         dialog.get_by_role("button", name="Continue from 0:01", exact=True)
-    ).to_be_visible()
+    ).to_have_count(0)
     dialog.get_by_role("button", name="Close Preview", exact=True).click()
     assert page.request.get(position_url).json()["progress"]["position_seconds"] == 1.5
 
@@ -167,6 +356,11 @@ def test_closing_preview_cancels_pending_stored_poster_lookup(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
     _, page = desktop
+    # Keep the optional poster pending long enough to verify close owns the abort.
+    page.add_init_script("""(() => {
+        const timeout = AbortSignal.timeout.bind(AbortSignal);
+        AbortSignal.timeout = delay => timeout(Math.max(3000, delay));
+    })()""")
     login(page, server.url)
     page.get_by_role("button", name="Preview samples", exact=True).dblclick()
     page.route("**/api/v1/poster?*", lambda route: None)
@@ -180,7 +374,7 @@ def test_closing_preview_cancels_pending_stored_poster_lookup(
     expect(page.locator("movi-player")).to_have_count(0)
 
 
-@pytest.mark.parametrize("action", ["play", "continue", "seek"])
+@pytest.mark.parametrize("action", ["play", "resume", "seek"])
 def test_representative_seek_yields_to_early_user_intent(
     server: Server, desktop: tuple[Any, Any], action: str
 ) -> None:
@@ -213,23 +407,27 @@ def test_representative_seek_yields_to_early_user_intent(
         "data-item-id"
     )
     assert item_id
-    position_url = _seed_position(page, server, item_id)
+    saved_position = 2.5 if action == "resume" else 1.5
+    position_url = _seed_position(page, server, item_id, saved_position)
     file.dblclick()
     dialog = preview_dialog(page)
     player = dialog.locator("movi-player")
     expect(player).to_have_attribute("data-poster-flush-waiting", "true")
-    assert page.request.get(position_url).json()["progress"]["position_seconds"] == 1.5
+    assert (
+        page.request.get(position_url).json()["progress"]["position_seconds"]
+        == saved_position
+    )
     if action == "play":
         player.locator("button.movi-play-pause").click()
         page.wait_for_function("""()=>{
             const player=document.querySelector('movi-player');
             return !player.paused&&player.currentTime>0.2&&player.currentTime<1;
         }""")
-    elif action == "continue":
-        dialog.get_by_role("button", name="Continue from 0:01", exact=True).click()
+    elif action == "resume":
+        player.locator("button.movi-play-pause").click()
         page.wait_for_function("""()=>{
             const player=document.querySelector('movi-player');
-            return !player.paused&&player.currentTime>=1.5&&player.currentTime<2.2;
+            return !player.paused&&player.currentTime>=2.5&&player.currentTime<3.2;
         }""")
     else:
         player.evaluate(
@@ -340,7 +538,7 @@ def test_image_preview_retries_busy_capacity_and_cancels_on_close(
     assert len(media_requests) == 3
 
 
-@pytest.mark.parametrize("width,height", [(1440, 960), (390, 844)])
+@pytest.mark.parametrize("width,height", [(1536, 695), (820, 1180), (390, 844)])
 def test_video_header_fullscreen_download_and_close_stay_reachable(
     server: Server, desktop: tuple[Any, Any], width: int, height: int
 ) -> None:
@@ -364,14 +562,28 @@ def test_video_header_fullscreen_download_and_close_stay_reachable(
     page.wait_for_function("()=>!document.fullscreenElement")
     expect(fullscreen).to_be_focused()
     expect(dialog.get_by_role("heading", name="multitrack.mkv")).to_be_visible()
+    expect(dialog.locator(".preview-file-meta")).to_contain_text("MKV ·")
+    download = dialog.get_by_role("link", name="Download Original", exact=True)
+    close = dialog.get_by_role("button", name="Close Preview", exact=True)
+    if width <= 720:
+        expect(dialog.locator(".preview-file-date")).to_be_hidden()
+        for action in (fullscreen, download, close):
+            expect(action).to_be_in_viewport(ratio=1)
+            bounds = action.bounding_box()
+            assert bounds is not None
+            assert bounds["width"] >= 44 and bounds["height"] >= 44
+    else:
+        expect(dialog.locator(".preview-file-date")).to_be_visible()
+    header = dialog.locator(".preview-header").bounding_box()
+    assert header and header["height"] <= 54
     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
     page.screenshot(path=ARTIFACTS / f"video-preview-header-{width}.png")
     with page.expect_download() as result:
-        dialog.get_by_role("link", name="Download Original", exact=True).click()
+        download.click()
     assert hashlib.sha256(Path(result.value.path()).read_bytes()).digest() == (
         hashlib.sha256((ROOT / "tests/fixtures/multitrack.mkv").read_bytes()).digest()
     )
-    dialog.get_by_role("button", name="Close Preview", exact=True).click()
+    close.click()
     expect(dialog).to_have_count(0)
     expect(file_button).to_be_focused()
     expect(page.locator("movi-player")).to_have_count(0)

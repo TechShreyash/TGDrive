@@ -124,6 +124,7 @@ from tgdrive.web.schemas import (
     TransferRequest,
     TrashRequest,
 )
+from tgdrive.web.share_links import share_unlock
 
 logger = logging.getLogger(__name__)
 RECENT_WRITE_SECONDS = 600
@@ -748,7 +749,9 @@ def create_app(
                         real_path.rstrip("/").rsplit("/", 1)[-1]
                     )
                 auth_home_path = store.authorize_directory(
-                    real_path, payload.auth or ""
+                    real_path,
+                    payload.auth or "",
+                    share_unlock=share_unlock(request, settings, payload.auth),
                 )
                 if auth_home_path is None:
                     raise HTTPException(status_code=403, detail="Invalid share link")
@@ -1097,7 +1100,11 @@ def create_app(
         if path != "/":
             path = "/" + path.rstrip("/").rsplit("/", 1)[-1]
         try:
-            data = store.get_file(path, share_token=(auth or "") if shared else None)
+            data = store.get_file(
+                path,
+                share_token=(auth or "") if shared else None,
+                share_unlock=share_unlock(request, settings, auth),
+            )
         except ShareDenied, DriveError:
             if shared:
                 raise HTTPException(
@@ -1125,6 +1132,10 @@ def create_app(
                 ).hexdigest()
         path = data["path"].rstrip("/") + "/" + data["id"]
         return path, data
+
+    from tgdrive.media.compatible_playback import register_compatibility_routes
+
+    register_compatibility_routes(app, settings, _runtime, authorized_file)
 
     @app.get("/api/v1/embed")
     async def embed_file(

@@ -41,6 +41,17 @@ _BYTE_PHASES = frozenset(
     }
 )
 _ERROR_UNSET = object()
+BOT_INTAKE_CLEANUP_PENDING = "Temporary plaintext cleanup is pending; review Transfers."
+
+
+def _bot_cleanup_pending(context):
+    plan = context.get("bot_intake")
+    return bool(
+        isinstance(plan, dict)
+        and (plan.get("dispatched") or plan.get("message_id"))
+        and not plan.get("cleaned")
+        and (plan.get("message_id") or not plan.get("reviewed_at"))
+    )
 
 
 def upload_effects(plan):
@@ -220,6 +231,33 @@ class TransferRecord:
             or self.committed.context.get("archive_parent_id")
         ) or (self.terminal and bool(self.committed.context.get("history_cleared")))
 
+    @property
+    def bot_intake_copy_uncertain(self) -> bool:
+        plan = self.context.get("bot_intake")
+        return (
+            isinstance(plan, dict)
+            and plan.get("dispatched") is True
+            and not plan.get("message_id")
+        )
+
+    @property
+    def bot_intake_review_required(self) -> bool:
+        return (
+            self.bot_intake_copy_uncertain
+            and _bot_cleanup_pending(self.context)
+            and (self.task is None or self.task.done())
+        )
+
+    @property
+    def archive_needs_password(self) -> bool:
+        return bool(
+            self.context.get("archive_password_required")
+            and not (
+                self.context.get("archive_ready")
+                or self.context.get("archive_extracted")
+            )
+        )
+
     def as_dict(self) -> dict[str, Any]:
         if self._committed is not None:
             return self._committed.as_dict()
@@ -263,14 +301,23 @@ class TransferRecord:
             if (type(value := self.context.get(key)) is int or type(value) is float)
             and math.isfinite(value)
         ]
+        phase, error = self.phase, self.error
+        cleanup_pending = _bot_cleanup_pending(self.context)
+        if self.bot_intake_review_required or (self.terminal and cleanup_pending):
+            phase = "bot_intake_cleanup"
+        elif not cleanup_pending:
+            if phase == "bot_intake_cleanup":
+                phase = self.status.value
+            if error == BOT_INTAKE_CLEANUP_PENDING:
+                error = None
         result = {
             "retry_at": max(deadlines, default=None),
             "id": self.id,
             "status": self.status.value,
-            "phase": self.phase,
+            "phase": phase,
             "current": self.current,
             "total": self.total,
-            "error": self.error,
+            "error": error,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "started_at": self.started_at,
@@ -280,6 +327,19 @@ class TransferRecord:
             "speed_bytes_per_second": speed,
             "eta_seconds": eta,
         }
+        recovery = self.context.get("interrupted_upload_recovery")
+        if (
+            self.status is TransferStatus.ERROR
+            and self.phase == "interrupted"
+            and recovery
+        ):
+            result["interrupted_upload_recovery"] = recovery
+        if self.archive_needs_password:
+            result["archive_password_required"] = True
+            if self.context.get("pdf_password_operation"):
+                result["pdf_password_operation"] = self.context[
+                    "pdf_password_operation"
+                ]
         if self.phase in {"checking_source", "source_retry_wait", "downloading"}:
             from tgdrive.transfers.remote import REMOTE_MAX_ATTEMPTS
 
@@ -344,6 +404,7 @@ class TransferRegistry:
         self._cancel_grace = cancel_grace_seconds
         self.demo_mode = demo_mode
         self._records: dict[str, TransferRecord] = {}
+        self._interrupted_on_open: set[str] = set()
         self._tasks: set[asyncio.Task[None]] = set()
         self._finalizers: set[asyncio.Task[None]] = set()
         self._journal_lock = asyncio.Lock()
@@ -404,6 +465,16 @@ class TransferRegistry:
         record = TransferRecord(**item)
         if record.context.get("cancel_requested"):
             record.cancel_event.set()
+        elif not record.terminal and (
+            record.status is TransferStatus.RUNNING
+            or record.phase == "interrupted"
+            or (
+                record.status is TransferStatus.QUEUED
+                and record.started_at is not None
+                and record.phase != "torrent_select"
+            )
+        ):
+            self._interrupted_on_open.add(record.id)
         self._records[item["id"]] = record
         self._durable[item["id"]] = copy.deepcopy(item)
         self._logged[record.id] = self._log_snapshot(record)
@@ -414,6 +485,19 @@ class TransferRegistry:
                 self._mongo_backend.write, self._mongo, operation, *args, **kwargs
             )
         return await asyncio.to_thread(getattr(self._mongo, operation), *args, **kwargs)
+
+    @_journalled
+    async def fail_interrupted_jobs(self) -> None:
+        async with self._journal_lock:
+            for identity in tuple(self._interrupted_on_open):
+                record = self.get(identity)
+                record.status = TransferStatus.ERROR
+                record.phase = "interrupted"
+                record.error = "TGDrive stopped while this transfer was running."
+                record.updated_at = time.time()
+                record.context.pop("restart_retryable", None)
+                await self._persist(record)
+                self._interrupted_on_open.remove(identity)
 
     @_journalled
     async def persist(self, record: TransferRecord) -> None:
@@ -607,6 +691,8 @@ class TransferRegistry:
     def _retained(self, record: TransferRecord) -> bool:
         record = record.committed
         context = record.context
+        if _bot_cleanup_pending(context):
+            return True
         archive_parent = self._records.get(context.get("archive_parent_id", ""))
         if (
             archive_parent is not None
@@ -649,6 +735,7 @@ class TransferRegistry:
             "torrent",
             "archive",
             "extract",
+            "pdf_password",
             "delete",
         } and record.status not in {TransferStatus.COMPLETED, TransferStatus.CANCELLED}:
             return True
@@ -1055,6 +1142,7 @@ class TransferRegistry:
                     record.terminal
                     and not record.history_hidden
                     and record.context.get("kind") != "delete"
+                    and not _bot_cleanup_pending(record.context)
                     and folder.get("id") not in active_folders
                 ):
                     # Retained errors may still own staged bytes, send identities or
@@ -1067,6 +1155,30 @@ class TransferRegistry:
     def close(self) -> None:
         if self._tasks or self._finalizers:
             raise RuntimeError("Drain transfer tasks before closing the journal")
+
+    @_journalled
+    async def review_bot_intake(self, transfer_id: str) -> TransferRecord:
+        async with self._journal_lock:
+            record = self.get(transfer_id)
+            if not record.bot_intake_copy_uncertain:
+                raise ValueError(
+                    "This transfer has no uncertain intake copy to review."
+                )
+            plan = record.context["bot_intake"]
+            if plan.get("reviewed_at"):
+                return record
+            if not record.bot_intake_review_required:
+                raise ValueError(
+                    "Wait for the bot import to finish before confirming review."
+                )
+            if not record.terminal:
+                # A restart can leave a copy attempt interrupted before it was settled.
+                record.status = TransferStatus.ERROR
+            record.phase = "bot_intake_reviewed"
+            record.updated_at = time.time()
+            plan["reviewed_at"] = record.updated_at
+            await self._persist(record)
+            return record
 
     def list(self) -> list[TransferRecord]:
         return sorted(
@@ -1083,6 +1195,8 @@ class TransferRegistry:
     async def retry(self, transfer_id: str) -> TransferRecord:
         async with self._journal_lock:
             record = self.get(transfer_id)
+            if record.bot_intake_copy_uncertain:
+                raise ValueError("An uncertain intake copy cannot be retried.")
             if record.status not in {TransferStatus.ERROR, TransferStatus.QUEUED}:
                 raise ValueError("Only failed or interrupted transfers can be retried")
             record.status = TransferStatus.QUEUED
@@ -1248,6 +1362,8 @@ class TransferRegistry:
     async def cancel(self, transfer_id: str) -> TransferRecord:
         async with self._journal_lock:
             record = self.get(transfer_id)
+            if record.phase == "bot_intake_reviewed":
+                return record
             if record.context.get("kind") == "delete" and not record.terminal:
                 raise ValueError(
                     "Permanent deletion cannot be cancelled after it starts"
@@ -1322,9 +1438,12 @@ class TransferRegistry:
                     and self._shutting_down
                     and not record.cancel_event.is_set()
                 ):
-                    record.status = TransferStatus.QUEUED
-                    record.phase = "interrupted"
-                    await self.persist(record)
+                    if not record.terminal and (
+                        record.started_at is not None or record.phase != "queued"
+                    ):
+                        record.status = TransferStatus.QUEUED
+                        record.phase = "interrupted"
+                        await self.persist(record)
                 elif record.context.get("send_started"):
                     record.status = TransferStatus.QUEUED
                     record.phase = (

@@ -66,13 +66,24 @@ waiting or error states still need attention.
 guarantee that it remains current. An **unverified** discovery status can mean a
 changed pin or unavailable Telegram access; it does not establish archive
 corruption. Older archives can remain valid after a newer point becomes pinned.
+Older backup records without pin receipts are checked once Telegram connects.
 Preserve an intact downloaded/local copy. TGDrive does not automatically repin an
 old point; repair access and publish a fresh backup through the normal controls.
 
-- TGDrive saves a backup once a day (`MONGODB_BACKUP_SECONDS`) and when you choose
-  **Storage and Backups → Back Up Now**. Scheduled standalone backups do not skip
-  unchanged catalogs. Manual backup requests an immediate point; recovery or
-  paused independent protection can still block it.
+- Standalone backups run once a day by default (`MONGODB_BACKUP_SECONDS`), even
+  when the catalog is unchanged. **Backups → Back Up Now** requests
+  an immediate point. Once it is confirmed, the next scheduled backup waits a
+  full interval. Backups shows the last confirmed time, its trigger
+  when recorded, and when the next scheduled backup becomes eligible.
+  **Check Again** refreshes status. Recovery or paused independent protection can
+  still block manual backup.
+- A standalone backup that fails can be retried before the normal interval.
+  The automatic scheduler waits through Telegram's cooldown before trying
+  again. While publication retries, the page keeps the previous confirmed
+  time visible and shows the retry state and any known cooldown deadline.
+  Independent backups follow changes and check an unchanged point periodically.
+  An independent point sends a recovery file to each configured channel.
+  [Independent backup timing](architecture.md#independent-backup-pacing-and-verification).
 - Each backup is one file: supported durable MongoDB collections, compressed and
   encrypted (AES-256-GCM) with a key derived from `ENCRYPTION_KEY`. Browser sessions are
   left out, along with diagnostic telemetry and staged file bytes.
@@ -225,7 +236,7 @@ point if the main channel is lost. Both channels still depend on Telegram.
    account**. Keep independent access to that account. Add the bot as an
    administrator in **both channels** with post,
    edit, delete and pin rights.
-2. Choose **Storage and Backups → Set up backup channel**, enter the channel ID and
+2. Choose **Backups → Set up backup channel**, enter the channel ID and
    bot token, confirm, then **Verify and start backup**.
 3. Leave TGDrive running until **Backup confirmed**. The browser can close.
 

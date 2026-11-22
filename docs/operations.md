@@ -29,7 +29,7 @@ Server deployments add `-f compose.yaml -f compose.server.yaml` after
 `docker compose` in every command. In Coolify, use Stop, Restart, Logs and Redeploy.
 Keep Docker running while TGDrive is in use.
 
-Check **Connections** for Telegram access, **Storage and Backups** for database,
+Check **Connections** for Telegram access, **Backups** for database,
 disk and backups, and **Performance** for queues, caches and cooldowns.
 Queue times are estimates. `/health/ready` does not test a full file or public domain.
 
@@ -74,13 +74,13 @@ The laptop override leaves TGDrive stopped after reboot. Server restart policy h
 
 ## After a shutdown, crash or network loss
 
-Start the **same deployment**, then check **Transfers**, **Connections** and **Storage and Backups**. Reopen interrupted videos/downloads.
+Start the **same deployment**, then check **Transfers**, **Connections** and **Backups**. Reopen interrupted videos/downloads.
 
 | Interrupted work | Next step |
 | --- | --- |
 | Completed file | Its MongoDB [catalog](reference.md#terms-used-here) and Telegram documents survive a normal restart. |
 | Browser upload | Resume the existing transfer; reselect the same original if asked. A closed browser cannot send remaining bytes. |
-| Telegram upload | Preserve both volumes and retry the existing job; recovery uses staged bytes and confirmed work. |
+| Telegram upload | An interrupted running job appears as **Failed** after startup. Preserve both volumes. The transfer row shows whether **Retry** can use the staged file or finish saving existing work. If the staged file is missing and sending never began, cancel the failed transfer and upload the original again. If sending may have begun, restore the staged file on the server before retrying. |
 | URL import | Retry its server job in Transfers. Remote downloading may restart; expired URLs need replacement. |
 | Torrent import | Retry its server job in Transfers. Keep its [staging](reference.md#terms-used-here) directory and job journal; completed files stay saved. See [torrent recovery](api.md#torrent-imports). |
 | Telegram outage | Restore connectivity and observe the displayed retry/cooldown time; restarting does not bypass it. |
@@ -385,7 +385,7 @@ Do not run an older app against an incompatible database format. Restore a compa
    `TGDrive 2.2 catalog upgrade finished`.
 4. Check a few files, folders, shares and **Connections**.
 5. If 2.2 had an independent backup channel, set it up again in
-   [Storage and Backups](backup-recovery.md#add-a-backup-channel).
+   [Backups](backup-recovery.md#add-a-backup-channel).
 
 | What happens | Detail |
 | --- | --- |
@@ -433,7 +433,7 @@ separate from the surviving-database upgrade.
 ## Media cache and slow installations
 
 The media cache is disposable: when TGDrive is stopped, `DATA_DIR/media-cache`
-can be removed and rebuilt on demand. Use **Monitor → Preloads** to inspect,
+can be removed and rebuilt on demand. Use **Preloads** to inspect,
 cancel or evict cached files.
 
 > [!WARNING]

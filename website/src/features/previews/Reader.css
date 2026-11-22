@@ -105,13 +105,3 @@
         min-height: 44px;
     }
 }
-@media (max-width: 720px), (pointer: coarse) {
-    .file-preview .preview-header-reader .pdf-controls .pdf-toolbar {
-        inset-block-start: calc(112px + env(safe-area-inset-top));
-        color: var(--ink);
-        background: var(--surface);
-        border-color: var(--line);
-        border-radius: 8px;
-        box-shadow: 0 2px 8px #0002;
-    }
-}

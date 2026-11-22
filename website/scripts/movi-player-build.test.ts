@@ -26,7 +26,19 @@ const entry = normalizePath(
 );
 const installed = readFileSync(entry, "utf8");
 const historical = patchMoviSource(installed, VERSION);
-const patched = patchDurationRescan(historical);
+const patched = patchDurationRescan(historical)
+    .replace(
+        "this.videoRenderer.dropStaleFrames(this.clock.getTime(), 0.2)",
+        "this.videoRenderer.dropStaleFrames(this._resumeToPlayPending && this.getBindAV() && this.videoRenderer.getLastPresentedTime() >= 0 ? Math.min(this.clock.getTime(), this.videoRenderer.getLastPresentedTime() + 0.2) : this.clock.getTime(), 0.2)",
+    )
+    .replace(
+        "this.audioRenderer.getMaxScheduledMediaTime() < I3 - 0.1",
+        "this.audioRenderer.getMaxScheduledMediaTime() < Math.min(I3, this.clock.getTime()) - 0.1",
+    )
+    .replaceAll(
+        /\bMoviPlayer\.VIDEO_LAG_S\b/g,
+        "Math.max(MoviPlayer.VIDEO_LAG_S, 1 / (this.trackManager.getActiveVideoTrack()?.frameRate || this.mediaInfo?.videoFrameRate || 24))",
+    );
 const temporaryDirectories: string[] = [];
 afterEach(() => {
     vi.clearAllMocks();

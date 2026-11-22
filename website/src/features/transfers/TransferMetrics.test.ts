@@ -47,11 +47,14 @@ describe("visible transfer timing", () => {
         expect(stalled).not.toContain("128 KB/s");
         expect(stalled).not.toContain("About");
         expect(render({ total: 0 })).not.toContain("Time remaining unknown");
-        expect(render({ stage: "retry_wait" })).toContain(
+        expect(render({ stage: "retry_wait" })).not.toContain(
             "Waiting for Telegram",
         );
-        expect(render({ stage: "source_retry_wait" })).toContain(
-            "Waiting to retry source",
+        expect(render({ stage: "retry_wait", retryAt: 6 })).toContain(
+            "Retry in 4s",
+        );
+        expect(render({ stage: "retry_wait", retryAt: 2 })).not.toContain(
+            "Retry in",
         );
         expect(render({ stage: "source_retry_wait" })).not.toContain(
             "No recent progress",

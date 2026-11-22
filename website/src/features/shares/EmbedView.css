@@ -205,6 +205,23 @@
         min-height: 44px;
     }
 }
+@media (max-width: 480px), (max-height: 400px) {
+    .embed-header ol {
+        flex-wrap: nowrap;
+    }
+    .embed-header li[data-compact-hidden] {
+        display: none;
+    }
+    .embed-header li > svg {
+        flex-shrink: 0;
+    }
+    .embed-header li button {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+}
 @media (prefers-reduced-motion: reduce) {
     .embed-items li {
         transition: none;
@@ -214,4 +231,7 @@
     justify-content: space-between;
     padding: 12px 0;
     border-bottom: 0;
+}
+.embed-more button[aria-busy="true"] {
+    cursor: progress;
 }

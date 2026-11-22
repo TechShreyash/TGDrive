@@ -1,41 +1,20 @@
+import { Button } from "@mantine/core";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { ArrowDown, ArrowUp } from "lucide-react";
-import { formatTimestamp } from "../../shared/types";
+import { CircleAlert } from "lucide-react";
 import { transfers, isTransferActive } from "../transfers/transfers";
 import SettingHelp from "../../shared/SettingHelp";
 import type { PerformanceSnapshot } from "./performanceApi";
 import { measuredNumber, megabits } from "./performanceReadings";
 import "./PerformanceOverview.css";
-const WAIT_LABELS: Record<string, string> = {
-    telegram_queue: "Requests are waiting for Telegram",
-    telegram_cooldown: "Telegram has requested a pause",
-    scratch_wait: "Streams are waiting for a read buffer",
-};
 
-export default function PerformanceOverview({
-    snapshot,
-    error,
-}: {
-    snapshot: PerformanceSnapshot;
-    error: string;
-}) {
-    const items = useSyncExternalStore(transfers.subscribe, transfers.snapshot);
-    const currentItems = items.filter((item) => !item.historyOnly);
-    const activeTransfers = currentItems.filter(
-        (item) =>
-            isTransferActive(item) &&
-            item.state !== "queued" &&
-            item.state !== "awaiting_file",
-    ).length;
-    const queuedTransfers = currentItems.filter(
-        (item) => item.state === "queued",
-    ).length;
-    const attentionTransfers = currentItems.filter(
-        (item) => item.state === "error" || item.state === "awaiting_file",
-    ).length;
+export function useCurrentPerformance(
+    snapshot: PerformanceSnapshot | null,
+    error: string,
+) {
     const [expired, setExpired] = useState(false);
     useEffect(() => {
         setExpired(false);
+        if (!snapshot) return;
         const age =
             snapshot.server.sampled_at == null
                 ? 0
@@ -47,26 +26,89 @@ export default function PerformanceOverview({
         );
         return () => clearTimeout(timer);
     }, [snapshot]);
-    const current = Boolean(snapshot && !expired && !error);
-    const network = snapshot?.server.network;
-    const telemetryCurrent =
+    return Boolean(snapshot && !expired && !error);
+}
+
+export function NetworkReadings({
+    snapshot,
+    current,
+}: {
+    snapshot: PerformanceSnapshot;
+    current: boolean;
+}) {
+    const { at, sampled_at: sampledAt, network } = snapshot.server;
+    const available =
         current &&
-        snapshot?.server.sampled_at != null &&
-        Number.isFinite(snapshot.server.sampled_at) &&
-        snapshot.server.at >= snapshot.server.sampled_at &&
-        snapshot.server.at - snapshot.server.sampled_at <=
-            (snapshot.server.stale_after_seconds ?? 15);
-    const sent =
-        telemetryCurrent && network?.available
-            ? measuredNumber(network.sent_bytes_per_second)
-            : null;
-    const received =
-        telemetryCurrent && network?.available
-            ? measuredNumber(network.received_bytes_per_second)
-            : null;
-    const diagnosis = snapshot?.diagnosis;
+        sampledAt != null &&
+        Number.isFinite(sampledAt) &&
+        at >= sampledAt &&
+        at - sampledAt <= (snapshot.server.stale_after_seconds ?? 15) &&
+        network?.available;
+    const sent = available
+        ? measuredNumber(network.sent_bytes_per_second)
+        : null;
+    const received = available
+        ? measuredNumber(network.received_bytes_per_second)
+        : null;
+    return (
+        <dl
+            className="network-readings"
+            aria-label="Current server network rates"
+        >
+            <div>
+                <dt className="chart-series-primary">Upload from server</dt>
+                <dd data-unavailable={sent === null}>{megabits(sent)}</dd>
+            </div>
+            <div>
+                <dt className="chart-series-secondary">Download to server</dt>
+                <dd data-unavailable={received === null}>
+                    {megabits(received)}
+                </dd>
+            </div>
+        </dl>
+    );
+}
+
+export function NetworkMeasurementHelp() {
+    return (
+        <SettingHelp label="Server network">
+            <p>
+                Rates include all traffic on the reported interface, including
+                Telegram and file delivery. They do not show the entire hosting
+                machine’s capacity. Mbps means millions of bits per second.
+            </p>
+        </SettingHelp>
+    );
+}
+
+export default function PerformanceOverview({
+    snapshot,
+    current,
+    onAccounts,
+    onResources,
+}: {
+    snapshot: PerformanceSnapshot;
+    current: boolean;
+    onAccounts: () => void;
+    onResources: () => void;
+}) {
+    const items = useSyncExternalStore(transfers.subscribe, transfers.snapshot);
+    const currentItems = items.filter((item) => !item.historyOnly);
+    const active = currentItems.filter(
+        (item) =>
+            isTransferActive(item) &&
+            item.state !== "queued" &&
+            item.state !== "awaiting_file",
+    ).length;
+    const queued = currentItems.filter(
+        (item) => item.state === "queued",
+    ).length;
+    const needsAttention = currentItems.filter(
+        (item) => item.state === "error" || item.state === "awaiting_file",
+    ).length;
+    const diagnosis = snapshot.diagnosis;
     const diagnosisAge =
-        diagnosis?.sampled_at == null || !snapshot
+        diagnosis?.sampled_at == null
             ? NaN
             : (snapshot.traffic?.at ?? snapshot.server.at) -
               diagnosis.sampled_at;
@@ -74,158 +116,195 @@ export default function PerformanceOverview({
         current &&
         diagnosis &&
         diagnosis.state !== "unavailable" &&
-        Number.isFinite(diagnosisAge) &&
         diagnosisAge >= 0 &&
         diagnosisAge <= diagnosis.stale_after_seconds;
-    const constraints = diagnosisCurrent ? diagnosis.constraints : [];
-    const bandwidthWaits = (["upload", "download"] as const).filter(
-        (direction) => {
-            const value = snapshot?.bandwidth?.[direction];
-            return (
-                current &&
-                value &&
-                measuredNumber(value.configured_bytes_per_second) !== null &&
-                value.configured_bytes_per_second! > 0 &&
-                value.waiting > 0
-            );
-        },
+    const constraints = diagnosisCurrent
+        ? diagnosis.constraints.filter(
+              ({ certainty }) => certainty === "observed",
+          )
+        : [];
+    const limits = (["upload", "download"] as const).flatMap((direction) => {
+        const record = snapshot.bandwidth?.[direction];
+        if (!current || !record || !record.waiting) return [];
+        const configured = measuredNumber(record.configured_bytes_per_second);
+        return configured && configured > 0 ? [{ direction, configured }] : [];
+    });
+    const poolQueued = current ? snapshot.telegram.queued : 0;
+    const partQueued = current
+        ? snapshot.telegram.accounts.reduce(
+              (sum, account) => sum + (account.requests?.queued ?? 0),
+              0,
+          )
+        : 0;
+    const cooling = current
+        ? snapshot.telegram.accounts.filter(
+              (account) =>
+                  (poolQueued > 0 || (account.requests?.queued ?? 0) > 0) &&
+                  Math.max(
+                      account.cooldown_seconds,
+                      account.requests?.cooldown_seconds ?? 0,
+                  ) > 0,
+          ).length
+        : 0;
+    const reportedTelegramQueue = constraints.find(
+        ({ code }) => code === "telegram_queue",
     );
+    const reportedTelegramPause = constraints.find(
+        ({ code }) => code === "telegram_cooldown",
+    );
+    const readBufferWait = constraints.find(
+        ({ code }) => code === "scratch_wait",
+    );
+    const waitingStreams = measuredNumber(
+        readBufferWait?.evidence.find(({ name }) => name === "waiting_heads")
+            ?.value,
+    );
+    const otherWaits = constraints.some(
+        ({ code }) =>
+            !["telegram_queue", "telegram_cooldown", "scratch_wait"].includes(
+                code,
+            ),
+    );
+    const telegramReadings = [
+        poolQueued > 0
+            ? `${poolQueued} ${poolQueued === 1 ? "operation" : "operations"} queued`
+            : partQueued > 0
+              ? `${partQueued} part ${partQueued === 1 ? "request" : "requests"} queued`
+              : reportedTelegramQueue
+                ? "Queue reported in the latest reading"
+                : "",
+        cooling > 0
+            ? `${cooling} ${cooling === 1 ? "account" : "accounts"} on hold`
+            : reportedTelegramPause
+              ? "Cooldown reported while work was queued"
+              : "",
+    ]
+        .filter(Boolean)
+        .join(" · ");
+    const hasWait =
+        telegramReadings || limits.length > 0 || readBufferWait || otherWaits;
+
     return (
         <div className="performance-dashboard">
-            <p className="performance-sample-time">
-                {current ? "Latest snapshot: " : "Last loaded snapshot: "}
-                {formatTimestamp(
-                    snapshot.server.sampled_at ?? snapshot.server.at,
-                )}
-            </p>
-            <section aria-labelledby="performance-activity-heading">
-                <h3 id="performance-activity-heading">Current activity</h3>
-                <p className="muted">
-                    {current
-                        ? snapshot.telegram.active +
-                          " active Telegram operations · " +
-                          snapshot.telegram.queued +
-                          " waiting"
-                        : "Current activity reading unavailable"}
-                    <SettingHelp label="Server network">
-                        <p>
-                            These are measured interface counters, not
-                            upload-admission estimates. They can include
-                            Telegram, file delivery and other traffic on that
-                            interface. They do not establish the physical
-                            hosting machine's total traffic or capacity. Mbps
-                            means millions of bits per second.
-                        </p>
-                    </SettingHelp>
-                </p>
-                <dl className="network-readings">
-                    <div>
-                        <dt>
-                            <ArrowUp size={18} aria-hidden="true" /> Upload from
-                            server
-                        </dt>
-                        <dd data-unavailable={sent === null}>
-                            {megabits(sent)}
-                        </dd>
-                    </div>
-                    <div>
-                        <dt>
-                            <ArrowDown size={18} aria-hidden="true" /> Download
-                            to server
-                        </dt>
-                        <dd data-unavailable={received === null}>
-                            {megabits(received)}
-                        </dd>
-                    </div>
-                </dl>
-                <p aria-label="Current Transfers">
-                    Transfer manager: {activeTransfers} active ·{" "}
-                    {queuedTransfers} queued · {attentionTransfers} need
-                    attention
-                </p>
-                <div className="performance-summary-actions">
-                    <a
-                        className="inline-link"
-                        href="/?view=settings&section=transfers"
+            <section
+                className="performance-attention"
+                aria-labelledby="performance-activity-heading"
+            >
+                <div className="performance-transfer-summary">
+                    <h3 id="performance-activity-heading">Transfer activity</h3>
+                    <p
+                        className={
+                            needsAttention > 0
+                                ? "performance-transfer-alert"
+                                : undefined
+                        }
                     >
-                        Transfer settings
-                    </a>
-                    <a className="inline-link" href="/?view=activity">
-                        Open Transfers
-                    </a>
+                        {needsAttention > 0 && (
+                            <CircleAlert size={16} aria-hidden="true" />
+                        )}
+                        <strong>
+                            {needsAttention === 0
+                                ? "No transfers flagged for attention"
+                                : needsAttention === 1
+                                  ? "1 transfer needs attention"
+                                  : `${needsAttention} transfers need attention`}
+                        </strong>
+                    </p>
+                    <p>
+                        {active} active · {queued} queued
+                    </p>
                 </div>
+                <Button
+                    component="a"
+                    className="secondary-button performance-next-action"
+                    href="/?view=activity"
+                >
+                    Open Transfers
+                </Button>
             </section>
 
-            <section
-                className="performance-waiting"
-                aria-labelledby="performance-waits-heading"
-            >
-                <h3 id="performance-waits-heading">What is waiting</h3>
-                {bandwidthWaits.length > 0 && (
-                    <ul>
-                        {bandwidthWaits.map((direction) => (
-                            <li key={direction}>
-                                <strong>
-                                    {direction === "upload"
-                                        ? "Upload from server"
-                                        : "Download to server"}
-                                </strong>
-                                {" is waiting for its configured speed limit (" +
-                                    megabits(
-                                        snapshot!.bandwidth![direction]
-                                            .configured_bytes_per_second,
-                                    ) +
-                                    ")."}
-                                {
-                                    " This is intentional throttling, not evidence of a network failure."
-                                }
+            <section aria-labelledby="performance-waits-heading">
+                <h3 id="performance-waits-heading">Current waits</h3>
+                {hasWait ? (
+                    <ul className="performance-wait-list">
+                        {telegramReadings && (
+                            <li>
+                                <div>
+                                    <h4>Telegram</h4>
+                                    <p>{telegramReadings}</p>
+                                </div>
+                                <Button
+                                    type="button"
+                                    className="secondary-button performance-next-action"
+                                    onClick={onAccounts}
+                                >
+                                    View Accounts
+                                </Button>
                             </li>
-                        ))}
+                        )}
+                        {limits.length > 0 && (
+                            <li>
+                                <div>
+                                    <h4>Configured speed limits</h4>
+                                    {limits.map(({ direction, configured }) => (
+                                        <p key={direction}>
+                                            {direction === "upload"
+                                                ? "Server uploads"
+                                                : "Server downloads"}
+                                            {" waiting at " +
+                                                megabits(configured)}
+                                        </p>
+                                    ))}
+                                </div>
+                                <Button
+                                    component="a"
+                                    className="secondary-button performance-next-action"
+                                    href="/?view=settings&section=transfers"
+                                >
+                                    Transfer limits
+                                </Button>
+                            </li>
+                        )}
+                        {readBufferWait && (
+                            <li>
+                                <div>
+                                    <h4>Stream read buffers</h4>
+                                    <p>
+                                        {waitingStreams === null ||
+                                        waitingStreams === 0
+                                            ? "Streams waiting for a read buffer"
+                                            : `${waitingStreams} ${waitingStreams === 1 ? "stream" : "streams"} waiting for a read buffer`}
+                                    </p>
+                                </div>
+                                <Button
+                                    type="button"
+                                    className="secondary-button performance-next-action"
+                                    onClick={onResources}
+                                >
+                                    Server resources
+                                </Button>
+                            </li>
+                        )}
+                        {otherWaits && (
+                            <li>
+                                <div>
+                                    <h4>Other service wait</h4>
+                                    <p>
+                                        The latest reading did not identify the
+                                        source.
+                                    </p>
+                                </div>
+                            </li>
+                        )}
                     </ul>
-                )}
-                {!diagnosisCurrent ? (
-                    <p>
-                        Current wait evidence is unavailable. Refresh to check
-                        again.
-                    </p>
-                ) : constraints.length ? (
-                    <>
-                        <ul>
-                            {constraints.map((constraint, index) => (
-                                <li key={constraint.code + index}>
-                                    <strong>
-                                        {WAIT_LABELS[constraint.code] ||
-                                            "Additional reported constraint"}
-                                    </strong>
-                                    {" · " +
-                                        (constraint.certainty === "observed"
-                                            ? "Observed"
-                                            : constraint.certainty === "likely"
-                                              ? "Likely"
-                                              : "Reported")}
-                                </li>
-                            ))}
-                        </ul>
-                        <p>
-                            A reported wait does not establish that the entire
-                            server is at capacity.
-                        </p>
-                    </>
                 ) : (
                     <p>
-                        {diagnosis?.state === "observing"
-                            ? "Collecting observations. No wait reported yet."
-                            : bandwidthWaits.length > 0
-                              ? "No additional Telegram or stream-buffer wait reported."
-                              : "All clear — no delays detected in the latest check."}
+                        {!diagnosisCurrent
+                            ? "Current wait readings unavailable. This page checks again automatically."
+                            : diagnosis?.state === "observing"
+                              ? "Collecting data about current waits."
+                              : "No service waits observed."}
                     </p>
-                )}
-                {constraints.some((item) =>
-                    item.code.startsWith("telegram_"),
-                ) && (
-                    <a className="inline-link" href="/?view=connections">
-                        Check Telegram connections
-                    </a>
                 )}
             </section>
         </div>

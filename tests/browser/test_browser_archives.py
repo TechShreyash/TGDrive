@@ -222,7 +222,9 @@ def test_extract_zip_current_and_new_folder_keep_clear_destinations(
         page.get_by_role("button", name="Private folder", exact=True).press("Enter")
         item_action(page, ZIP_NAME, "Extract archive")
         dialog = page.get_by_role("dialog", name="Extract archive", exact=True)
-        expect(dialog.get_by_text("Current folder", exact=True)).to_be_visible()
+        expect(
+            dialog.get_by_text("My Files / Private folder", exact=True)
+        ).to_be_visible()
         page.keyboard.press("Escape")
 
 
@@ -307,6 +309,67 @@ def test_archive_failures_stay_inline_and_public_destination_requires_consent(
         False,
         True,
     ]
+
+
+@pytest.mark.parametrize("width,height", [(1536, 695), (820, 1180), (390, 844)])
+def test_zip_password_and_retry_are_entered_separately(server, desktop, width, height):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": height})
+    if width > 390:
+        page.add_init_script("localStorage.setItem('tgdrive.appearance', 'dark')")
+    archive = ArchiveRequests(page)
+    login(page, server.url)
+    item_action(page, ZIP_NAME, "Extract archive")
+    dialog = page.get_by_role("dialog", name="Extract archive", exact=True)
+    dialog.get_by_label("ZIP password (optional)", exact=True).fill("wrong-password")
+    dialog.get_by_role("button", name="Extract archive", exact=True).click()
+    expect(dialog).not_to_be_visible()
+    assert archive.requests[-1]["password"] == "wrong-password"
+    job = archive.jobs[-1]
+    job.update(
+        status="error",
+        phase="extracting",
+        error="Incorrect ZIP password. Try again.",
+        archive_password_required=True,
+        finished_at=time.time(),
+    )
+
+    rejected = False
+
+    def retry(route):
+        nonlocal rejected
+        if not rejected:
+            rejected = True
+            route.fulfill(
+                status=503, json={"detail": "Retry is temporarily unavailable"}
+            )
+            return
+        assert route.request.post_data_json == {"password": "right-password"}
+        job.update(status="running", phase="extracting", error=None)
+        route.fulfill(json=job)
+
+    page.route("**/api/v1/jobs/fixture-archive-*/retry", retry)
+    page.goto(server.url + "/?view=activity")
+    row = page.locator(".transfer-page .transfer-item").filter(has_text=ZIP_NAME)
+    row.get_by_role("button", name=f"Retry {ZIP_NAME}", exact=True).click()
+    prompt = page.get_by_role("dialog", name="Retry password-protected ZIP")
+    field = prompt.get_by_label("ZIP password")
+    expect(field).to_have_value("")
+    expect(field).to_be_focused()
+    expect(prompt.get_by_text(ZIP_NAME, exact=True)).to_be_visible()
+    field.fill("right-password")
+    submit = prompt.get_by_role("button", name="Retry", exact=True)
+    submit.click()
+    expect(prompt.get_by_role("alert")).to_have_text("Retry is temporarily unavailable")
+    page.screenshot(
+        path=ARTIFACTS / f"archive-retry-{width}.png", animations="disabled"
+    )
+    expect(field).to_be_focused()
+    with page.expect_response(lambda response: response.url.endswith("/retry")):
+        prompt.get_by_role("button", name="Retry", exact=True).click()
+    expect(prompt).not_to_be_visible()
+    stored = page.evaluate("JSON.stringify(localStorage)")
+    assert "right-password" not in stored and "wrong-password" not in stored
 
 
 def test_completed_extraction_opens_its_new_output_folder(server, desktop):

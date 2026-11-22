@@ -365,6 +365,7 @@ def extract(request):
                 str(source),
                 format_name="all" if container == "rar" else container,
                 filter_name="none",
+                passphrase=request.get("password") if container == "zip" else None,
             ) as archive:
                 yield archive, None
 
@@ -374,8 +375,10 @@ def extract(request):
                 raise stream.failure
             if index >= MAX_ENTRIES:
                 raise WorkerError("An archive supports at most 1000 entries.")
-            if encrypted(entry._entry_p):
-                raise WorkerError("Encrypted archives are unsupported.")
+            if encrypted(entry._entry_p) and (
+                container != "zip" or not request.get("password")
+            ):
+                raise WorkerError("Encrypted ZIP entries require the archive password.")
             if (
                 entry.linkpath
                 or entry.islnk
@@ -418,7 +421,9 @@ def run():
         send({"result": extract(request)})
     except Exception as error:
         message = str(error)
-        if not isinstance(error, WorkerError):
+        if request.get("password") and "passphrase" in message.lower():
+            message = "Incorrect ZIP password. Try again."
+        elif not isinstance(error, WorkerError):
             message = (
                 "Archive integrity/CRC verification failed, or the archive is "
                 "damaged, encrypted or unsupported. " + message

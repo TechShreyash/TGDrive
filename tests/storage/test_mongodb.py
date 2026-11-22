@@ -16,7 +16,7 @@ from tests.support.mongo_fixtures import store_from_payload
 from tgdrive.core.errors import DuplicateNameError, NotFoundError, ValidationError
 from tgdrive.core.security import InvalidSession, SessionManager
 from tgdrive.storage.mongo import DatabaseUnavailable, MongoBackend, configure
-from tgdrive.storage.mongo_store import MongoStore
+from tgdrive.storage.mongo_store import MongoStore, SharePasswordRequired
 from tgdrive.telegram.client_identity import IdentityCache
 from tgdrive.transfers.tasks import TransferRegistry, TransferStatus
 
@@ -164,8 +164,8 @@ def test_shared_page_cannot_read_private_rows_added_after_scope_changes(
     entered, release = threading.Event(), threading.Event()
     original = store._authorized
 
-    def hold_after_authorization(chain, supplied):
-        result = original(chain, supplied)
+    def hold_after_authorization(chain, supplied, unlock=None):
+        result = original(chain, supplied, unlock)
         if result is not None:
             entered.set()
             assert release.wait(5), "The test did not release shared page loading"
@@ -440,6 +440,23 @@ def test_ownership_excludes_second_process_and_fences_expired_writer(store, back
         assert backend.db.nodes.count_documents({"name": "Must not commit"}) == 0
     finally:
         other.client.close()
+
+
+async def test_interrupted_bot_intake_review_survives_mongodb_reopen(backend):
+    registry = TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
+    plan = {"dispatched": True, "random_id": 123}
+    job = await registry.create(
+        "interrupted", context={"bot_intake": plan, "source_kind": "telegram"}
+    )
+    assert job.bot_intake_review_required
+    await registry.review_bot_intake(job.id)
+
+    reopened = TransferRegistry(mongo=backend.db.jobs, mongo_backend=backend)
+    restored = reopened.get(job.id)
+    assert restored.status is TransferStatus.ERROR
+    assert restored.phase == "bot_intake_reviewed"
+    assert restored.context["bot_intake"] == plan | {"reviewed_at": restored.updated_at}
+    assert not restored.bot_intake_review_required
 
 
 async def test_jobs_sessions_names_and_connection_settings_use_mongodb(
@@ -786,6 +803,81 @@ def test_multiple_independent_share_links_survive_mongo_reopen_and_snapshot(
     reopened.revoke_share(rows[0]["id"])
     assert not reopened.authorize_directory(target, first)
     assert reopened.authorize_directory(target, second) == target
+
+
+def test_protected_share_stays_locked_after_mongo_reopen_and_recovery(store, backend):
+    from tgdrive.web.share_links import share_password_hasher
+
+    file_path = path(store.add_file("/", "Report.pdf", 42, 100))
+    password_hash = share_password_hasher.hash("fixture-password")
+    token = store.create_share(file_path, password_hash=password_hash)
+    reopened = MongoStore(backend)
+    portable = store_from_payload(reopened.export())
+    try:
+        for catalog in (reopened, portable):
+            assert catalog.list_shares(file_path)[0]["password_required"]
+            with pytest.raises(SharePasswordRequired):
+                catalog.authorize_file(file_path, token)
+            assert catalog.authorize_file(
+                file_path, token, share_unlock=lambda value: value == password_hash
+            )
+    finally:
+        portable.close()
+
+
+def test_share_opens_concurrently_deduplicate_and_restore_legacy_counts(store, backend):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from tgdrive.storage.mongo_store import ShareDenied
+
+    item = path(store.add_file("/", "Report.pdf", 42, 100))
+    token = store.create_share(item)
+    row = store.list_shares(item)[0]
+    assert row["opens_since"] == row["created_at"]
+    # Older portable snapshots have neither field.
+    originals = store.export()
+    originals["shares"][0].pop("open_count")
+    originals["shares"][0].pop("opens_since")
+    legacy = store_from_payload(originals)
+    try:
+        assert legacy.list_shares()[0]["open_count"] == 0
+        assert legacy.list_shares()[0]["opens_since"] is None
+        legacy.record_share_open(item, token, "1" * 32)
+        assert legacy.list_shares()[0]["open_count"] == 1
+        assert legacy.list_shares()[0]["opens_since"]
+    finally:
+        legacy.close()
+
+    identities = [f"{index:032x}" for index in range(12)] * 3
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        list(
+            workers.map(
+                lambda event: store.record_share_open(item, token, event), identities
+            )
+        )
+    assert backend.db.share_open_events.count_documents({}) == 12
+    assert (
+        backend.db.share_open_events.index_information()["expire_at_1"][
+            "expireAfterSeconds"
+        ]
+        == 0
+    )
+    store.update_share(row["id"], label="Review copy")
+    reopened = MongoStore(backend)
+    assert reopened.list_shares()[0]["open_count"] == 12
+    portable = reopened.export()
+    assert "share_open_events" not in portable and identities[0] not in repr(portable)
+    restored = store_from_payload(portable)
+    try:
+        assert restored.list_shares()[0]["open_count"] == 12
+        assert restored.list_shares()[0]["label"] == "Review copy"
+        assert reopened.revoke_share(row["id"])
+        assert not reopened.list_shares()
+        with pytest.raises(ShareDenied):
+            reopened.record_share_open(item, token, "f" * 32)
+    finally:
+        restored.close()
+        reopened.close()
 
 
 def test_starred_mongo_paths_snapshot_and_restart(store, backend):

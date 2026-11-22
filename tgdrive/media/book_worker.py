@@ -169,7 +169,7 @@ class SafeRarSource:
             return 0
 
 
-def open_zip(source):
+def open_zip(source, *, listing=False):
     # Bound the directory before ZipFile allocates one object per entry.
     tail_size = min(source.size, 65557)
     source.seek(source.size - tail_size)
@@ -226,10 +226,15 @@ def open_zip(source):
     archive = ZipFile(source)
     names = set()
     for entry in archive.infolist():
+        if listing:
+            safe_name(entry.filename.rstrip("/"))
+            if "//" in entry.filename:
+                archive.close()
+                raise BookError("This ZIP contains an invalid directory path.")
         if entry.is_dir():
             continue
         safe_name(entry.filename)
-        if entry.filename in names or entry.flag_bits & 1:
+        if entry.filename in names or (entry.flag_bits & 1 and not listing):
             archive.close()
             raise BookError("Duplicate or encrypted book resources are not supported.")
         names.add(entry.filename)
@@ -700,8 +705,146 @@ def epub_index(archive):
     return {"kind": "epub", "title": title, "entries": entries}
 
 
+def office_text(node, ns):
+    return "".join(text.text or "" for text in node.iterfind(".//" + ns + "t"))
+
+
+def office_document(archive):
+    document = xml(zip_bytes(archive, "word/document.xml"))
+    ns = document.tag.rsplit("}", 1)[0] + "}"
+    body = document.find(ns + "body")
+    if body is None:
+        raise BookError("This Word document has no readable body.")
+    paragraphs = []
+    remaining = 128 * 1024
+    for paragraph in body.iter(ns + "p"):
+        text = office_text(paragraph, ns)
+        if not text.strip():
+            continue
+        if len(paragraphs) >= 1000 or len(text) > remaining:
+            if remaining and len(paragraphs) < 1000:
+                paragraphs.append({"text": text[:remaining], "heading": False})
+            return {"kind": "document", "paragraphs": paragraphs, "truncated": True}
+        style = paragraph.find(f"{ns}pPr/{ns}pStyle")
+        heading = style is not None and style.get(ns + "val", "").lower().startswith(
+            ("heading", "title")
+        )
+        paragraphs.append({"text": text, "heading": heading})
+        remaining -= len(text)
+    return {"kind": "document", "paragraphs": paragraphs, "truncated": False}
+
+
+def office_workbook(archive, entry):
+    workbook_path = "xl/workbook.xml"
+    workbook = xml(zip_bytes(archive, workbook_path))
+    ns = workbook.tag.rsplit("}", 1)[0] + "}"
+    relations = xml(zip_bytes(archive, "xl/_rels/workbook.xml.rels"))
+    targets = {}
+    for relation in relations:
+        if (
+            not relation.get("Type", "").endswith("/worksheet")
+            or relation.get("TargetMode") == "External"
+        ):
+            continue
+        target = relation.get("Target", "")
+        if target.startswith("/"):
+            target = safe_name(target[1:])
+        else:
+            target = local_ref(workbook_path, target)
+        if target and target.startswith("xl/") and target.endswith(".xml"):
+            targets[relation.get("Id")] = target
+
+    sheets = []
+    for sheet in workbook.findall(f"{ns}sheets/{ns}sheet"):
+        relation_id = next(
+            (value for key, value in sheet.attrib.items() if key.endswith("}id")),
+            None,
+        )
+        if relation_id in targets and sheet.get("state", "visible") == "visible":
+            sheets.append((sheet.get("name", "Sheet")[:128], targets[relation_id]))
+    if not sheets:
+        raise BookError("This workbook has no supported visible worksheets.")
+    sheets_truncated = len(sheets) > 100
+    sheets = sheets[:100]
+    selected = 0
+    if entry is not None:
+        if not re.fullmatch(r"[0-9]{1,2}", entry) or int(entry) >= len(sheets):
+            raise BookError("This worksheet is unavailable.")
+        selected = int(entry)
+
+    sheet = xml(zip_bytes(archive, sheets[selected][1]))
+    ns = sheet.tag.rsplit("}", 1)[0] + "}"
+    strings = []
+    if "xl/sharedStrings.xml" in archive.namelist():
+        shared = xml(zip_bytes(archive, "xl/sharedStrings.xml"))
+        strings = [office_text(item, ns) for item in shared.findall(ns + "si")]
+    rows: list[list[str]] = []
+    columns = 0
+    truncated = sheets_truncated
+    remaining = 128 * 1024
+    for cell in sheet.iterfind(f"{ns}sheetData/{ns}row/{ns}c"):
+        address = re.fullmatch(r"([A-Z]{1,3})([1-9][0-9]{0,6})", cell.get("r", ""))
+        if address is None:
+            continue
+        column = 0
+        for char in address[1]:
+            column = column * 26 + ord(char) - ord("A") + 1
+        row = int(address[2])
+        if row > 100 or column > 20:
+            truncated = True
+            continue
+        value = cell.findtext(ns + "v", "")
+        kind = cell.get("t")
+        if kind == "inlineStr":
+            value = office_text(cell, ns)
+        elif kind == "s":
+            if re.fullmatch(r"[0-9]{1,7}", value) and int(value) < len(strings):
+                value = strings[int(value)]
+            else:
+                raise BookError("This worksheet has an invalid shared string.")
+        elif kind == "b":
+            value = {"0": "FALSE", "1": "TRUE"}.get(value, value)
+        clipped = value[: min(512, remaining)]
+        truncated |= len(clipped) != len(value)
+        remaining -= len(clipped)
+        columns = max(columns, column)
+        while len(rows) < row:
+            rows.append([""] * 20)
+        rows[row - 1][column - 1] = clipped
+    return {
+        "kind": "spreadsheet",
+        "sheets": [name for name, _path in sheets],
+        "selected": selected,
+        "rows": [row[:columns] for row in rows],
+        "truncated": truncated,
+    }
+
+
 def read_book(source, fmt, entry=None, *, raw_images=False) -> dict[str, Any]:
     image_limit = MAX_PAGE if raw_images else MAX_ENTRY
+    if fmt in {"docx", "xlsx"}:
+        with open_zip(source) as archive:
+            if fmt == "xlsx":
+                return office_workbook(archive, entry)
+            if entry is not None:
+                raise BookError("Word previews do not have separate entries.")
+            return office_document(archive)
+    if fmt == "zip":
+        if entry is not None:
+            raise BookError("ZIP previews list contents without extracting files.")
+        with open_zip(source, listing=True) as archive:
+            return {
+                "kind": "archive",
+                "entries": [
+                    {
+                        "name": item.filename,
+                        "directory": item.is_dir(),
+                        "size": item.file_size,
+                        "encrypted": bool(item.flag_bits & 1),
+                    }
+                    for item in archive.infolist()
+                ],
+            }
     if fmt in {"epub", "cbz"}:
         with open_zip(source) as archive:
             if entry is None:

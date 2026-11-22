@@ -220,6 +220,9 @@ class FixtureTransfers:
     async def cancel_job(self, job_id: str) -> TransferRecord:
         return await self.registry.cancel(job_id)
 
+    async def review_bot_intake(self, job_id: str) -> TransferRecord:
+        return await self.registry.review_bot_intake(job_id)
+
     async def start_deletion(self, path: str) -> TransferRecord:
         intent = self.store.begin_deletion(path)
         if intent["state"] == "failed":
@@ -1180,7 +1183,7 @@ app = create_app(settings, runtime=runtime)
 if os.environ.get("TGDRIVE_UI_SHOWCASE") == "1":
     from tests.support.showcase_data import install
 
-    install(app, runtime)
+    install(app, runtime, settings)
 app.state.premium_login_service = PremiumLoginService(
     runtime.connection_manager.login_api,
     runtime.connection_manager.add_authenticated_session,
@@ -1234,6 +1237,49 @@ async def backup_state(request: Request) -> dict[str, Any]:
         "recovery": runtime.backup.protection_status(runtime.store),
         "calls": runtime.backup.calls,
     }
+
+
+@app.post("/__test__/bot-intake-review")
+async def seed_bot_intake_review(request: Request) -> dict[str, str]:
+    _control(request)
+    registry = runtime.transfers.registry
+    record = await registry.create(
+        "interrupted",
+        total=2048,
+        context={
+            "source_kind": "telegram",
+            "name": "relay.bin",
+            "bot_intake": {"dispatched": True},
+        },
+    )
+    known = await registry.create(
+        "publishing",
+        total=2048,
+        context={
+            "source_kind": "telegram",
+            "name": "known-relay.bin",
+            "bot_intake": {"dispatched": True, "message_id": 77},
+        },
+    )
+    await registry.update(known.id, status=TransferStatus.COMPLETED, phase="completed")
+    timed_out = await registry.create(
+        "downloading",
+        total=16,
+        context={
+            "kind": "upload",
+            "source_kind": "telegram",
+            "destination": "/",
+            "name": "timed-out.bin",
+            "showcase": True,
+        },
+    )
+    await registry.update(
+        timed_out.id,
+        status=TransferStatus.ERROR,
+        phase="bot_intake_timeout",
+        error="Telegram timed out. Try again.",
+    )
+    return {"id": record.id, "timeout_id": timed_out.id}
 
 
 @app.post("/__test__/finish/{transfer_id}")
@@ -1369,6 +1415,58 @@ async def seed_books(request: Request):
     return {"path": seed_reading_samples(runtime)}
 
 
+@app.post("/__test__/zip")
+async def seed_zip(request: Request):
+    from zipfile import ZipFile
+
+    _control(request)
+    output = io.BytesIO()
+    with ZipFile(output, "w") as archive:
+        archive.writestr("large.bin", b"x" * (4 * 1024**2))
+        archive.writestr("Documents/nested/notes.txt", b"hello")
+        archive.writestr("empty/", b"")
+        archive.writestr("<img src=x onerror=alert(1)>.txt", b"inert")
+        archive.writestr("locked.txt", b"fixture directory metadata only")
+        for index in range(105):
+            archive.writestr(f"many/file-{index:03}.txt", b"x")
+    content = bytearray(output.getvalue())
+    at = content.index(b"PK\x01\x02")
+    struct.pack_into("<H", content, at + 8, 1)
+    runtime.payloads[970] = bytes(content)
+    item = runtime.store.add_file(
+        runtime.preview_path, "folders.zip", 970, len(content)
+    )
+    return {"path": runtime.preview_path + "/" + item["id"]}
+
+
+@app.post("/__test__/office")
+async def seed_office(request: Request):
+    from tests.media.test_office_preview import office_samples
+
+    _control(request)
+    for message_id, (name, content) in enumerate(office_samples().items(), 980):
+        runtime.payloads[message_id] = content
+        runtime.store.add_file(runtime.preview_path, name, message_id, len(content))
+    return {"path": runtime.preview_path}
+
+
+@app.post("/__test__/move-paths")
+async def seed_move_paths(request: Request):
+    _control(request)
+    middle = runtime.store.create_folder(runtime.folder_path, "Projects")
+    middle_path = f"{runtime.folder_path}/{middle['id']}"
+    leaf = runtime.store.create_folder(middle_path, "Planning")
+    leaf_path = f"{middle_path}/{leaf['id']}"
+    item = runtime.store.add_file(leaf_path, "Agenda.txt", 990, 6)
+    runtime.payloads[990] = b"agenda"
+    runtime.store.set_starred(f"{leaf_path}/{item['id']}", True)
+    runtime.store.set_starred(runtime.private_file_path, True)
+    runtime.store.mark_opened(item["id"])
+    duplicate = runtime.store.create_folder(runtime.private_path, "Planning")
+    duplicate_path = f"{runtime.private_path}/{duplicate['id']}"
+    return {"path": leaf_path, "duplicate": duplicate_path}
+
+
 @app.post("/__test__/books/large-page")
 async def seed_large_book_page(request: Request):
     """Opt-in encoded-page limit fixture; original PNG stays byte-for-byte intact."""
@@ -1456,3 +1554,63 @@ async def replica_scenario(request: Request, scenario: str):
 async def replica_fixture_state(request: Request):
     _control(request)
     return {"state": runtime.replica.status(), "events": runtime.replica.events}
+
+
+# Controlled source: metadata and all samples precede a large held trailing atom.
+_progressive_video = None
+
+
+@app.post("/__test__/progressive-video")
+async def progressive_video_control(request: Request):
+    global _progressive_video
+    _control(request)
+    if request.query_params.get("release") == "1":
+        if _progressive_video:
+            _progressive_video["release"].set()
+        return {"released": True}
+    original = (
+        Path(__file__).resolve().parents[1] / "fixtures" / "movtext-subtitles.mp4"
+    ).read_bytes()
+    padding = 40 * 1024**2 - len(original)
+    _progressive_video = {
+        "data": original + struct.pack(">I4s", padding, b"free") + bytes(padding - 8),
+        "release": asyncio.Event(),
+        "sent": 0,
+    }
+    return {"size": len(_progressive_video["data"])}
+
+
+@app.api_route("/__test__/progressive-video", methods=["GET", "HEAD"])
+async def progressive_video(request: Request):
+    import re
+
+    from fastapi.responses import StreamingResponse
+
+    state = _progressive_video
+    assert state is not None
+    data = state["data"]
+    match = re.fullmatch(r"bytes=(\d+)-(\d*)", request.headers.get("range", ""))
+    start = int(match[1]) if match else 0
+    end = min(int(match[2]) if match and match[2] else len(data) - 1, len(data) - 1)
+    headers = {"Content-Length": str(end - start + 1), "Accept-Ranges": "bytes"}
+    if match:
+        headers["Content-Range"] = f"bytes {start}-{end}/{len(data)}"
+    if request.method == "HEAD":
+        return Response(headers=headers, status_code=206 if match else 200)
+
+    async def body():
+        current = start
+        while current <= end:
+            if current >= 2 * 1024**2:
+                await state["release"].wait()
+            block = data[current : min(end + 1, current + 64 * 1024)]
+            state["sent"] += len(block)
+            yield block
+            current += len(block)
+
+    return StreamingResponse(
+        body(),
+        headers=headers,
+        status_code=206 if match else 200,
+        media_type="video/mp4",
+    )

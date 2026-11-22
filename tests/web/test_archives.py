@@ -77,6 +77,7 @@ def test_extraction_returns_identifiable_job_and_preserves_destination_choice(
                 "destination": "/",
                 "folder_name": folder_name,
                 "allow_public_exposure": False,
+                "password": None,
             },
         )
     ]
@@ -198,3 +199,38 @@ def test_archive_admission_errors_remain_actionable(
     )
     assert response.status_code == status
     assert response.json()["detail"] == str(error)
+
+
+def test_pdf_password_endpoint_requires_owner_and_shared_destination_consent(
+    app_client, monkeypatch
+):
+    client, store, runtime, _ = app_client
+    folder = store.create_folder("/", "Shared PDFs")
+    destination = "/" + folder["id"]
+    store.create_share(destination)
+    item = store.add_file(destination, "Report.pdf", 123, 20)
+    calls = []
+
+    async def start(manager, path, target, operation, **options):
+        calls.append((path, target, operation, options))
+        return await runtime.transfers.registry.create(
+            "downloading",
+            context={"kind": "pdf_password", "destination": target},
+        )
+
+    monkeypatch.setattr("tgdrive.web.archive_api.start_pdf_password", start)
+    route = "/api/v1/pdfs/password"
+    payload = {
+        "path": destination + "/" + item["id"],
+        "destination": destination,
+        "operation": "add",
+        "new_password": "fixture-secret",
+    }
+    assert client.post(route, json=payload).status_code == 401
+    login(client)
+    assert client.post(route, json=payload).status_code == 409
+    assert not calls
+    response = client.post(route, json={**payload, "allow_public_exposure": True})
+    assert response.status_code == 202, response.text
+    assert calls[0][3]["new_password"] == "fixture-secret"
+    assert "fixture-secret" not in response.text

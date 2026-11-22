@@ -194,6 +194,11 @@ export default function TransferHistory({
     const pageItems = new Map(
         localItems.map((item) => [item.key, latest.get(item.key) || item]),
     );
+    const visibleJobIds = new Set(jobs.map((job) => job.id));
+    for (const item of items) {
+        if (item.jobId && visibleJobIds.has(item.jobId))
+            pageItems.set(item.key, item);
+    }
     for (const item of matchHistoryTasks(liveHistoryRows(items), query))
         pageItems.set(item.key, item);
     const visible = visibleHistory(

@@ -63,14 +63,6 @@ def assert_pending(page, button, held):
             None,
         ),
         (
-            "performance",
-            "/api/v1/performance",
-            "/api/v1/performance",
-            "GET",
-            "Refresh Performance",
-            None,
-        ),
-        (
             "shares",
             "/api/v1/shares",
             "/api/v1/shares",
@@ -78,7 +70,6 @@ def assert_pending(page, button, held):
             "Refresh Shared Links",
             None,
         ),
-        ("storage", "/api/v1/settings", "/api/v1/settings", "GET", "Check Again", None),
         (
             "connections",
             "/api/v1/settings",
@@ -98,9 +89,7 @@ def assert_pending(page, button, held):
     ],
     ids=[
         "preloads",
-        "performance",
         "shares",
-        "storage",
         "connections",
         "channel-backup",
     ],
@@ -133,33 +122,6 @@ def test_manual_refresh_disables_and_confirms_only_after_success(
     expect(button).to_be_enabled()
     expect(page.locator(".toast:not(.toast-error)")).to_contain_text(
         re.compile(r"refreshed|checks requested", re.I)
-    )
-
-
-def test_performance_refresh_waits_for_history_as_well_as_snapshot(server, desktop):
-    _, page = desktop
-    open_page(page, server, "performance", "/api/v1/performance/history")
-    button = page.get_by_role("button", name="Refresh Performance", exact=True)
-    expect(button).to_be_enabled()
-    held = []
-
-    def hold_history(route):
-        held.append((route, route.fetch().json()))
-
-    page.route("**/api/v1/performance/history?*", hold_history)
-    with page.expect_response(
-        lambda response: response_path(response, "/api/v1/performance")
-    ):
-        button.dblclick()
-    wait_for_request(page, held)
-    expect(button).to_be_disabled()
-    expect(page.locator(".toast:not(.toast-error)")).to_have_count(0)
-    assert len(held) == 1
-    route, payload = held[0]
-    route.fulfill(json=payload)
-    expect(button).to_be_enabled()
-    expect(page.locator(".toast:not(.toast-error)")).to_have_text(
-        re.compile(r"Performance refreshed\.")
     )
 
 

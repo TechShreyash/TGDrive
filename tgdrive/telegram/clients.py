@@ -855,6 +855,13 @@ class Client:
             with suppress(Exception):
                 await asyncio.to_thread(cache.defer, self.name, deadline)
 
+    async def reply_to(
+        self, chat_id: int, message_id: int, text: str, *, parse_mode: str
+    ) -> None:
+        await self.native.send_message(
+            chat_id, text, reply_to=message_id, parse_mode=parse_mode
+        )
+
     async def get_messages(self, channel: int, *, message_ids: Any) -> Any:
         scheduler = getattr(self, "_media_scheduler", None)
         try:

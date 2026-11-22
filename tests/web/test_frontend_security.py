@@ -62,7 +62,10 @@ def test_frontend_dependencies_are_locked() -> None:
     dependencies = package["dependencies"] | package["devDependencies"]
     for name, version in dependencies.items():
         if name not in manifest["packages"]:
-            assert re.fullmatch(r"\d+\.\d+\.\d+", version), version
+            assert re.fullmatch(
+                r"\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?",
+                version,
+            ), version
             continue
         viewer = manifest["packages"][name]
         vendored = viewer["vendored"]

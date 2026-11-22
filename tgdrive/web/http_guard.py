@@ -44,6 +44,8 @@ class ApiBodyGuardMiddleware:
             "/api/checkPassword",
             "/api/logout",
             "/api/getDirectory",
+            "/api/v1/shared/unlock",
+            "/api/v1/shared/opens",
         }
     )
 
@@ -85,6 +87,8 @@ class ApiBodyGuardMiddleware:
         }:
             # Lists of paths and folder components need more room than controls.
             body_limit = max(body_limit, 4 * 1024**2)
+        elif path == "/api/v1/shared/opens":
+            body_limit = 4096
         elif path == "/api/v1/transfers/history/tasks":
             body_limit = max(body_limit, 256 * 1024)
         lengths = [

@@ -26,76 +26,6 @@
     font-size: 13px;
 }
 
-/* Health summary */
-.storage-page .storage-protection {
-    --tone: var(--hue-slate);
-    --tone-soft: color-mix(in srgb, var(--hue-slate) 13%, transparent);
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    padding-block: 22px;
-    animation: storage-rise var(--dur-3) var(--ease-out);
-}
-.storage-page .storage-protection:has(.storage-protection-icon.is-protected) {
-    --tone: var(--success);
-    --tone-soft: var(--success-soft);
-}
-.storage-page .storage-protection:has(.storage-protection-icon.is-attention) {
-    --tone: var(--danger);
-    --tone-soft: var(--danger-soft);
-}
-.storage-page .storage-protection-heading {
-    gap: 16px;
-    margin-bottom: 16px;
-}
-.storage-page .storage-protection-icon {
-    width: 56px;
-    height: 56px;
-    flex: 0 0 56px;
-    border-radius: 16px;
-    background: var(--tone-soft);
-    color: var(--tone);
-}
-.storage-page .storage-protection-heading h2 {
-    margin: 0 0 4px;
-    font-size: 17px;
-}
-.storage-page .storage-protection .drive-backup-state {
-    width: max-content;
-    max-width: 100%;
-    padding: 2px 10px;
-    border-radius: 999px;
-    background: var(--tone-soft);
-    color: var(--tone);
-    font-size: 12px;
-    font-weight: 600;
-    line-height: 20px;
-}
-.storage-page .storage-protection .drive-backup-state .spinner {
-    width: 14px;
-    height: 14px;
-}
-.storage-page .storage-protection .backup-confirmation-date {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 4px 8px;
-    width: max-content;
-    max-width: 100%;
-    margin: 0 0 12px;
-    padding: 8px 12px;
-    border-radius: 12px;
-    background: var(--surface-subtle);
-    font-size: 12px;
-}
-:root[data-theme="dark"] .storage-page .backup-confirmation-date {
-    background: var(--hover);
-}
-.storage-page .backup-confirmation-date strong {
-    font-variant-numeric: tabular-nums;
-}
-.storage-page .storage-protection .backup-safety-note {
-    font-size: 13px;
-}
 .storage-page .backup-guide-link {
     width: max-content;
     padding-inline: 0;
@@ -214,46 +144,9 @@
     padding-inline: 0;
 }
 
-/* Files in This Drive */
-.storage-page .storage-catalog {
-    gap: 8px;
-    padding: 0;
-}
-.storage-page .storage-catalog > div,
-.storage-page .storage-catalog > div:first-child {
-    padding: 16px 18px;
-    border: 0;
-    border-radius: 14px;
-    background: var(--surface-subtle);
-}
-:root[data-theme="dark"] .storage-page .storage-catalog > div {
-    background: var(--hover);
-}
-.storage-page .storage-catalog dt {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-}
-.storage-page .storage-catalog dd {
-    font-size: 30px;
-    line-height: 36px;
-    font-weight: 650;
-    letter-spacing: -0.02em;
-}
-.storage-page .storage-catalog dd > span {
-    letter-spacing: 0;
-}
 .storage-page .staging-meter {
     height: 8px;
     border-radius: 999px;
-}
-
-@keyframes storage-rise {
-    from {
-        opacity: 0;
-        transform: translateY(6px);
-    }
 }
 
 @media (max-width: 720px) {
@@ -264,20 +157,6 @@
             :has(.error-notice)
         ) {
         padding: 18px 16px;
-    }
-    .storage-page .storage-protection-heading {
-        grid-template-columns: 48px minmax(0, 1fr);
-    }
-    .storage-page .storage-protection-icon {
-        width: 48px;
-        height: 48px;
-        flex-basis: 48px;
-        border-radius: 14px;
-    }
-    .storage-page .storage-protection-heading > .secondary-button {
-        grid-column: 1 / -1;
-        justify-self: stretch;
-        min-height: 44px;
     }
     .storage-page .channel-backup-channels {
         grid-template-columns: minmax(0, 1fr);
@@ -296,22 +175,9 @@
     .storage-page .channel-backup-details.channel-backup-restore {
         padding-inline: 12px;
     }
-    .storage-page .storage-catalog dd {
-        font-size: 24px;
-        line-height: 30px;
-    }
     .storage-page .storage-jobs > .secondary-button {
         width: 100%;
         min-height: 44px;
-    }
-}
-@media (max-width: 480px) {
-    .storage-page .storage-catalog > div {
-        align-items: center;
-        padding: 10px 14px;
-    }
-    .storage-page .storage-catalog dd > span {
-        margin-top: 0;
     }
 }
 .storage-page .channel-backup .channel-backup-key-help {

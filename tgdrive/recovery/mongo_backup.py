@@ -12,6 +12,7 @@ import re
 import secrets
 import stat
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,6 +22,7 @@ from tgdrive.recovery.recovery_file import write_recovery_snapshot
 from tgdrive.storage.mongo import DatabaseUnavailable
 from tgdrive.storage.mongo_store import MongoStore
 from tgdrive.storage.store import ROOT_ID, SCHEMA_VERSION
+from tgdrive.telegram.client_pool import ClientPoolNotRunning
 from tgdrive.transfers.tasks import _journalled
 
 if TYPE_CHECKING:
@@ -148,6 +150,7 @@ class MongoProtection:
         self._lock = asyncio.Lock()
         self._last_error = None
         self._last_success_at = None
+        self._last_success_trigger = None
         self._latest_backup = None
         self.recovery_required = False
         self.recovery_error = None
@@ -156,23 +159,48 @@ class MongoProtection:
         store = await asyncio.to_thread(MongoStore, self.backend)
         self._latest_backup = None
         self._last_success_at = None
+        self._last_success_trigger = None
         self._last_error = None
         try:
             latest = await asyncio.to_thread(self.history, limit=1)
             if latest:
                 row = latest[0]
-                if (
-                    row.get("status") == "confirmed"
-                    and row.get("format") == "tgdrive-backup-v2"
-                    and not row.get("pin_verified_at")
-                ):
+                if self._needs_historic_pin_check(row):
                     await self._verify_historic_pin(row)
                 self._observe_backup(row)
+                if self._last_success_at is None:
+                    previous = await asyncio.to_thread(
+                        self.backend.db.backups.find_one,
+                        {
+                            "status": "confirmed",
+                            "$or": [
+                                {"format": {"$ne": "tgdrive-backup-v2"}},
+                                {
+                                    "pin_verified_at": {
+                                        "$exists": True,
+                                        "$nin": [None, ""],
+                                    }
+                                },
+                            ],
+                        },
+                        sort=[("confirmed_at", -1)],
+                    )
+                    if previous is not None:
+                        self._observe_backup(previous)
                 if row.get("status") == "unverified":
                     self._last_error = _PIN_UNVERIFIED
         except Exception:
             self._last_error = _HISTORY_UNAVAILABLE
         return store
+
+    @staticmethod
+    def _needs_historic_pin_check(row):
+        return (
+            row is not None
+            and row.get("status") == "confirmed"
+            and row.get("format") == "tgdrive-backup-v2"
+            and not row.get("pin_verified_at")
+        )
 
     async def _verify_historic_pin(self, row):
         """Recheck old publication claims without replacing any channel pin."""
@@ -190,6 +218,9 @@ class MongoProtection:
                         raise BackupError(
                             "The historical backup is not the current pin"
                         )
+        except ClientPoolNotRunning:
+            # Catalog startup opens before Telegram accepts its first leases.
+            return
         except Exception:
             values = {"status": "unverified"}
         else:
@@ -220,12 +251,16 @@ class MongoProtection:
                 self._last_success_at is None or confirmed_at > self._last_success_at
             ):
                 self._last_success_at = confirmed_at
+                self._last_success_trigger = row.get("trigger")
 
     def latest_history(self):
         """Read the latest observed publication without querying MongoDB."""
         if self._latest_backup is None:
             return []
-        return copy.deepcopy([self._latest_backup])
+        row = copy.deepcopy(self._latest_backup)
+        if self._needs_historic_pin_check(row):
+            row["status"] = "unverified"
+        return [row]
 
     def local_archives(self):
         """Iterate retained download candidates without hiding an older local file."""
@@ -289,6 +324,26 @@ class MongoProtection:
                 independent.get("last_success_at") or self._last_success_at
             )
             result["backup_error"] = (independent.get("error") or {}).get("detail")
+        else:
+            latest = self._latest_backup or {}
+            retry_pending = latest.get("status") == "pending"
+            retry_at = latest.get("retry_at") if retry_pending else None
+            next_eligible_at = None
+            if self._last_success_at and not retry_pending:
+                with suppress(TypeError, ValueError, OverflowError, OSError):
+                    next_eligible_at = time.time() + self._scheduled_delay(
+                        self._last_success_at
+                    )
+            result["standalone_backup"] = {
+                "last_trigger": self._last_success_trigger,
+                "next_eligible_at": next_eligible_at,
+                "retry_pending": retry_pending,
+                "retry_after": retry_at
+                if isinstance(retry_at, (int, float))
+                and math.isfinite(retry_at)
+                and retry_at > time.time()
+                else None,
+            }
         if error:
             result["error"] = error
         return result
@@ -303,11 +358,26 @@ class MongoProtection:
         await self.verify_lineage(store)
         if await _worker(lambda: store.storage_channel_id is None):
             await _worker(store.bind_storage_channel, self.settings.storage_channel)
+        if self._needs_historic_pin_check(self._latest_backup):
+            async with self._lock:
+                row = self._latest_backup
+                if row is not None and self._needs_historic_pin_check(row):
+                    await self._verify_historic_pin(row)
+                    self._observe_backup(row)
+                    if row.get("status") == "unverified":
+                        self._last_error = _PIN_UNVERIFIED
         if force:
             return await self.snapshot_now(store)
         return False
 
-    async def snapshot_now(self, store):
+    def _scheduled_delay(self, confirmed_at):
+        interval = self.settings.mongodb_backup_seconds
+        if confirmed_at is None:
+            return interval
+        confirmed = datetime.fromisoformat(confirmed_at).timestamp()
+        return interval - max(0, time.time() - confirmed)
+
+    async def snapshot_now(self, store, *, scheduled=False):
         async with self._lock:
             await self.verify_lineage(store)
             backend = self.backend
@@ -316,6 +386,14 @@ class MongoProtection:
                 {"status": "pending"},
                 sort=[("created_at", 1)],
             )
+            # An explicit backup may have confirmed while the timer or lock was waiting.
+            if (
+                scheduled
+                and pending is None
+                and self._last_success_at is not None
+                and self._scheduled_delay(self._last_success_at) > 0
+            ):
+                return False
             try:
                 previous_files = await asyncio.to_thread(
                     lambda: list(
@@ -383,6 +461,7 @@ class MongoProtection:
                     "_id": identity,
                     "id": identity,
                     "status": "pending",
+                    "trigger": "scheduled" if scheduled else "manual",
                     "created_at": datetime.now(UTC).isoformat(),
                     "revision": revision,
                     "local_path": str(path),
@@ -540,7 +619,11 @@ class MongoProtection:
         self._observe_backup(row)
         await asyncio.to_thread(self._prune_confirmed_files, previous_files, row["id"])
         self._last_error = None
-        logger.info("Drive backup saved and pinned: revision %s", row.get("revision"))
+        logger.info(
+            "Drive backup saved and pinned: revision %s, trigger %s",
+            row.get("revision"),
+            row.get("trigger", "unknown"),
+        )
 
     async def _pin(self, row, message_id):
         """Pin and verify discovery; leave failed publication pending for retry."""
@@ -633,12 +716,7 @@ class MongoProtection:
             if pending:
                 delay = max(1, pending.get("retry_at", 0) - time.time())
             elif latest and latest.get("confirmed_at"):
-                confirmed = datetime.fromisoformat(latest["confirmed_at"]).timestamp()
-                delay = max(
-                    1,
-                    self.settings.mongodb_backup_seconds
-                    - max(0, time.time() - confirmed),
-                )
+                delay = max(1, self._scheduled_delay(latest["confirmed_at"]))
         except Exception:
             delay = 60
         while not self._stop.is_set():
@@ -654,8 +732,8 @@ class MongoProtection:
                 ).get("enabled"):
                     delay = self.settings.mongodb_backup_seconds
                     continue
-                await self.snapshot_now(store)
-                delay = self.settings.mongodb_backup_seconds
+                await self.snapshot_now(store, scheduled=True)
+                delay = max(1, self._scheduled_delay(self._last_success_at))
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -664,11 +742,19 @@ class MongoProtection:
                     if isinstance(error, BackupError)
                     else ("The encrypted Telegram backup will retry automatically.")
                 )
-                logger.warning(
-                    "Drive backup failed (%s); retrying in 60 seconds",
-                    type(error).__name__,
-                )
                 delay = 60
+                latest = self._latest_backup or {}
+                if latest.get("status") == "pending":
+                    deadline = latest.get("retry_at")
+                    if (
+                        type(deadline) is int or type(deadline) is float
+                    ) and math.isfinite(deadline):
+                        delay = max(delay, deadline - time.time())
+                logger.warning(
+                    "Drive backup failed (%s); retrying in %s seconds",
+                    type(error).__name__,
+                    math.ceil(delay),
+                )
 
     async def stop(self, store):
         self._stop.set()

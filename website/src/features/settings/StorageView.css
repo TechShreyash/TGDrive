@@ -1,24 +1,23 @@
 .storage-page {
     max-width: 1024px;
 }
-.storage-protection {
-    padding-top: 4px;
+.storage-overview {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "heading actions" "facts facts";
+    align-items: center;
+    gap: 16px 20px;
+    margin-bottom: 12px;
 }
 .storage-protection-heading {
+    grid-area: heading;
     display: flex;
     align-items: center;
-    gap: 14px;
-    margin-bottom: 18px;
-}
-.storage-protection-heading > div:nth-child(2) {
-    min-width: 0;
-    flex: 1;
+    gap: 12px;
 }
 .storage-protection-heading h2 {
-    margin-bottom: 3px;
-}
-.storage-protection-heading > .secondary-button {
-    margin-inline-start: auto;
+    margin: 0 0 4px;
+    font-size: 17px;
 }
 .storage-protection-icon {
     display: grid;
@@ -26,33 +25,98 @@
     width: 48px;
     height: 48px;
     flex: 0 0 48px;
-    color: var(--action);
+    color: var(--muted);
     background: var(--surface-subtle);
     border-radius: 12px;
 }
-.storage-protection-icon.is-protected {
+.storage-protection-icon[data-state="protected"] {
     color: var(--success);
+    background: var(--success-soft);
 }
-.storage-protection-icon.is-attention {
+.storage-protection-icon[data-state="attention"] {
     color: var(--danger);
+    background: var(--danger-soft);
 }
 .storage-protection .drive-backup-state {
     display: flex;
     align-items: center;
-    gap: 7px;
-    font-size: 13px;
+    gap: 6px;
+    width: fit-content;
+    max-width: 100%;
     margin: 0;
-}
-.storage-protection .backup-confirmation-date {
-    margin: 0 0 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--surface-subtle);
     font-size: 12px;
+    font-weight: 600;
+    line-height: 20px;
+}
+.storage-protection .drive-backup-state.connection-ready {
+    background: var(--success-soft);
+}
+.storage-protection .drive-backup-state.danger-text {
+    background: var(--danger-soft);
+}
+.storage-overview-facts {
+    grid-area: facts;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    border: 1px solid var(--line-subtle);
+    border-radius: 12px;
+    background: var(--surface-subtle);
+}
+.storage-overview-facts:has(
+    .storage-independent-state,
+    .storage-backup-schedule
+) {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+}
+.storage-protection .storage-overview-facts > p {
+    display: grid;
+    align-content: start;
+    gap: 3px;
+    min-width: 0;
+    margin: 0;
+    padding: 12px 14px;
+}
+.storage-overview-facts > p + p {
+    border-inline-start: 1px solid var(--line-subtle);
+}
+.storage-overview-facts span {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+.storage-overview-facts strong {
+    color: var(--ink);
+    font-size: 16px;
+    font-weight: 650;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
 }
 .backup-confirmation-date strong {
-    color: var(--ink);
-    font-weight: 500;
+    font-variant-numeric: tabular-nums;
     user-select: text;
 }
+.storage-independent-state strong[data-state="protected"] {
+    color: var(--success);
+}
+.storage-independent-state strong[data-state="attention"] {
+    color: var(--danger);
+}
+.storage-overview-actions {
+    grid-area: actions;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.storage-overview-actions > button {
+    justify-content: center;
+    min-height: 44px;
+    padding-inline: 12px;
+}
 .storage-protection .backup-safety-note {
+    font-size: 13px;
     margin-bottom: 0;
 }
 .drive-recovery-help {
@@ -78,21 +142,37 @@
     padding-inline: 0;
 }
 @media (max-width: 620px) {
-    .storage-protection-heading {
-        display: grid;
-        grid-template-columns: 48px minmax(0, 1fr);
+    .storage-overview {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: "heading" "facts" "actions";
         gap: 12px;
     }
-    .storage-protection-heading > .secondary-button {
-        grid-column: 2;
-        justify-self: start;
-        margin-inline-start: 0;
+    .storage-overview-facts:has(
+        .storage-independent-state,
+        .storage-backup-schedule
+    ) {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .storage-overview-facts > p + p {
+        border-inline-start: 0;
+        border-block-start: 1px solid var(--line-subtle);
+    }
+    .storage-overview-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .storage-overview-actions > button {
+        gap: 6px;
+        padding-inline: 8px;
+        font-size: 13px;
+        white-space: normal;
     }
 }
 
 .backup-guide-link {
     display: inline-flex;
     align-items: center;
+    gap: 6px;
     min-height: 44px;
     margin-inline-end: 20px;
 }

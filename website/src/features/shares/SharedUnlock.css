@@ -1,0 +1,92 @@
+.shared-unlock {
+    display: grid;
+    align-content: start;
+    justify-items: center;
+    gap: 18px;
+    min-height: 100dvh;
+    padding: clamp(28px, 11dvh, 96px) 16px 24px;
+    background: var(--surface);
+}
+
+.shared-unlock-brand,
+.shared-unlock-panel {
+    width: min(100%, 420px);
+}
+
+.shared-unlock-brand .brand-logo {
+    width: 132px;
+}
+
+.shared-unlock-panel {
+    padding: clamp(16px, 5vw, 24px);
+    background: var(--surface-raised);
+    border-color: var(--line-subtle);
+}
+
+.shared-unlock-intro {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.shared-unlock-icon {
+    display: grid;
+    place-items: center;
+    height: 40px;
+    border-radius: 10px;
+    background: var(--action-soft);
+    color: var(--on-action-soft);
+}
+
+.shared-unlock-intro h1 {
+    margin-bottom: 4px;
+    font-family: var(--font-display);
+    font-size: clamp(20px, 4vw, 25px);
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+
+.shared-unlock-panel .mantine-PasswordInput-input {
+    min-height: 46px;
+    background: var(--surface);
+    border-color: var(--input-line);
+}
+
+.shared-unlock-panel .mantine-PasswordInput-input:focus-within {
+    border-color: var(--action);
+    outline: 2px solid var(--action);
+    outline-offset: 2px;
+}
+
+.shared-unlock-panel .mantine-PasswordInput-visibilityToggle {
+    width: 100%;
+    height: 100%;
+}
+
+.shared-unlock-panel .primary-button {
+    min-height: 46px;
+}
+
+.shared-unlock-framed {
+    height: 100dvh;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 8px;
+}
+
+.shared-unlock-framed .shared-unlock-panel {
+    padding: 12px;
+}
+
+.shared-unlock-framed .shared-unlock-intro {
+    margin-bottom: 12px;
+}
+
+.shared-unlock-outside {
+    align-self: start;
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    font-size: var(--mantine-font-size-sm);
+}

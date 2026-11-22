@@ -131,6 +131,7 @@ do not make a configuration file safe to publish.
 | `STRING_SESSIONS` | Empty by default, secret | Comma-separated Telethon StringSession credentials for optional Premium users; duplicates are rejected. Sessions must already be authorized and identify Premium user accounts. |
 | `PUBLIC_URL` | Omitted/empty by default | Optional HTTP(S) website origin for the bot's `/set_folder` link and **Open in TGDrive** button. Otherwise the website address is remembered when saving its bot upload folder. |
 | `TELEGRAM_ADMIN_IDS` | Required with MAIN_BOT_TOKEN | Comma-separated positive numeric Telegram user IDs allowed to use the bot in private chat; usernames are not accepted. [Find your ID](setup.md#find-your-telegram-user-id). |
+| `BOT_INTAKE_CHANNEL` | Optional; disabled when blank | Separate private channel for pooled encrypted-bot receipt. All participating bots need access; the main bot needs post/delete permissions. Temporary originals are plaintext, including in the private local media cache. Never use the storage or backup channel. Deployment-only; not restored from backups. [Setup and cleanup](usage.md#pool-bot-downloads-through-a-private-intake-channel). |
 
 After initialization, saved **Connections** are authoritative for storage
 accounts. Changing MAIN_BOT_TOKEN does not replace their saved credentials; it
@@ -455,7 +456,7 @@ owns the version compatibility baseline.
 Configure the environment, deploy and sign in. First initialization is automatic;
 TGDrive has no maintenance CLI or terminal setup wizard. Use **Connections** for
 Telegram login and repairs, **Transfers** for retries and cancellations, and
-**Storage and Backups** for protection and archive/channel recovery. Deployment
+**Backups** for protection and archive/channel recovery. Deployment
 credentials and service restarts remain in Docker Compose or Coolify; failures
 that prevent startup are explained in container logs. See
 [recovery](backup-recovery.md) and [password reset](operations.md#forgotten-login-password).
@@ -543,7 +544,7 @@ not scan for malware. See
 | Uploaded parts, posters | AES-256-CTR with `ENCRYPTION_KEY` and a random 128-bit nonce per document, saved in the catalog part record. Sizes are unchanged, so range reads and seeking work. |
 | Telegram metadata | Random `<hex>.bin` name, `application/octet-stream`, no caption and no Telegram thumbnail. Previews come from TGDrive's local cover cache. |
 | Bot mode, encryption on (default) | The server downloads the forwarded file to `CACHE_DIR/bot-imports`, then uploads it encrypted through the normal upload queue. Slower; uses server bandwidth and disk. |
-| Bot mode, encryption off | Telegram copies the message without server download/re-upload; that file remains plaintext. Set in **Configuration → Transfer limits → Bot uploads**. |
+| Bot mode, encryption off | Telegram copies the message without server download/re-upload; that file remains plaintext. Set in **Settings → Transfer limits → Bot uploads**. |
 | Unencrypted parts | Legacy files uploaded by 2.2 and bot-mode copies made with encryption off have no nonce and are read as plain bytes. Upgrading does not re-encrypt them. |
 | Key check | MongoDB `settings._id = "encryption"` holds an HMAC fingerprint, never the key. New drives and the schema-4 upgrader write it; a different key or a missing record after upgrade stops startup. |
 | Integrity | Complete-part reads verify a stored plaintext SHA-256 when available; partial reads check document identity/size but have no authenticated block tag. AES-CTR does not authenticate ranges. |

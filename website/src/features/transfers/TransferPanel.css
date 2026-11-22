@@ -6,12 +6,53 @@
 
 .transfer-center .transfer-batch-percent {
     min-inline-size: 3ch;
+    color: var(--ink);
+    font-weight: 650;
     text-align: end;
+}
+
+.main-content > .transfer-center:not(.transfer-page) {
+    position: static;
+    z-index: auto;
+    flex: 0 0 auto;
+    align-self: flex-end;
+    width: min(460px, 100%);
+    max-width: 100%;
+    margin-block-start: 10px;
+    border: 1px solid var(--line-subtle);
+    box-shadow: none;
+}
+
+.main-content > .transfer-center:not(.transfer-page) .transfer-list {
+    max-height: min(36dvh, 320px);
+}
+
+.transfer-center .transfer-item-name,
+.transfer-center .transfer-batch-name {
+    font-weight: 600;
+    line-height: 1.45;
+}
+
+.transfer-center .transfer-phase,
+.transfer-center .transfer-batch-status {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.transfer-center .transfer-copy > progress,
+.transfer-center .transfer-batch-summary > progress {
+    height: 5px;
 }
 
 .transfer-center .transfer-speed,
 .transfer-center .transfer-eta {
     white-space: nowrap;
+}
+
+.transfer-center .transfer-speed {
+    color: var(--ink);
+    font-weight: 600;
 }
 
 .transfer-center .transfer-timing-state {
@@ -40,6 +81,12 @@
     font-size: 12px;
     line-height: 1.5;
     overflow-wrap: anywhere;
+}
+
+.transfer-intake-review {
+    grid-column: 1 / -1;
+    justify-self: start;
+    align-self: flex-start;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -249,4 +296,27 @@
 .torrent-picker-submit {
     display: flex;
     justify-content: flex-end;
+}
+.transfer-page .transfer-category-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.transfer-category-heading .text-button {
+    min-height: 44px;
+    font-size: 12px;
+}
+
+@container (max-width: 599px) {
+    .transfer-page :is(.transfer-item-name, .transfer-batch-name) {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .transfer-page .transfer-item-actions .icon-button,
+    .transfer-page :is(.transfer-batch-locate, .transfer-batch-cancel) {
+        min-width: 44px;
+        min-height: 44px;
+    }
 }

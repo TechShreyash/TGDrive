@@ -58,8 +58,43 @@ export function moviPlayerBuild() {
                 throw new Error(
                     "The installed Movi slim source differs from the reviewed package. Run npm ci; review any viewer upgrade before building.",
                 );
+            const patched = patchDurationRescan(patchMoviSource(code, VERSION));
+            // A sparse picture can be decoded ahead of the playback clock.
+            const audioSchedule =
+                "this.audioRenderer.getMaxScheduledMediaTime() < I3 - 0.1";
+            if (patched.split(audioSchedule).length !== 2)
+                throw new Error("The reviewed Movi audio sync anchor changed.");
+            // Low-frame-rate tracks hold each picture for a full frame interval.
+            const videoLag = /\bMoviPlayer\.VIDEO_LAG_S\b/g;
+            if (patched.match(videoLag)?.length !== 2)
+                throw new Error(
+                    "The reviewed Movi picture sync anchors changed.",
+                );
+            const resumeTrim =
+                "this.videoRenderer.dropStaleFrames(this.clock.getTime(), 0.2)";
+            if (patched.split(resumeTrim).length !== 2)
+                throw new Error(
+                    "The reviewed Movi refill trim anchor changed.",
+                );
             return {
-                code: patchDurationRescan(patchMoviSource(code, VERSION)),
+                code: patched
+                    .replace(
+                        resumeTrim,
+                        // A bound refill can reanchor audio behind the paused wall
+                        // clock. Keep the next pictures after the last painted one.
+                        "this.videoRenderer.dropStaleFrames(" +
+                            "this._resumeToPlayPending && this.getBindAV() && this.videoRenderer.getLastPresentedTime() >= 0 " +
+                            "? Math.min(this.clock.getTime(), this.videoRenderer.getLastPresentedTime() + 0.2) " +
+                            ": this.clock.getTime(), 0.2)",
+                    )
+                    .replace(
+                        audioSchedule,
+                        "this.audioRenderer.getMaxScheduledMediaTime() < Math.min(I3, this.clock.getTime()) - 0.1",
+                    )
+                    .replaceAll(
+                        videoLag,
+                        "Math.max(MoviPlayer.VIDEO_LAG_S, 1 / (this.trackManager.getActiveVideoTrack()?.frameRate || this.mediaInfo?.videoFrameRate || 24))",
+                    ),
                 map: null,
             };
         },

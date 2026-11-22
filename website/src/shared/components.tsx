@@ -237,9 +237,10 @@ export function Modal({
         </dialog>
     );
 }
-export function ErrorNotice({ message }: { message: string }) {
+export function ErrorNotice({ id, message }: { id?: string; message: string }) {
     return message ? (
         <Alert
+            id={id}
             className="error-notice"
             color="red"
             variant="light"
@@ -317,6 +318,10 @@ export function ToastNotice({
             role={toast.error ? "alert" : "status"}
             aria-live={toast.error ? "assertive" : "polite"}
             onMouseEnter={() => setHovered(true)}
+            onMouseMove={() => {
+                // A popover opened under the pointer can receive mousemove first.
+                if (!hovered) setHovered(true);
+            }}
             onMouseLeave={() => setHovered(false)}
             onFocusCapture={() => setFocused(true)}
             onBlurCapture={(event) => {

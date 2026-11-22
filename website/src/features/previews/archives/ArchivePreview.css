@@ -1,0 +1,100 @@
+.archive-preview {
+    width: min(100%, 1100px);
+    margin: 0 auto;
+    padding: 20px;
+    overflow: auto;
+    color: var(--ink);
+    background: var(--surface);
+}
+.archive-breadcrumbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    overflow-wrap: anywhere;
+}
+.archive-breadcrumbs button {
+    color: var(--action);
+    background: none;
+    border: 0;
+    padding: 4px;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+.archive-breadcrumbs button:disabled {
+    color: var(--ink);
+}
+.archive-preview h3 {
+    margin: 16px 0 8px;
+    overflow-wrap: anywhere;
+}
+.archive-preview table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+.archive-preview th,
+.archive-preview td {
+    text-align: left;
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--line);
+}
+.archive-preview th:last-child,
+.archive-preview td:last-child {
+    width: 100px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.archive-folder,
+.archive-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.archive-folder {
+    background: none;
+    border: 0;
+    color: var(--action);
+    padding: 8px 0;
+    width: 100%;
+    text-align: left;
+}
+.archive-folder svg,
+.archive-file > svg {
+    flex-shrink: 0;
+}
+.archive-file {
+    flex-wrap: wrap;
+}
+.archive-encrypted {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.85em;
+    color: var(--muted);
+}
+.archive-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+}
+@media (max-width: 600px) {
+    .archive-preview {
+        padding: 12px;
+    }
+    .archive-breadcrumbs button,
+    .archive-folder {
+        min-height: 44px;
+    }
+    .archive-preview th:last-child,
+    .archive-preview td:last-child {
+        width: 78px;
+    }
+}
+.preview-surface-archive {
+    background: var(--surface);
+    align-items: stretch;
+}

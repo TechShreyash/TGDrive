@@ -6,7 +6,8 @@ import {
     useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { LoaderCircle, Play, RefreshCw } from "lucide-react";
+import { Copy, LoaderCircle, Play, RefreshCw } from "lucide-react";
+import { Textarea } from "@mantine/core";
 import type { MoviElement } from "movi-player/element/slim";
 import wasmUrl from "movi-player/movi.wasm?url";
 import MovTextRenderer, { isMovTextCodec } from "./MovTextRenderer";
@@ -16,12 +17,18 @@ import {
     clearVideoQualityControl,
     installVideoPresentation,
     setVideoQualityControl,
+    videoFramePeriod,
     type VideoQualityControl,
 } from "./videoPlayerPresentation";
 import { installVideoPlayerPip } from "./videoPlayerPip";
 import { attachVideoGestures } from "./videoPlayerGestures";
 import { attachVideoPreviews } from "./videoPlayerPreviews";
 import { formatBytes } from "../../../shared/types";
+import { Modal } from "../../../shared/components";
+import {
+    playbackDiagnostics,
+    type BufferingTransition,
+} from "./playbackDiagnostics";
 import { videoSourceMemoryBudgetMiB } from "./videoBufferMemory";
 import { guardVideoPosterSeek, loadVideoPoster } from "./videoPoster";
 import {
@@ -35,6 +42,102 @@ import {
 } from "./videoWatchProgress";
 import "./AdvancedVideo.css";
 import advancedStyles from "./AdvancedVideo.css?inline";
+
+export function compatibilityManifestUrl(
+    src: string,
+    origin: string,
+): string | null {
+    const source = new URL(src, origin);
+    const path = source.searchParams.get("path");
+    if (source.origin !== origin || source.pathname !== "/file" || !path)
+        return null;
+    const params = new URLSearchParams({ path });
+    const auth = source.searchParams.get("auth");
+    if (auth !== null) params.set("auth", auth);
+    return "/api/v1/playback/compatibility.m3u8?" + params.toString();
+}
+
+/** Pinned Movi creates stream engines during load; ready is too late to bound fetches. */
+export function limitCompatibilityBuffers(element: unknown): void {
+    function assignment(
+        target: Record<string, unknown>,
+        key: string,
+        apply: (value: Record<string, unknown>) => void,
+    ) {
+        let value = target[key];
+        const update = () => {
+            if (value && typeof value === "object")
+                apply(value as Record<string, unknown>);
+        };
+        Object.defineProperty(target, key, {
+            configurable: true,
+            enumerable: true,
+            get: () => value,
+            set(next) {
+                value = next;
+                update();
+            },
+        });
+        update();
+    }
+    assignment(element as Record<string, unknown>, "player", (core) => {
+        assignment(core, "streamWrapper", (wrapper) => {
+            const video = wrapper.videoElement as HTMLVideoElement | undefined;
+            const render = wrapper.renderFrame as (() => void) | undefined;
+            const destroy = wrapper.destroy as (() => unknown) | undefined;
+            if (video && render && destroy) {
+                const controller = new AbortController();
+                const paintPaused = () => {
+                    if (video.paused && video.readyState >= 2)
+                        render.call(wrapper);
+                };
+                video.addEventListener("loadeddata", paintPaused, {
+                    signal: controller.signal,
+                });
+                video.addEventListener("seeked", paintPaused, {
+                    signal: controller.signal,
+                });
+                wrapper.destroy = function () {
+                    controller.abort();
+                    return destroy.call(this);
+                };
+            }
+            assignment(wrapper, "player", (engine) => {
+                const player = engine as unknown as {
+                    configure(value: unknown): boolean;
+                };
+                if (
+                    !player.configure({
+                        streaming: {
+                            bufferingGoal: 6,
+                            rebufferingGoal: 1,
+                            bufferBehind: 6,
+                            segmentPrefetchLimit: 0,
+                            preferNativeHls: false,
+                        },
+                    })
+                )
+                    throw new Error(
+                        "Bounded compatible playback is unavailable.",
+                    );
+            });
+            assignment(wrapper, "hls", (engine) => {
+                Object.assign(engine.config as object, {
+                    maxBufferLength: 6,
+                    maxMaxBufferLength: 6,
+                    backBufferLength: 6,
+                    maxBufferSize: 8 * 1024 ** 2,
+                });
+            });
+            if (typeof wrapper.loadNative === "function")
+                wrapper.loadNative = async () => {
+                    throw new Error(
+                        "Bounded compatible playback requires Media Source support.",
+                    );
+                };
+        });
+    });
+}
 
 let stylesInstalled = false;
 /** Compatibility adapter for pinned 0.4.1: retain strict style CSP and local fonts. */
@@ -165,6 +268,7 @@ export function videoIsAdvancing(
     current: number,
     paused: boolean,
     seeking: boolean,
+    maxStep = 2,
 ): boolean {
     return (
         !paused &&
@@ -172,7 +276,7 @@ export function videoIsAdvancing(
         Number.isFinite(previous) &&
         Number.isFinite(current) &&
         current - previous > 0 &&
-        current - previous < 2
+        current - previous < maxStep
     );
 }
 /** Pinned Movi 0.4.1 adapter: a frozen picture must also hold sound and the clock. */
@@ -354,12 +458,22 @@ export default function AdvancedVideo({
     playback: { current: { time: number; playing: boolean } | null };
     qualityControl?: VideoQualityControl;
 }) {
+    const [compatibleSource, setCompatibleSource] = useState<string | null>(
+        null,
+    );
+    const compatible = compatibleSource === src;
+    const compatibleStart = useRef<{ src: string; time: number } | null>(null);
+    const compatibilityUrl = compatibilityManifestUrl(
+        src,
+        window.location.origin,
+    );
     const host = useRef<HTMLDivElement>(null);
     const activePlayer = useRef<MoviElement | null>(null);
     const restorePlayerFocus = useRef(false);
     const qualityControlRef = useRef(qualityControl);
     qualityControlRef.current = qualityControl;
     const currentQualityControl = (): VideoQualityControl | undefined => {
+        if (compatible) return;
         const control = qualityControlRef.current;
         if (!control) return;
         return {
@@ -389,11 +503,51 @@ export default function AdvancedVideo({
                 activePlayer.current,
                 currentQualityControl(),
             );
-    }, [qualityControl]);
+    }, [qualityControl, compatible]);
     const [state, dispatch] = useReducer(
         videoLoadTransition,
         initialVideoLoadState,
     );
+    const [diagnosticsText, setDiagnosticsText] = useState("");
+    const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
+    const bufferingTransition = useRef<BufferingTransition | null>(null);
+    const lastDiagnosticFrame = useRef<number | undefined>(undefined);
+    useEffect(() => {
+        if (
+            state.phase === "buffering" ||
+            bufferingTransition.current?.state === "entered"
+        ) {
+            bufferingTransition.current = {
+                state: state.phase === "buffering" ? "entered" : "left",
+                at: performance.now(),
+                position: activePlayer.current?.currentTime,
+            };
+        }
+    }, [state.phase]);
+    useEffect(() => {
+        if (!diagnosticsCopied) return;
+        const timer = window.setTimeout(
+            () => setDiagnosticsCopied(false),
+            3000,
+        );
+        return () => window.clearTimeout(timer);
+    }, [diagnosticsCopied]);
+    const copyDiagnostics = async () => {
+        const player = activePlayer.current;
+        const report = playbackDiagnostics({
+            player,
+            compatible,
+            buffer: player ? videoBufferSnapshot(player) : undefined,
+            lastFrame: lastDiagnosticFrame.current,
+            buffering: bufferingTransition.current,
+        });
+        try {
+            await navigator.clipboard.writeText(report);
+            setDiagnosticsCopied(true);
+        } catch {
+            setDiagnosticsText(report);
+        }
+    };
     const [attempt, setAttempt] = useState(0);
     const [slow, setSlow] = useState(false);
     const [waitSeconds, setWaitSeconds] = useState(0);
@@ -416,9 +570,6 @@ export default function AdvancedVideo({
     const scopeNeedsChoice = useRef(false);
     const previousProgressMode = useRef(progressMode);
     const resumeAppliedPlayer = useRef<MoviElement | null>(null);
-    const resumedPosition = useRef<number | null>(null);
-    const [resumedTime, setResumedTime] = useState<number | null>(null);
-    const [resumeNoticeFocused, setResumeNoticeFocused] = useState(false);
     const seekSavedPosition = useRef<
         ((time: number, play: boolean) => Promise<boolean>) | null
     >(null);
@@ -438,43 +589,21 @@ export default function AdvancedVideo({
     >(null);
     const newProgressWriter = () =>
         createVideoProgressWriter(fileId, setProgressNotice);
-    const showResumedNotice = () => {
-        if (resumedPosition.current === null || decision.current !== "ready")
-            return;
-        setResumedTime(resumedPosition.current);
-        resumedPosition.current = null;
-    };
-    const acceptCurrentProgress = (manual = false, time?: number) => {
-        if (manual) manualPosition.current = true;
-        if (manual) knownPosition.current = null;
+    const acceptCurrentProgress = (manual = false) => {
+        if (manual) {
+            manualPosition.current = true;
+            knownPosition.current = null;
+        }
         scopeNeedsChoice.current = false;
         decide("ready");
         setContinueTime(null);
         setProgressNotice("");
-        if (
-            progressAccess.current === "server" &&
-            (playbackHasStarted.current || time !== undefined)
-        ) {
+        if (progressAccess.current === "server" && playbackHasStarted.current) {
             if (progressWriter.current?.closed)
                 progressWriter.current = newProgressWriter();
             progressWriter.current?.start();
-            if (time !== undefined && activePlayer.current)
-                progressWriter.current?.save(
-                    time,
-                    activePlayer.current.duration,
-                );
         }
-        if (time === undefined) flushProgress.current?.();
-        else if (
-            progressAccess.current === "share" ||
-            progressAccess.current === "demo"
-        )
-            saveVideoPosition(
-                fileId,
-                time,
-                progressAccess.current,
-                activePlayer.current?.duration,
-            );
+        flushProgress.current?.();
     };
     const finalizeProgress = () => {
         const writer = progressWriter.current;
@@ -492,8 +621,6 @@ export default function AdvancedVideo({
         previousProgressMode.current = progressMode;
         knownPosition.current = null;
         resumeAppliedPlayer.current = null;
-        resumedPosition.current = null;
-        setResumedTime(null);
     }, [fileId]);
     useEffect(() => {
         const controller = new AbortController();
@@ -578,11 +705,6 @@ export default function AdvancedVideo({
         };
     }, [fileId, progressMode, progressAttempt]);
     useEffect(() => {
-        if (resumedTime === null || resumeNoticeFocused) return;
-        const timer = setTimeout(() => setResumedTime(null), 10000);
-        return () => clearTimeout(timer);
-    }, [resumedTime, resumeNoticeFocused]);
-    useEffect(() => {
         const player = activePlayer.current;
         const saved =
             continueTime ??
@@ -613,7 +735,6 @@ export default function AdvancedVideo({
                     manualPosition.current
                 )
                     return;
-                resumedPosition.current = target;
                 acceptCurrentProgress();
             });
         }
@@ -718,6 +839,8 @@ export default function AdvancedVideo({
         let previousTime = Number.NaN;
         let latestProgressAt = 0;
         let hasPresentedFrame = false;
+        const expectedFrameMs = () =>
+            (1000 * videoFramePeriod(player)) / (player?.playbackRate || 1);
         let detachPresentation: (() => void) | undefined;
         let detachPip: (() => void) | undefined;
         let detachGestures: (() => void) | undefined;
@@ -764,6 +887,9 @@ export default function AdvancedVideo({
         let pendingSeek = false;
         let pendingWait: "waiting" | "seeking" = "waiting";
         const listeners: [string, EventListener][] = [];
+        bufferingTransition.current = null;
+        lastDiagnosticFrame.current = undefined;
+        setDiagnosticsCopied(false);
         dispatch("reset");
         setPlaybackError("");
         setTransfer(null);
@@ -847,8 +973,6 @@ export default function AdvancedVideo({
             )
                 acceptCurrentProgress(true);
             if (!played) {
-                resumedPosition.current = null;
-                setResumedTime(null);
                 acceptCurrentProgress(true);
             }
             if (
@@ -954,7 +1078,6 @@ export default function AdvancedVideo({
             });
             if (!applied || cancelled || activePlayer.current !== target)
                 return false;
-            resumedPosition.current = time > 0 ? time : null;
             if (time === 0) lastSavedAt = performance.now();
             if (play) await target.play().catch(() => {});
             return true;
@@ -1080,12 +1203,16 @@ export default function AdvancedVideo({
                 event !== "playing" &&
                 (engineState === "buffering" || engineState === "seeking")
             ) {
-                waiting(engineState === "seeking" ? "seeking" : "waiting");
+                waiting("waiting");
                 return;
             }
-            if (event === "playing" && expectsPicture() && !hasPresentedFrame) {
-                // The engine starts its clock before the first decoded picture arrives.
-                // Preserve loading feedback until successive real frames are presented.
+            if (
+                player &&
+                !player.paused &&
+                expectsPicture() &&
+                !hasPresentedFrame
+            ) {
+                // Movi reports an internal paused state while refilling before it presents frames.
                 waiting("waiting");
                 return;
             }
@@ -1123,18 +1250,17 @@ export default function AdvancedVideo({
             waitingTimer = window.setTimeout(() => {
                 waitingTimer = undefined;
                 if (cancelled || failed || !player) return;
-                if (
-                    pendingWait === "waiting" &&
-                    (player.paused ||
-                        performance.now() - latestProgressAt < 500)
-                )
-                    return;
-                if (
-                    pendingWait === "waiting" &&
-                    latestProgressAt > 0 &&
-                    performance.now() - latestProgressAt > 1250
-                )
-                    holdVideoForBuffering(player.player, performance.now());
+                if (pendingWait === "waiting") {
+                    const now = performance.now();
+                    if (
+                        player.paused ||
+                        now - latestProgressAt <
+                            Math.max(500, expectedFrameMs())
+                    )
+                        return;
+                    // Show the wait only after asking the engine to hold sound and position.
+                    holdVideoForBuffering(player.player, now);
+                }
                 hasPresentedFrame = false;
                 dispatch(pendingWait);
             }, 700);
@@ -1159,14 +1285,18 @@ export default function AdvancedVideo({
                 installLocalStyles(MoviElement);
                 installVideoPresentation(MoviElement);
                 player = document.createElement("movi-player");
+                if (compatible) limitCompatibilityBuffers(player);
                 activePlayer.current = player;
                 setVideoQualityControl(player, currentQualityControl());
-                detachPresentation = attachVideoPresentation(player);
+                detachPresentation = attachVideoPresentation(
+                    player,
+                    () => void copyDiagnostics(),
+                );
                 detachPip = installVideoPlayerPip(player);
                 detachGestures = attachVideoGestures(player);
                 detachPreviews = attachVideoPreviews(player);
                 player.setAttribute("wasmurl", wasmUrl);
-                player.setAttribute("engine", "wasm");
+                player.setAttribute("engine", compatible ? "auto" : "wasm");
                 player.setAttribute("sw", "auto");
                 // This ceiling is separate from decoded pictures. The source allocates
                 // gradually toward its bitrate-aware time goal, rather than reserving
@@ -1189,12 +1319,22 @@ export default function AdvancedVideo({
                 player.setAttribute("themecolor", "#647dff");
                 player.setAttribute("fastseek", "keys gestures");
                 // Keyframes reuse the player's caches without precise frame walks.
-                player.setAttribute("thumb", "");
+                if (!compatible) player.setAttribute("thumb", "");
                 player.setAttribute("controlslist", "notimeline nospinner");
+                player.setAttribute("role", "group");
                 player.setAttribute(
                     "aria-label",
                     "Enhanced video player for " + name,
                 );
+                // The outgoing player records its own state during cleanup.
+                // Apply the explicit play action once the replacement is created.
+                if (compatible && compatibleStart.current?.src === src) {
+                    playback.current = {
+                        time: compatibleStart.current.time,
+                        playing: true,
+                    };
+                    compatibleStart.current = null;
+                }
                 const saved = playback.current;
                 if (saved) {
                     resume = {
@@ -1275,8 +1415,6 @@ export default function AdvancedVideo({
                         cancelProgressSeek?.();
                         manualPosition.current = true;
                         knownPosition.current = null;
-                        resumedPosition.current = null;
-                        setResumedTime(null);
                         player?.setAttribute("startat", String(target));
                         if (resume && !resume.positionApplied) {
                             resume.positionApplied = true;
@@ -1338,7 +1476,6 @@ export default function AdvancedVideo({
                             latestProgressAt = performance.now();
                             clearWaiting();
                             dispatch("playing");
-                            showResumedNotice();
                         }
                         previousTime = player.currentTime;
                     }
@@ -1349,14 +1486,18 @@ export default function AdvancedVideo({
                         !player.seeking &&
                         player.currentTime < player.duration - 0.1 &&
                         latestProgressAt > 0 &&
-                        performance.now() - latestProgressAt > 1250
+                        performance.now() - latestProgressAt >
+                            Math.max(1250, expectedFrameMs())
                     )
                         waiting("waiting");
                 };
                 listen("timeupdate", observeProgress);
                 listen("progress", observeProgress);
                 listen("durationchange", updateStartPosition);
-                listen("pause", () => settle("pause"));
+                listen("pause", () => {
+                    // Movi may announce its internal refill pause while play is requested.
+                    if (player?.paused) settle("pause");
+                });
                 listen("ended", () => settle("ended"));
                 listen("statechange", (event) => {
                     const phase = (event as CustomEvent<string>).detail;
@@ -1365,10 +1506,17 @@ export default function AdvancedVideo({
                         (phase === "paused" && player!.duration > 0)
                     )
                         ready("ready");
-                    else if (phase === "playing") ready("playing");
-                    else if (phase === "buffering") waiting("waiting");
-                    else if (phase === "seeking") waiting("seeking");
-                    else if (phase === "paused") settle("pause");
+                    else if (phase === "playing") {
+                        if (!hasPresentedFrame) {
+                            // Give the restarted renderer a fresh frame deadline.
+                            clearWaiting();
+                            latestProgressAt = performance.now();
+                        }
+                        ready("playing");
+                    } else if (phase === "buffering" || phase === "seeking") {
+                        // An internal startup seek may explicitly suppress the seek event.
+                        waiting("waiting");
+                    } else if (phase === "paused") settle("pause");
                 });
                 listen("error", fail);
                 listen("errordisplay", fail);
@@ -1403,8 +1551,6 @@ export default function AdvancedVideo({
                     if (!timeline && !key) return;
                     userSeek = true;
                     manualPosition.current = true;
-                    resumedPosition.current = null;
-                    setResumedTime(null);
                     cancelProgressSeek?.();
                 };
                 player.addEventListener("pointerdown", seekIntent, {
@@ -1422,12 +1568,25 @@ export default function AdvancedVideo({
                     restorePlayerFocus.current = false;
                     player.focus({ preventScroll: true });
                 }
-                player.src = new URL(src, window.location.origin).href;
+                player.src = new URL(
+                    compatible ? compatibilityUrl! : src,
+                    window.location.origin,
+                ).href;
                 const presentedFrame = (_now: number, metadata: unknown) => {
                     if (!player || cancelled) return;
                     const mediaTime = (
                         metadata as { mediaTime?: number } | null
                     )?.mediaTime;
+                    if (mediaTime != null && Number.isFinite(mediaTime))
+                        lastDiagnosticFrame.current = mediaTime;
+                    // The first presented frame starts the next deadline, even after a seek.
+                    if (
+                        !Number.isFinite(previousTime) &&
+                        Number.isFinite(mediaTime) &&
+                        !player.paused &&
+                        !player.seeking
+                    )
+                        latestProgressAt = performance.now();
                     // A clock jump or prefetched source range is not proof of moving pictures.
                     // Reset at every seek and require successive presented frames instead.
                     if (
@@ -1437,6 +1596,7 @@ export default function AdvancedVideo({
                             mediaTime ?? Number.NaN,
                             player.paused,
                             player.seeking,
+                            Math.max(2, videoFramePeriod(player) * 1.5),
                         )
                     ) {
                         recover();
@@ -1445,7 +1605,6 @@ export default function AdvancedVideo({
                         latestProgressAt = performance.now();
                         clearWaiting();
                         dispatch("playing");
-                        showResumedNotice();
                     }
                     previousTime = mediaTime ?? Number.NaN;
                     frameCallback =
@@ -1523,7 +1682,7 @@ export default function AdvancedVideo({
             }
             if (posterSource) URL.revokeObjectURL(posterSource);
         };
-    }, [fileId, src, posterUrl, name, playback, attempt]);
+    }, [fileId, src, posterUrl, name, playback, attempt, compatible]);
     useLayoutEffect(
         () => () => {
             // Capture before custom-element disconnection resets its clock to zero.
@@ -1563,6 +1722,14 @@ export default function AdvancedVideo({
                             <>
                                 <h3>Can’t play this video</h3>
                                 <p>{playbackError}</p>
+                                {compatibilityUrl && !compatible && (
+                                    <p>
+                                        Compatible playback uses server CPU and
+                                        network for up to 720p video and the
+                                        first audio track. The original file
+                                        stays unchanged.
+                                    </p>
+                                )}
                             </>
                         ) : (
                             <div className="advanced-wait-label">
@@ -1603,12 +1770,41 @@ export default function AdvancedVideo({
                     )}
                     {(slow || playbackError) && (
                         <div className="advanced-state-actions">
+                            {playbackError &&
+                                !compatible &&
+                                compatibilityUrl && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            compatibleStart.current = {
+                                                src,
+                                                time:
+                                                    (hasStartedWatching.current
+                                                        ? activePlayer.current
+                                                              ?.currentTime
+                                                        : knownPosition.current) ??
+                                                    0,
+                                            };
+                                            setCompatibleSource(src);
+                                        }}
+                                    >
+                                        <Play size={16} aria-hidden="true" />{" "}
+                                        Play compatible version
+                                    </button>
+                                )}
                             <button
                                 type="button"
                                 onClick={() => setAttempt((value) => value + 1)}
                             >
                                 <RefreshCw size={16} aria-hidden="true" /> Try
                                 again
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void copyDiagnostics()}
+                            >
+                                <Copy size={16} aria-hidden="true" /> Copy
+                                playback diagnostics
                             </button>
                         </div>
                     )}
@@ -1671,53 +1867,16 @@ export default function AdvancedVideo({
                 </button>
             </div>
         ) : null;
-    const resumedNotice =
-        resumedTime !== null && !playbackError ? (
-            <div
-                className="advanced-state-actions advanced-continue advanced-resumed"
-                role="status"
-                onFocusCapture={() => setResumeNoticeFocused(true)}
-                onBlurCapture={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget))
-                        setResumeNoticeFocused(false);
-                }}
-            >
-                <span>Resumed at {formatVideoTime(resumedTime)}</span>
-                <button
-                    type="button"
-                    onClick={() => {
-                        const player = activePlayer.current;
-                        if (!player) return;
-                        player.focus({ preventScroll: true });
-                        const playing = !player.paused;
-                        manualPosition.current = true;
-                        decide("pending");
-                        setResumedTime(null);
-                        const generation = progressGeneration.current;
-                        void seekSavedPosition
-                            .current?.(0, false)
-                            .then((applied) => {
-                                if (
-                                    !applied ||
-                                    progressGeneration.current !== generation ||
-                                    activePlayer.current !== player
-                                )
-                                    return;
-                                acceptCurrentProgress(true, 0);
-                                if (playing) void player.play().catch(() => {});
-                            });
-                    }}
-                >
-                    Start over
-                </button>
-            </div>
-        ) : null;
     const overlays = (
         <>
             {loadingStatus}
             {continueButton}
-            {resumedNotice}
-            {progressNotice && (
+            {diagnosticsCopied && (
+                <p className="advanced-progress-notice" role="status">
+                    Playback diagnostics copied.
+                </p>
+            )}
+            {!diagnosticsCopied && progressNotice && (
                 <p className="advanced-progress-notice" role="status">
                     {progressNotice}
                     {progressDecision === "failed" &&
@@ -1748,6 +1907,23 @@ export default function AdvancedVideo({
                 aria-busy={state.phase !== "ready" && !playbackError}
             />
             {statusSurface ? createPortal(overlays, statusSurface) : overlays}
+            {diagnosticsText && (
+                <Modal
+                    title="Playback diagnostics"
+                    description="Clipboard access is unavailable. Select and copy the report below."
+                    onClose={() => setDiagnosticsText("")}
+                >
+                    <Textarea
+                        aria-label="Playback diagnostics"
+                        readOnly
+                        autosize
+                        minRows={6}
+                        maxRows={12}
+                        value={diagnosticsText}
+                        onFocus={(event) => event.currentTarget.select()}
+                    />
+                </Modal>
+            )}
         </div>
     );
 }

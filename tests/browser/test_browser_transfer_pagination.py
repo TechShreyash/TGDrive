@@ -55,6 +55,8 @@ def test_finished_history_cursor_pages_keep_live_sections_and_reset_filters(
         *[job(f"older-error-{at}", "error", at) for at in range(78, 60, -1)],
         job("oldest-failure", "error", 60),
     ]
+    long_name = "multitrack-without-breaks" + "longfilenamesection" * 5 + ".mkv"
+    records[23]["name"] = long_name
     page.route(
         "**/api/v1/jobs",
         lambda route: route.fulfill(json={"jobs": active + records[:2]}),
@@ -106,6 +108,14 @@ def test_finished_history_cursor_pages_keep_live_sections_and_reset_filters(
     assert history_region.locator(".transfer-category").evaluate_all(
         "rows => rows.map(row => row.dataset.category)"
     ) == ["running", "queued", "finished"]
+    running = history_region.get_by_role("region", name="Running", exact=True)
+    cancel = running.get_by_role("button", name="Cancel All", exact=True)
+    cancel.click()
+    expect(
+        page.get_by_role("dialog", name="Cancel All Uploads?", exact=True)
+    ).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(cancel).to_be_focused()
     previous = pager.get_by_role(
         "button", name="Previous page of finished transfers", exact=True
     )
@@ -144,22 +154,63 @@ def test_finished_history_cursor_pages_keep_live_sections_and_reset_filters(
     history_region.get_by_role("button", name="Try Again", exact=True).click()
     expect(history_region.get_by_role("alert")).to_have_count(0)
     expect(finished.get_by_role("heading", name="No Failed Transfers")).to_be_visible()
+    page.get_by_role("button", name="Dismiss Notification", exact=True).click()
     filters.get_by_role("button", name="Cancelled", exact=True).click()
     expect(
         finished.get_by_role("heading", name="No Cancelled Transfers")
     ).to_be_visible()
-    page.set_viewport_size({"width": 390, "height": 844})
+    page.set_viewport_size({"width": 320, "height": 640})
     set_appearance(page, "dark")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     expect(pager).to_have_count(0)
     page.screenshot(
         path=ARTIFACTS / "transfer-pagination-empty-mobile.png", full_page=True
     )
-    filters.get_by_role("button", name="All", exact=True).click()
+    filter_buttons = filters.get_by_role("button")
+    filter_buttons.evaluate_all(
+        "buttons => buttons.forEach(button => button.style.fontSize = '16px')"
+    )
+    expect(filter_buttons).to_have_count(4)
+    filter_buttons.first.focus()
+    clear = history_region.get_by_role("button", name="Clear history", exact=True)
+    for button in [*filter_buttons.all(), clear]:
+        expect(button).to_be_focused()
+        expect(button).to_be_in_viewport(ratio=1)
+        assert button.evaluate("""button => {
+            const rect = button.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+                rect.left + rect.width / 2, rect.top + rect.height / 2
+            );
+            return rect.height >= 44 && button.contains(hit);
+        }""")
+        if button is not clear:
+            page.keyboard.press("Tab")
+    expect(filters).to_have_js_property("scrollLeft", 0)
+    clear.press("Enter")
+    expect(
+        page.get_by_role("dialog", name="Clear transfer history?", exact=True)
+    ).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(clear).to_be_focused()
+    filters.get_by_role("button", name="All", exact=True).press("Enter")
     next_page.click()
     expect(pager.get_by_role("status")).to_contain_text("Page 2 of 3")
     expect(finished).to_contain_text("older-cancelled.bin")
+    filename = finished.get_by_text(long_name, exact=True)
+    expect(filename).to_be_visible()
+    assert filename.evaluate("""node => {
+        const lineHeight = parseFloat(getComputedStyle(node).lineHeight);
+        return node.getBoundingClientRect().height > lineHeight;
+    }""")
     pager.scroll_into_view_if_needed()
+    expect(next_page).to_be_in_viewport(ratio=1)
+    assert next_page.evaluate("""button => {
+        const rect = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+            rect.left + rect.width / 2, rect.top + rect.height / 2
+        );
+        return rect.height >= 44 && button.contains(hit);
+    }""")
     page.screenshot(path=ARTIFACTS / "transfer-pagination-mobile.png", full_page=True)
     assert all(query["limit"] == 20 for query in seen)
     assert any(query["offset"] == 20 for query in seen)

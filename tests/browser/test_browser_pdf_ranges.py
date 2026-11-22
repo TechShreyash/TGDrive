@@ -158,7 +158,7 @@ def test_pdf_close_aborts_active_range_reads(server: Server, desktop):
     with page.expect_request(lambda request: urlsplit(request.url).path == "/file"):
         page.get_by_role("button", name="sample.pdf", exact=True).dblclick()
     dialog = preview_dialog(page)
-    expect(dialog.get_by_role("status")).to_contain_text("Loading PDF")
+    expect(dialog.get_by_role("status").filter(has_text="Loading PDF")).to_be_visible()
     assert held, "A real explicit range must be pending before cancellation"
     with page.expect_event(
         "requestfailed", predicate=lambda request: urlsplit(request.url).path == "/file"

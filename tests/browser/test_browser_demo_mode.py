@@ -91,8 +91,13 @@ def test_demo_pages_lock_changes_keep_navigation_and_file_features(
     assert page.request.get(demo_server.url + "/api/config").json()["demo_mode"]
 
     def navigate(label):
-        fixtures.open_admin(page)
-        page.get_by_role("link", name=label, exact=True).click()
+        if label in {"Transfer limits", "Timezone"}:
+            page.get_by_role("navigation", name="Settings sections").get_by_role(
+                "link", name=label, exact=True
+            ).click()
+        else:
+            fixtures.open_admin(page)
+            page.get_by_role("link", name=label, exact=True).click()
         expect(page.locator(".demo-mode-notice")).to_contain_text("read-only")
 
     expect(page.locator(".demo-mode-notice")).to_be_visible()
@@ -133,7 +138,7 @@ def test_demo_pages_lock_changes_keep_navigation_and_file_features(
     for control in page.get_by_role("button", name=re.compile(r"^Manage ")).all():
         expect(control).to_be_disabled()
 
-    navigate("Storage and Backups")
+    navigate("Backups")
     expect(page.get_by_role("button", name="Back Up Now", exact=True)).to_be_disabled()
     expect(page.get_by_role("button", name="Check Again", exact=True)).to_be_enabled()
     expect(

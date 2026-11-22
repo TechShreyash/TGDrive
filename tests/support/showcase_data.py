@@ -19,6 +19,7 @@ from pathlib import Path
 
 from fastapi.responses import JSONResponse
 
+from tgdrive.core.governor import BYTES, CONCURRENCY, GIB, INTERVAL_SECONDS, decide
 from tgdrive.media.media_reader import BLOCK
 from tgdrive.transfers.tasks import TransferStatus
 from tgdrive.web.share_links import token_factory
@@ -239,7 +240,7 @@ def samples(start, end, count=100):
     return result
 
 
-def install(app, runtime):
+def install(app, runtime, settings):
     @app.middleware("http")
     async def showcase(request, call_next):
         response = await call_next(request)
@@ -280,6 +281,33 @@ def install(app, runtime):
             )
         else:
             rows = samples(now - 297, now)
+            current = rows[-1]
+            measurements = {
+                "sampled_at": value["server"]["at"],
+                "memory_limit": current["memory_limit_bytes"],
+                "memory_available": current["memory_limit_bytes"]
+                - current["memory_bytes"],
+                "cpus": 4,
+                "disk_total": 40 * GIB,
+                "disk_free": 14 * GIB,
+                "disk_effective_free": 14 * GIB,
+            }
+            sizing = decide(
+                measurements,
+                {
+                    "values": {
+                        key: getattr(settings, key) for key in BYTES + CONCURRENCY
+                    }
+                },
+            )
+            value["tuning"] = {
+                "example": True,
+                "running": True,
+                "interval_seconds": INTERVAL_SECONDS,
+                "measurements": measurements,
+                "values": sizing["values"],
+                "reasons": sizing["reasons"],
+            }
             value["server"].update(
                 history=rows,
                 cpu=dict(

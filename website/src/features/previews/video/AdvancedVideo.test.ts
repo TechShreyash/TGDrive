@@ -10,7 +10,98 @@ import {
     videoBufferSnapshot,
     videoWaitAllowsRetry,
     type VideoLoadState,
+    compatibilityManifestUrl,
+    limitCompatibilityBuffers,
 } from "./AdvancedVideo";
+
+describe("explicit compatible playback", () => {
+    it("paints available paused frames without playing and releases owned listeners", () => {
+        const element = {} as Record<string, unknown>;
+        limitCompatibilityBuffers(element);
+        const core = {} as Record<string, unknown>;
+        element.player = core;
+        const video = Object.assign(new EventTarget(), {
+            paused: true,
+            readyState: 1,
+            play: vi.fn(),
+        });
+        const renderFrame = vi.fn();
+        const completion = Promise.resolve();
+        const destroy = vi.fn(() => completion);
+        const wrapper = { videoElement: video, renderFrame, destroy };
+        core.streamWrapper = wrapper;
+        video.dispatchEvent(new Event("loadeddata"));
+        expect(renderFrame).not.toHaveBeenCalled();
+        video.readyState = 2;
+        video.dispatchEvent(new Event("loadeddata"));
+        video.dispatchEvent(new Event("seeked"));
+        expect(renderFrame).toHaveBeenCalledTimes(2);
+        video.paused = false;
+        video.dispatchEvent(new Event("seeked"));
+        expect(renderFrame).toHaveBeenCalledTimes(2);
+        expect(wrapper.destroy()).toBe(completion);
+        video.paused = true;
+        video.dispatchEvent(new Event("seeked"));
+        expect(renderFrame).toHaveBeenCalledTimes(2);
+        expect(destroy).toHaveBeenCalledOnce();
+        expect(video.play).not.toHaveBeenCalled();
+    });
+    it("keeps original path/share identity while dropping quality and unrelated inputs", () => {
+        const value = compatibilityManifestUrl(
+            "/file?path=%2Fid&auth=private&quality=360&request_id=original",
+            "https://drive.test",
+        );
+        expect(value).toBe(
+            "/api/v1/playback/compatibility.m3u8?path=%2Fid&auth=private",
+        );
+        expect(
+            compatibilityManifestUrl(
+                "https://other.test/file?path=id",
+                "https://drive.test",
+            ),
+        ).toBeNull();
+        expect(
+            compatibilityManifestUrl("/other?path=id", "https://drive.test"),
+        ).toBeNull();
+    });
+    it("bounds engines synchronously before their manifest/source load begins", async () => {
+        const element = {} as Record<string, unknown>;
+        limitCompatibilityBuffers(element);
+        const core = {} as Record<string, unknown>;
+        element.player = core;
+        const wrapper = { loadNative: vi.fn() } as Record<string, unknown>;
+        core.streamWrapper = wrapper;
+        const configure = vi.fn(() => true);
+        wrapper.player = { configure };
+        expect(configure).toHaveBeenCalledWith({
+            streaming: {
+                bufferingGoal: 6,
+                rebufferingGoal: 1,
+                bufferBehind: 6,
+                segmentPrefetchLimit: 0,
+                preferNativeHls: false,
+            },
+        });
+        const config = { xhrSetup: vi.fn(), maxMaxBufferLength: 600 };
+        wrapper.hls = { config };
+        expect(config.maxMaxBufferLength).toBe(6);
+        expect(config.xhrSetup).toBeTypeOf("function");
+        await expect(
+            (wrapper.loadNative as () => Promise<void>)(),
+        ).rejects.toThrow("Media Source");
+    });
+    it("rejects an engine that cannot apply bounded buffering", () => {
+        const element = {} as Record<string, unknown>;
+        limitCompatibilityBuffers(element);
+        const core = {} as Record<string, unknown>;
+        element.player = core;
+        const wrapper = {} as Record<string, unknown>;
+        core.streamWrapper = wrapper;
+        expect(() => {
+            wrapper.player = { configure: () => false };
+        }).toThrow("Bounded compatible playback");
+    });
+});
 
 describe("video wait recovery", () => {
     it("waits through growing bytes but offers recovery for a real stall", () => {

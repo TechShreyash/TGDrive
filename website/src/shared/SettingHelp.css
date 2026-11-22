@@ -11,11 +11,21 @@
     background: var(--hover);
     color: var(--ink);
 }
-.setting-help-content {
+.mantine-Popover-dropdown.setting-help-content {
+    --popover-border-color: var(--line);
+    display: flex;
+    flex-direction: column;
     max-width: calc(100vw - 24px);
+    background: var(--surface-raised);
+    box-shadow: var(--menu-shadow);
     color: var(--ink);
     font-size: 14px;
     line-height: 1.5;
+}
+.setting-help-content > [data-autofocus] {
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
 }
 .setting-help-content p {
     margin: 0;

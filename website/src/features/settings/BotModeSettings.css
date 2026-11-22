@@ -22,3 +22,7 @@
     gap: 8px;
     margin-top: 16px;
 }
+.bot-upload-encrypt .mantine-Switch-body {
+    align-items: center;
+    margin: 0;
+}

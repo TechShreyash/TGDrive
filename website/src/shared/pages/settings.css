@@ -293,13 +293,6 @@
     justify-content: space-between;
     gap: 24px;
 }
-.performance-settings
-    .configuration-auto-preload
-    input:checked
-    + .mantine-Switch-track {
-    border-color: var(--action);
-    background: var(--action);
-}
 .performance-settings .configuration-auto-preload .mantine-Switch-label {
     font-size: 14px;
     font-weight: 600;
@@ -606,4 +599,47 @@
 }
 .performance-settings .resource-limit-controls > * {
     width: 100%;
+}
+.settings-sections {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    margin-block: 0 20px;
+    border-bottom: 1px solid var(--line);
+}
+.settings-sections > a {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 0 12px;
+    border-radius: 8px 8px 0 0;
+    color: var(--muted);
+    font-weight: 600;
+    text-decoration: none;
+}
+.settings-sections > a:hover {
+    background: var(--hover);
+}
+.settings-sections > a[aria-current="page"] {
+    color: var(--action);
+    box-shadow: inset 0 -2px var(--action);
+}
+.settings-sections > a svg {
+    width: 16px;
+    height: 16px;
+}
+.performance-settings > .performance-section-heading h2 {
+    margin: 0 0 5px;
+    font-size: 19px;
+    color: var(--ink);
+}
+@media (max-width: 480px) {
+    .settings-sections {
+        gap: 2px 4px;
+        margin-bottom: 14px;
+    }
+    .settings-sections > a svg {
+        display: none;
+    }
 }

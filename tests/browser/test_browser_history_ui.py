@@ -87,6 +87,7 @@ def query_bounds(route):
 def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, desktop):
     _, page = desktop
     install_live_snapshot(page, server)
+    page.clock.install()
     requests = []
 
     def recorded(route):
@@ -96,83 +97,88 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
 
     page.route("**/api/v1/performance/history?*", recorded)
     page.goto(server.url + "/?view=performance")
-    page.get_by_role("tab", name="Performance", exact=True).click()
+    page.get_by_role("tab", name="Overview", exact=True).click()
     interval = page.get_by_role("combobox", name="Time range", exact=True)
     expect(interval).to_have_value("live")
     cpu = page.get_by_role("region", name="Container CPU", exact=True)
-    slider = cpu.get_by_role("slider", name="Inspect Container CPU samples")
-    expect(slider).to_have_attribute("max", "2")
+    inspector = cpu.get_by_role("button", name="Inspect Container CPU samples")
+    expect(inspector).to_be_visible()
     expect(cpu.locator(".performance-chart-heading")).to_contain_text("70.0%Now")
     interval.select_option("hour")
     expect(page.locator(".performance-history-availability")).to_contain_text(
-        "Recorded interval averages"
+        "Recorded averages"
     )
-    expect(slider).to_have_attribute("max", "59")
+    expect(inspector).to_be_visible()
     expect(cpu.locator("polyline.performance-plot-active")).to_have_count(2)
     for name in ["Server network", "Container RAM"]:
         expect(
-            page.get_by_role("region", name=name, exact=True).get_by_role("slider")
-        ).to_have_attribute("max", "59")
+            page.get_by_role("region", name=name, exact=True).get_by_role(
+                "button", name=f"Inspect {name} samples"
+            )
+        ).to_be_visible()
     expect(cpu.locator(".performance-chart-now")).to_have_count(0)
     network = page.get_by_role("region", name="Server network", exact=True)
-    expect(network.locator(".performance-chart-legend")).to_contain_text(
-        "Download to server"
+    expect(network.get_by_role("term")).to_have_text(
+        ["Upload from server", "Download to server"]
     )
-    expect(network.locator(".performance-chart-legend")).to_contain_text(
-        "Upload from server"
-    )
-    expect(network.locator(".performance-chart-readout")).to_contain_text("16.78 Mbps")
-    expect(network.locator(".performance-chart-readout")).to_contain_text("8.39 Mbps")
+    network.get_by_role("button", name="Inspect Server network samples").press("End")
+    expect(network.get_by_role("status")).to_contain_text("16.78 Mbps")
+    expect(network.locator(".performance-chart-tooltip")).to_contain_text("8.39 Mbps")
+    page.get_by_role("tab", name="Tuning", exact=True).click()
     totals = page.locator(".performance-all-time")
     expect(page.get_by_role("heading", name="All-time totals")).to_be_visible()
-    totals.locator("summary").click()
+    expect(totals.get_by_role("table")).to_be_visible()
     expect(totals).to_contain_text("5 GiB")
     expect(totals).to_contain_text("Not available")
+    page.get_by_role("tab", name="Overview", exact=True).click()
     plot = cpu.get_by_role("img", name="Container CPU over time", exact=True)
     cpu.scroll_into_view_if_needed()
     bounds = plot.bounding_box()
     page.mouse.move(bounds["x"] + bounds["width"] * 0.251, bounds["y"] + 10)
     expect(cpu.locator(".performance-chart-tooltip")).to_be_visible()
     # Nearest real bucket is index 15, not an interpolated 24.809 value.
-    expect(cpu.locator(".performance-chart-readout")).to_contain_text("25.0%")
+    expect(cpu.locator(".performance-chart-tooltip")).to_contain_text("25.0%")
     page.screenshot(path=fixtures.ARTIFACTS / "history-hover-desktop.png")
     page.mouse.move(0, 0)
     expect(cpu.locator(".performance-chart-tooltip")).to_have_count(0)
-    expect(cpu.locator(".performance-chart-readout")).to_contain_text("29.0%")
-    slider.focus()
-    slider.press("Home")
-    expect(cpu.locator(".performance-chart-readout")).to_contain_text("10.0%")
+    expect(cpu.get_by_role("status")).to_be_empty()
+    inspector.focus()
+    inspector.press("Home")
+    expect(cpu.locator(".performance-chart-tooltip")).to_contain_text("10.0%")
     page.mouse.move(bounds["x"] + bounds["width"] * 0.251, bounds["y"] + 10)
     page.mouse.move(0, 0)
-    expect(cpu.locator(".performance-chart-readout")).to_contain_text("10.0%")
+    expect(cpu.locator(".performance-chart-tooltip")).to_contain_text("10.0%")
     before = len(requests)
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    with page.expect_response(
+        lambda response: "/api/v1/performance/history?" in response.url
+    ):
+        page.clock.fast_forward(61000)
     expect(interval).to_have_value("hour")
-    expect(slider).to_have_attribute("max", "59")
+    expect(inspector).to_be_visible()
     page.wait_for_function(
         "() => !document.querySelector('.performance-history-status')"
     )
     assert len(requests) > before
     page.reload()
-    page.get_by_role("tab", name="Performance", exact=True).click()
+    page.get_by_role("tab", name="Overview", exact=True).click()
     expect(interval).to_have_value("hour")
-    expect(slider).to_have_attribute("max", "59")
+    expect(inspector).to_be_visible()
     assert requests[-1][1] - requests[-1][0] == 3600
     for tab, description in [
-        ("Accounts", "Live account activity and current limits."),
+        ("Accounts", "Account capacity"),
     ]:
         page.get_by_role("tab", name=tab, exact=True).click()
         expect(interval).not_to_be_visible()
         expect(page.get_by_text(description, exact=True)).to_be_visible()
         expect(page.locator(".performance-history-availability")).not_to_be_visible()
-    page.get_by_role("tab", name="Performance", exact=True).click()
+    page.get_by_role("tab", name="Overview", exact=True).click()
     expect(interval).to_be_visible()
     expect(interval).to_have_value("hour")
     expect(cpu).to_be_visible()
     page.get_by_role("tab", name="Accounts", exact=True).click()
     expect(interval).not_to_be_visible()
     expect(page.locator(".performance-history-availability")).not_to_be_visible()
-    page.get_by_role("tab", name="Performance", exact=True).click()
+    page.get_by_role("tab", name="Overview", exact=True).click()
     expect(interval).to_be_visible()
     expect(interval).to_have_value("hour")
     page.set_viewport_size({"width": 390, "height": 844})
@@ -184,11 +190,34 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
     page.screenshot(path=fixtures.ARTIFACTS / "history-range-mobile.png")
 
 
+def test_phone_tap_inspects_one_sample_and_tap_again_clears_it(server, browser):
+    page = browser.new_page(
+        viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True
+    )
+    try:
+        install_live_snapshot(page, server)
+        page.goto(server.url + "/?view=performance")
+        cpu = page.get_by_role("region", name="Container CPU", exact=True)
+        plot = cpu.get_by_role("button", name="Inspect Container CPU samples")
+        plot.tap(position={"x": 2, "y": 20})
+        tooltip = cpu.locator(".performance-chart-tooltip")
+        expect(tooltip).to_contain_text("40.0%")
+        expect(cpu.get_by_role("status")).to_contain_text("40.0%")
+        bounds = tooltip.bounding_box()
+        assert bounds and bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= 390
+        plot.tap(position={"x": 2, "y": 20})
+        expect(tooltip).to_have_count(0)
+        expect(cpu.get_by_role("slider")).to_have_count(0)
+    finally:
+        page.close()
+
+
 def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range(
     server, desktop
 ):
     _, page = desktop
     install_live_snapshot(page, server)
+    page.clock.install()
     held = []
     requests = []
     fail = False
@@ -207,7 +236,7 @@ def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range
 
     page.route("**/api/v1/performance/history?*", recorded)
     page.goto(server.url + "/?view=performance")
-    page.get_by_role("tab", name="Performance", exact=True).click()
+    page.get_by_role("tab", name="Overview", exact=True).click()
     interval = page.get_by_role("combobox", name="Time range", exact=True)
     interval.select_option("day")
     expect(page.get_by_text("Loading selected history…", exact=False)).to_be_visible()
@@ -233,14 +262,19 @@ def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range
     page.get_by_role("button", name="Apply Range", exact=True).click()
     expect(page.get_by_text("Applied:", exact=False)).to_be_visible()
     expect(page.locator(".performance-history-availability")).to_contain_text(
-        "Recorded interval averages"
+        "Recorded averages"
     )
     expected = tuple(
         datetime.fromisoformat(value).replace(tzinfo=UTC).timestamp()
         for value in [start, end]
     )
     assert requests[-1] == expected
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    count = len(requests)
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/v1/performance")
+    ):
+        page.clock.fast_forward(61000)
+    assert len(requests) == count
     page.wait_for_function(
         "() => !document.querySelector('.performance-history-status')"
     )
@@ -251,7 +285,7 @@ def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range
         "Showing previously loaded history"
     )
     fail = False
-    page.get_by_role("button", name="Retry History", exact=True).click()
+    page.clock.fast_forward(5100)
     expect(page.locator(".performance-history-error")).to_have_count(0)
     expect(interval).to_have_value("hour")
 
@@ -259,16 +293,17 @@ def test_custom_history_is_absolute_utc_and_stale_fetch_cannot_replace_new_range
 def test_recorded_history_page_uses_real_private_history_endpoint(server, desktop):
     _, page = desktop
     login(page, server.url + "/?view=performance")
-    page.get_by_role("tab", name="Performance", exact=True).click()
+    page.get_by_role("tab", name="Overview", exact=True).click()
     page.get_by_role("combobox", name="Time range", exact=True).select_option("hour")
     expect(page.locator(".performance-history-availability")).to_contain_text(
-        "Recorded interval averages"
+        "Recorded averages"
     )
     expect(page.locator(".performance-history-error")).to_have_count(0)
+    page.get_by_role("tab", name="Tuning", exact=True).click()
     expect(
         page.get_by_role("heading", name="All-time totals", exact=True)
     ).to_be_visible()
-    page.locator(".performance-all-time summary").click()
+    expect(page.locator(".performance-all-time table")).to_be_visible()
     expect(page.locator(".performance-all-time")).to_contain_text(
         "independent of the time range"
     )

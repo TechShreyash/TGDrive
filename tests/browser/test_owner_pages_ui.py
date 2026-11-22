@@ -26,7 +26,16 @@ def test_shared_filename_opens_location_with_one_click(server, desktop):
     ).ok
     page.goto(server.url + "/?view=shares")
     page.set_viewport_size({"width": 390, "height": 844})
-    page.get_by_role("button", name="資料", exact=True).click()
+    shared_name = page.get_by_role("button", name="資料", exact=True)
+    expect(shared_name).to_be_visible()
+    pending = []
+    page.route("**/api/v1/shares", lambda route: pending.append(route))
+    shared_name.click()
+    expect(shared_name).to_have_attribute("aria-busy", "true")
+    shared_name.press("Enter")
+    assert len(pending) == 1
+    pending[0].continue_()
+    page.unroute("**/api/v1/shares")
     expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
     expect(page.locator("tr.selected")).to_contain_text("資料")
 
@@ -68,6 +77,15 @@ def test_owner_documentation_and_backup_recovery_links_open_safe_new_tabs(
     popup.close()
     assert page.url.endswith("?view=storage")
 
+    for suffix, title in [("/", "My Files"), ("/?view=storage", "Backups")]:
+        page.goto(server.url + suffix)
+        expect(page.get_by_role("heading", name=title, exact=True)).to_be_visible()
+        page.keyboard.press("Tab")
+        skip = page.get_by_role("link", name="Skip to main content", exact=True)
+        expect(skip).to_be_focused()
+        skip.press("Enter")
+        expect(page.get_by_role("main")).to_be_focused()
+
 
 def test_shared_links_concise_expiry_keeps_exact_timezone(server, browser):
     context = browser.new_context(timezone_id="America/New_York", locale="en-US")
@@ -80,7 +98,9 @@ def test_shared_links_concise_expiry_keeps_exact_timezone(server, browser):
             "path": "/compact-file",
             "name": "Weekend trip.mp4",
             "folder_path": "/",
-            "folder_label": "My Files",
+            "folder_label": "Long folder path / " * 10,
+            "label": "Review of a long project folder " * 10,
+            "password_required": True,
             "type": "file",
             "size": 17800000,
             "created_at": "2026-10-17T00:00:00Z",
@@ -134,12 +154,17 @@ def test_shared_links_concise_expiry_keeps_exact_timezone(server, browser):
         expiry = row.locator(".share-expiry time")
         # Jan 2 in New York is Jan 3 in the configured instance timezone.
         expect(expiry).to_contain_text("Jan 3, 2031")
-        expect(expiry).to_have_attribute("aria-label", "Expires " + exact)
-        tooltip = expiry.get_by_role("tooltip")
+        expect(expiry).to_have_accessible_description(exact)
+        tooltip = expiry.get_by_role("tooltip", include_hidden=True)
         expect(tooltip).not_to_be_visible()
         expiry.focus()
         expect(tooltip).to_be_visible()
         expect(tooltip).to_have_text(exact)
+        expect(
+            row.get_by_role("button", name="Weekend trip.mp4", exact=True)
+        ).to_have_accessible_description(__import__("re").compile("Password protected"))
+        protection = row.locator(".share-protection")
+        expect(protection).to_have_text("Password protected")
         row.locator(".share-copy").focus()
         expect(tooltip).not_to_be_visible()
         expect(
@@ -159,8 +184,26 @@ def test_shared_links_concise_expiry_keeps_exact_timezone(server, browser):
             assert row.evaluate(
                 "element => element.scrollWidth <= element.clientWidth + 1"
             )
+            expect(protection).to_be_in_viewport(ratio=1)
+            if width == 1440:
+                labels = page.locator(".share-columns > span")
+                for index, selector in enumerate(
+                    (
+                        ".share-item",
+                        ".share-dates",
+                        ".share-opens",
+                        ".share-row-actions",
+                    )
+                ):
+                    head = labels.nth(index).bounding_box()
+                    cell = row.locator(selector).bounding_box()
+                    assert head and cell
+                    assert abs(head["x"] - cell["x"]) <= 1
             if width in (1440, 390):
-                page.screenshot(path=str(ARTIFACTS / f"shares-concise-{width}.png"))
+                page.screenshot(
+                    path=ARTIFACTS / f"shares-concise-{width}.png",
+                    animations="disabled",
+                )
         # Tapping the date reveals the same exact expiry on touch-sized layouts.
         expiry.click()
         expect(tooltip).to_be_visible()

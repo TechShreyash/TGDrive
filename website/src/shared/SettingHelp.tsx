@@ -1,6 +1,6 @@
 import { Popover } from "@mantine/core";
 import { Info } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import "./SettingHelp.css";
 
 export default function SettingHelp({
@@ -10,10 +10,14 @@ export default function SettingHelp({
     label: string;
     children: ReactNode;
 }) {
+    const [opened, setOpened] = useState(false);
     return (
         <Popover
+            opened={opened}
+            onChange={setOpened}
             width={280}
             position="bottom-start"
+            middlewares={{ size: { padding: 8 } }}
             withArrow
             trapFocus
             returnFocus
@@ -23,6 +27,14 @@ export default function SettingHelp({
                     type="button"
                     className="setting-help-button"
                     aria-label={"About " + label}
+                    onClick={() => setOpened((value) => !value)}
+                    onKeyDown={(event) => {
+                        // Escape can arrive before Mantine moves focus inside.
+                        if (!opened || event.key !== "Escape") return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setOpened(false);
+                    }}
                 >
                     <Info size={16} aria-hidden="true" />
                 </button>

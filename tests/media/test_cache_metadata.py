@@ -46,6 +46,11 @@ def test_metadata_page_bounds_projection_and_detects_conflicting_owners(
 ):
     store = new_store()
     try:
+        identities = iter(f"a{index:03}" for index in range(70))
+        monkeypatch.setattr(
+            "tgdrive.storage.mongo_store.secrets.token_urlsafe",
+            lambda _size: next(identities),
+        )
         for index in range(66):
             store.create_folder("/", f"folder{index}")
         store.add_file("/", "one.mkv", 77, 5)
@@ -83,6 +88,7 @@ def test_metadata_page_bounds_projection_and_detects_conflicting_owners(
             after = last
             boundaries.append(last)
         assert len(queries) == 3
+        assert boundaries[-1] == "root"
         assert seen == {
             (77, 5): None,
             (99, 5): ("poster-owner.mkv", "poster"),

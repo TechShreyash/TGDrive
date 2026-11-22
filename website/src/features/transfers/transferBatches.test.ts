@@ -46,6 +46,23 @@ const rate = {
 };
 
 describe("truthful batch work", () => {
+    it.each(["completed", "cancelled"] as const)(
+        "keeps %s bot cleanup visible without changing its outcome",
+        (state) => {
+            const batch = summary([
+                item({
+                    state,
+                    stage: "bot_intake_cleanup",
+                    error: "Cleanup pending",
+                }),
+            ]);
+            expect(batchCategory(batch)).toBe("error");
+            expect(batch.pending).toBe(true);
+            expect(batch.cleanup).toBe(1);
+            expect(batch.active).toBe(0);
+            expect(batch.items[0].state).toBe(state);
+        },
+    );
     it("weights file bytes instead of averaging file percentages", () => {
         const batch = summary([
             item({

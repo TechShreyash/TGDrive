@@ -1,5 +1,12 @@
 import { ApiError, request } from "../../shared/api";
 
+const closingSaves = new Map<string, Promise<void>>();
+
+export async function waitForProgressSave(url: string, signal: AbortSignal) {
+    await closingSaves.get(url);
+    signal.throwIfAborted();
+}
+
 /** Ordered saves shared by the video and PDF readers; closing is terminal. */
 export function createOrderedProgressWriter<Snapshot extends object>(
     url: string,
@@ -102,15 +109,18 @@ export function createOrderedProgressWriter<Snapshot extends object>(
         if (beginning || timer || closed || stopped || beginAttempts >= 2)
             return;
         beginAttempts++;
-        beginning = request<{
-            session_id: string;
-            progress: unknown;
-            save_interval_seconds: number;
-        }>(
-            url + "/session",
-            {},
-            { method: "POST", keepalive: true, notifySessionExpiry: false },
-        )
+        const previous = closingSaves.get(url);
+        const openSession = () =>
+            request<{
+                session_id: string;
+                progress: unknown;
+                save_interval_seconds: number;
+            }>(
+                url + "/session",
+                {},
+                { method: "POST", keepalive: true, notifySessionExpiry: false },
+            );
+        beginning = (previous ? previous.then(openSession) : openSession())
             .then((result) => {
                 if (
                     !/^[A-Za-z0-9_-]{32}$/.test(result.session_id) ||
@@ -169,11 +179,18 @@ export function createOrderedProgressWriter<Snapshot extends object>(
             if (closed) return;
             closed = true;
             clearTimeout(timer);
-            void (async () => {
+            if (!latest || !beginning) return;
+            const finish = (async () => {
                 await beginning;
                 await writing;
                 await put(true);
-            })().catch(problem);
+            })()
+                .catch(problem)
+                .finally(() => {
+                    if (closingSaves.get(url) === finish)
+                        closingSaves.delete(url);
+                });
+            closingSaves.set(url, finish);
         },
     };
 }

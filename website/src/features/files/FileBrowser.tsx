@@ -1,13 +1,35 @@
 import {
+    useCallback,
     useEffect,
     useMemo,
     useRef,
     useState,
     type CSSProperties,
+    type MouseEvent as ReactMouseEvent,
     type ReactNode,
 } from "react";
-import { flushSync } from "react-dom";
 import {
+    createChange,
+    createSelection,
+    definePrimitive,
+    type ChangeDetails,
+} from "@ui-sdk/core";
+import { usePrimitive } from "@ui-sdk/react/primitive";
+import { flushSync } from "react-dom";
+import { useMediaQuery } from "@mantine/hooks";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectItemIndicator,
+    SelectTrigger,
+    SelectValue,
+} from "@ui-sdk/react/select";
+import { Toggle, ToggleGroup } from "@ui-sdk/react/toggle";
+import {
+    Check,
+    ChevronDown,
+    ListFilter,
     Star,
     AlertCircle,
     Folder,
@@ -30,6 +52,7 @@ import {
     SquareCheck,
     Archive,
     FolderArchive,
+    LockKeyhole,
     Image,
     FileText,
     Music,
@@ -70,34 +93,92 @@ import {
     type SortOrder,
 } from "./fileSorting";
 
+const contextAnchors = new WeakMap<
+    HTMLDetailsElement,
+    {
+        invoker: HTMLElement;
+        pointer?: { x: number; y: number };
+        originalBounds: DOMRect;
+    }
+>();
+
+function itemMenuInvoker(details: HTMLDetailsElement) {
+    return (
+        contextAnchors.get(details)?.invoker ?? details.querySelector("summary")
+    );
+}
+
 function positionItemMenu(details: HTMLDetailsElement) {
     const panel = details.querySelector<HTMLElement>(".action-menu");
-    const trigger = details.querySelector("summary");
-    if (!panel || !trigger || !panel.showPopover) return;
+    if (!panel || !panel.showPopover) return;
     if (!details.open) {
+        contextAnchors.delete(details);
         if (panel.matches(":popover-open")) panel.hidePopover();
         return;
     }
-    panel.style.maxHeight = Math.max(96, window.innerHeight - 24) + "px";
-    panel.showPopover();
-    const bounds = trigger.getBoundingClientRect();
+    const bounds = itemMenuInvoker(details)?.getBoundingClientRect();
+    if (!bounds) return;
+    const context = contextAnchors.get(details);
+    panel.style.maxHeight = Math.max(0, window.innerHeight - 24) + "px";
+    if (!panel.matches(":popover-open")) panel.showPopover();
     const menu = panel.getBoundingClientRect();
-    const roomBelow = window.innerHeight - bounds.bottom - 18;
+    const left =
+        context?.pointer?.x ??
+        (context ? bounds.left : bounds.right - menu.width);
+    const bottom = context?.pointer?.y ?? bounds.bottom;
+    const top = context?.pointer?.y ?? bounds.top;
+    const roomBelow = window.innerHeight - bottom - 18;
     panel.style.left =
-        Math.max(
-            12,
-            Math.min(
-                bounds.right - menu.width,
-                window.innerWidth - menu.width - 12,
-            ),
-        ) + "px";
+        Math.max(12, Math.min(left, window.innerWidth - menu.width - 12)) +
+        "px";
     panel.style.top =
         Math.max(
             12,
-            roomBelow >= menu.height
-                ? bounds.bottom + 6
-                : bounds.top - menu.height - 6,
+            roomBelow >= menu.height ? bottom + 6 : top - menu.height - 6,
         ) + "px";
+}
+
+function ItemActions({
+    name,
+    contextOnly = false,
+    children,
+}: {
+    name: string;
+    contextOnly?: boolean;
+    children: ReactNode;
+}) {
+    return (
+        <details
+            className={
+                "item-actions" + (contextOnly ? " public-context-actions" : "")
+            }
+            name="file-actions"
+            onBlur={({ currentTarget, relatedTarget }) => {
+                if (
+                    currentTarget.open &&
+                    relatedTarget instanceof Node &&
+                    !currentTarget.contains(relatedTarget)
+                ) {
+                    currentTarget.open = false;
+                    positionItemMenu(currentTarget);
+                }
+            }}
+            onToggle={({ currentTarget, target }) => {
+                if (target === currentTarget) positionItemMenu(currentTarget);
+            }}
+        >
+            <summary
+                className="icon-button"
+                aria-label={"Actions for " + name}
+                hidden={contextOnly}
+            >
+                <MoreHorizontal size={20} aria-hidden="true" />
+            </summary>
+            <div className="action-menu" popover="manual">
+                {children}
+            </div>
+        </details>
+    );
 }
 
 export type FileFilter = "all" | NodeType;
@@ -116,6 +197,36 @@ const EMPTY_FILTER_TITLES: Record<NodeType, string> = {
     audio: "No Audio Here",
     other: "No Other Files Here",
 };
+const TOUCH_HOLD_MS = 500;
+const TOUCH_MOVE_PX = 10;
+const ROW_CONTROL =
+    "button:not(.item-name-button),a,input,label,summary,details";
+
+const fileSelection = definePrimitive({
+    name: "file-selection",
+    options: { value: "list", order: "list", onValueChange: "callback" },
+    controlled: ["value"],
+    state: (options: {
+        value: string[];
+        order: string[];
+        onValueChange: (
+            value: string[],
+            details: ChangeDetails<"item-press">,
+        ) => void;
+    }) => ({ value: options.value }),
+    sync: (options) => ({ value: options.value }),
+    api: (context) => {
+        const change = createChange(context);
+        return createSelection(context, {
+            key: "value",
+            order: () => context.options().order,
+            multiple: () => true,
+            set: (value, details) => change("value", value, details),
+        });
+    },
+    slots: (slot) => ({ root: slot({}) }),
+});
+
 function filterGroup(item: DriveItem): FileFilter {
     const kind = fileKind(item.name, item.type === "folder");
     if (kind === "folder") return "folder";
@@ -125,6 +236,37 @@ function filterGroup(item: DriveItem): FileFilter {
     if (kind === "audio") return "audio";
     return "other";
 }
+function rowDate(item: DriveItem, recent: boolean) {
+    return (recent && item.active_at) || item.upload_date;
+}
+
+function MobileFileMetadata({
+    item,
+    recent,
+}: {
+    item: DriveItem;
+    recent: boolean;
+}) {
+    const date = formatShortDate(rowDate(item, recent));
+
+    return (
+        <span className="file-mobile-meta">
+            <span>
+                {item.type === "folder" ? "Folder" : formatBytes(item.size)}
+            </span>
+            {date && (
+                <span className="file-mobile-date">
+                    <span aria-hidden="true"> · </span>
+                    <span className="sr-only">
+                        {recent ? "Activity " : "Added "}
+                    </span>
+                    {date}
+                </span>
+            )}
+        </span>
+    );
+}
+
 function withViewTransition(update: () => void) {
     const start = (
         document as Document & {
@@ -271,20 +413,41 @@ export default function FileBrowser({
         return "";
     };
     const [selected, setSelected] = useState<Set<string>>(new Set());
-    const [selectionMode, setSelectionMode] = useState(false);
+    const [selectionMode, setSelectionMode] = useState<
+        "manual" | "shortcut" | null
+    >(null);
     const pointerKind = useRef("");
+    const touchHold = useRef<{
+        id: number;
+        x: number;
+        y: number;
+        timer: number;
+    } | null>(null);
+    const suppressHoldClick = useRef(false);
+    const cancelTouchHold = useCallback(() => {
+        if (!touchHold.current) return;
+        window.clearTimeout(touchHold.current.timer);
+        touchHold.current = null;
+    }, []);
     const selectionActive = useRef(false);
-    selectionActive.current = selectionMode || selected.size > 0;
+    selectionActive.current = !!selectionMode || selected.size > 0;
     const [localSort, setLocalSort] = useState<FileSort>("name");
     const [localOrder, setLocalOrder] = useState<SortOrder>("asc");
+    const compact = useMediaQuery(COMPACT_LAYOUT_QUERY, false, {
+        getInitialValueInEffect: false,
+    });
+    const narrow = useMediaQuery("(max-width: 480px)", false, {
+        getInitialValueInEffect: false,
+    });
     const [layout, setLayout] = useState<"list" | "grid">(() => {
         try {
-            return localStorage.getItem("tgdrive.file-view") === "list"
-                ? "list"
-                : "grid";
+            if (localStorage.getItem("tgdrive.file-view") === "grid") {
+                return "grid";
+            }
         } catch {
-            return "grid";
+            // The explorer can still open if browser storage is unavailable.
         }
+        return "list";
     });
     const sort = paging?.sort || searchSort || localSort;
     const order = paging?.order || searchOrder || localOrder;
@@ -323,9 +486,10 @@ export default function FileBrowser({
     const [page, setPage] = useState(0);
     useEffect(() => {
         setSelected(new Set());
-        setSelectionMode(false);
+        setSelectionMode(null);
         setPage(0);
-    }, [listingKey]);
+        return cancelTouchHold;
+    }, [listingKey, cancelTouchHold]);
     useEffect(() => {
         const escape = (event: KeyboardEvent) => {
             if (
@@ -341,8 +505,9 @@ export default function FileBrowser({
             );
             if (openMenu) {
                 event.preventDefault();
+                const invoker = itemMenuInvoker(openMenu);
                 hideItemMenus();
-                openMenu.querySelector("summary")?.focus();
+                invoker?.focus({ preventScroll: true });
                 return;
             }
             if (!selectionActive.current) return;
@@ -354,7 +519,7 @@ export default function FileBrowser({
             const item =
                 row?.querySelector<HTMLButtonElement>(".item-name-button");
             setSelected(new Set());
-            setSelectionMode(false);
+            setSelectionMode(null);
             // Selection checkboxes disappear on Escape. Return keyboard focus to a
             // surviving control instead of letting the browser focus the whole scroller.
             requestAnimationFrame(() => {
@@ -433,7 +598,7 @@ export default function FileBrowser({
         if (index < 0) return;
         setPage(Math.floor(index / 100));
         setSelected(new Set([highlightId]));
-        setSelectionMode(false);
+        setSelectionMode(null);
         let frame = requestAnimationFrame(() => {
             frame = requestAnimationFrame(() => {
                 highlighted.current = target;
@@ -482,11 +647,38 @@ export default function FileBrowser({
         : knownGroups.current?.key === paging.folderKey
           ? knownGroups.current.counts
           : null;
+    const availableFilters = FILE_FILTERS.filter(
+        ([value]) =>
+            !(isRecent && value === "folder") &&
+            (value === "all" ||
+                !chipCounts ||
+                chipCounts.has(value) ||
+                value === filter),
+    );
+    const changeFilter = (value: FileFilter) =>
+        withViewTransition(() => {
+            setFilter(value);
+            setPage(0);
+        });
     const filteredItems =
         paging || filter === "all"
             ? allItems
             : allItems.filter((item) => filterGroup(item) === filter);
     const itemCount = paging ? paging.total : filteredItems.length;
+    const showTypeFilter =
+        (!loading || (paging && (filter !== "all" || chipCounts))) &&
+        !error &&
+        (!chipCounts || chipCounts.size > 1 || filter !== "all");
+    const count = isRecent ? allItems.length : itemCount;
+    const fileCountLabel = loading
+        ? isSearch
+            ? "Searching…"
+            : "Loading files…"
+        : searchPagination
+          ? allItems.length
+              ? `Showing ${searchPagination.offset + 1}–${searchPagination.offset + allItems.length}${searchPagination.hasMore ? " · More available" : ""}`
+              : "No Results"
+          : `${count} ${count === 1 ? "item" : "items"}${isRecent && !paging?.complete ? " · More available" : ""}`;
     const pageSlots = paging
         ? Array.from(
               {
@@ -504,6 +696,17 @@ export default function FileBrowser({
             ? []
             : (pageSlots as DriveItem[])
         : filteredItems.slice(page * 100, (page + 1) * 100);
+    const selectedIds = useMemo(() => [...selected], [selected]);
+    const visibleIds = visibleItems.map((item) => item.id);
+    const { api: selection } = usePrimitive(fileSelection, {
+        value: selectedIds,
+        order: visibleIds,
+        onValueChange: (ids) => setSelected(new Set(ids)),
+    });
+    const resultOffset = searchPagination?.offset;
+    useEffect(() => {
+        selection.setAnchor(null);
+    }, [selection, listingKey, page, filter, sort, order, resultOffset]);
     const chosen = allItems.filter((item) => selected.has(item.id));
     const recentItems = useMemo(
         () =>
@@ -599,36 +802,93 @@ export default function FileBrowser({
         };
     }, [videoKey, shareRefreshKey]);
     const closeItemMenus = () => {
-        const trigger = document.activeElement
-            ?.closest(".item-actions")
-            ?.querySelector("summary");
+        const details =
+            document.activeElement?.closest<HTMLDetailsElement>(
+                ".item-actions",
+            );
+        const invoker = details && itemMenuInvoker(details);
         hideItemMenus();
-        trigger?.focus();
+        invoker?.focus({ preventScroll: true });
+    };
+    const openContextMenu = (
+        row: HTMLElement,
+        item: DriveItem,
+        pointer?: { x: number; y: number },
+    ) => {
+        const details = row.querySelector<HTMLDetailsElement>(".item-actions");
+        const invoker = row.querySelector<HTMLElement>(".item-name-button");
+        if (!details || !invoker) return false;
+        hideItemMenus();
+        contextAnchors.set(details, {
+            invoker,
+            pointer,
+            originalBounds: invoker.getBoundingClientRect(),
+        });
+        if (!isPublic && !selectionMode)
+            selection.choose(item.id, { reason: "item-press" });
+        details.open = true;
+        positionItemMenu(details);
+        details
+            .querySelector<HTMLElement>(
+                ".action-menu :is(button, a):not([disabled])",
+            )
+            ?.focus({ preventScroll: true });
+        return true;
     };
     const showDialog = (dialog: ActionDialogState) => {
         closeItemMenus();
         onDialog(dialog);
     };
-    const openPrimary = (
+    const openPrimary = (item: DriveItem) => {
+        if (isTrash) return;
+        setSelected(new Set());
+        setSelectionMode(null);
+        onOpen(item);
+    };
+    const clickItem = (
+        event: ReactMouseEvent<HTMLElement>,
         item: DriveItem,
-        keyboard = false,
-        doubleClick = false,
     ) => {
-        // Opening never enters selection mode. Explicit selection has the same
-        // behavior for touch, mouse and keyboard, without double-tap timing.
-        if (!isPublic && selectionMode) {
-            setSelected((current) => {
-                const next = new Set(current);
-                if (next.has(item.id)) next.delete(item.id);
-                else next.add(item.id);
-                return next;
-            });
-        } else if (
-            !isTrash &&
-            (pointerKind.current !== "mouse" || keyboard || doubleClick)
-        ) {
-            setSelected(new Set());
-            onOpen(item);
+        if ((event.target as Element).closest(ROW_CONTROL)) return;
+        const mouse = pointerKind.current === "mouse" && event.detail > 0;
+        const toggleKey = event.ctrlKey || event.metaKey;
+        if (
+            mouse &&
+            event.detail > 1 &&
+            selectionMode !== "manual" &&
+            !event.shiftKey &&
+            !toggleKey
+        )
+            return;
+
+        if (mouse) {
+            event.currentTarget
+                .querySelector<HTMLButtonElement>(".item-name-button")
+                ?.focus({ preventScroll: true });
+        }
+
+        const details = {
+            reason: "item-press" as const,
+            event: event.nativeEvent,
+        };
+        if (!isPublic && mouse && (event.shiftKey || toggleKey)) {
+            event.preventDefault();
+            const anchor = selection.anchor();
+            if (anchor && !visibleIds.includes(anchor))
+                selection.setAnchor(null);
+            if (event.shiftKey)
+                selection.extend(item.id, { ...details, additive: toggleKey });
+            else selection.toggle(item.id, details);
+            if (selectionMode !== "manual") setSelectionMode("shortcut");
+        } else if (!isPublic && selectionMode === "manual") {
+            selection.toggle(item.id, details);
+        } else if (mouse) {
+            if (!isPublic) {
+                selection.choose(item.id, details);
+                setSelectionMode(null);
+            }
+        } else {
+            openPrimary(item);
         }
     };
     useEffect(() => {
@@ -637,17 +897,28 @@ export default function FileBrowser({
                 hideItemMenus();
         };
         const reposition = (event: Event) => {
+            cancelTouchHold();
             if ((event.target as Element)?.closest?.(".action-menu")) return;
             document
                 .querySelectorAll<HTMLDetailsElement>(".item-actions[open]")
                 .forEach((details) => {
-                    const bounds = details
-                        .querySelector("summary")
+                    const context = contextAnchors.get(details);
+                    const bounds =
+                        itemMenuInvoker(details)?.getBoundingClientRect();
+                    const list = details
+                        .closest(".file-list-scroll")
                         ?.getBoundingClientRect();
                     if (
                         !bounds ||
-                        bounds.bottom < 0 ||
-                        bounds.top > window.innerHeight
+                        (context?.pointer &&
+                            (bounds.top !== context.originalBounds.top ||
+                                bounds.left !== context.originalBounds.left)) ||
+                        bounds.bottom <= Math.max(0, list?.top ?? 0) ||
+                        bounds.top >=
+                            Math.min(
+                                window.innerHeight,
+                                list?.bottom ?? window.innerHeight,
+                            )
                     ) {
                         details.open = false;
                     }
@@ -663,14 +934,7 @@ export default function FileBrowser({
             window.removeEventListener("scroll", reposition, true);
             hideItemMenus();
         };
-    }, []);
-    const toggle = (id: string) =>
-        setSelected((prev) => {
-            const next = new Set(prev);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
-            return next;
-        });
+    }, [cancelTouchHold]);
     const groupedGrid =
         layout === "grid" &&
         !searchPagination &&
@@ -690,7 +954,50 @@ export default function FileBrowser({
         <div
             className="file-browser"
             onPointerDownCapture={(event) => {
+                cancelTouchHold();
                 pointerKind.current = event.pointerType;
+                if (!event.isPrimary) return;
+                suppressHoldClick.current = false;
+                if (isPublic || selectionMode || event.pointerType !== "touch")
+                    return;
+                const target = event.target as Element;
+                if (target.closest(ROW_CONTROL)) return;
+                const row = target.closest<HTMLElement>(".file-row");
+                const itemId = row?.dataset.itemId;
+                if (!row || !itemId) return;
+                touchHold.current = {
+                    id: event.pointerId,
+                    x: event.clientX,
+                    y: event.clientY,
+                    timer: window.setTimeout(() => {
+                        if (!row.isConnected) return;
+                        suppressHoldClick.current = true;
+                        hideItemMenus();
+                        setSelected(new Set([itemId]));
+                        setSelectionMode("manual");
+                    }, TOUCH_HOLD_MS),
+                };
+            }}
+            onPointerMoveCapture={(event) => {
+                const hold = touchHold.current;
+                if (hold?.id !== event.pointerId) return;
+                if (
+                    Math.hypot(event.clientX - hold.x, event.clientY - hold.y) >
+                    TOUCH_MOVE_PX
+                )
+                    cancelTouchHold();
+            }}
+            onPointerCancelCapture={cancelTouchHold}
+            onPointerUpCapture={cancelTouchHold}
+            onContextMenuCapture={(event) => {
+                if (touchHold.current || suppressHoldClick.current)
+                    event.preventDefault();
+            }}
+            onClickCapture={(event) => {
+                if (!suppressHoldClick.current || event.detail === 0) return;
+                suppressHoldClick.current = false;
+                event.preventDefault();
+                event.stopPropagation();
             }}
         >
             <div
@@ -744,7 +1051,7 @@ export default function FileBrowser({
                                 className="text-button"
                                 onClick={() => {
                                     setSelected(new Set());
-                                    setSelectionMode(false);
+                                    setSelectionMode(null);
                                     requestAnimationFrame(() => {
                                         document
                                             .querySelector<HTMLButtonElement>(
@@ -840,45 +1147,25 @@ export default function FileBrowser({
                         </>
                     ) : (
                         <>
-                            <span className="file-item-count">
-                                {loading
-                                    ? isSearch
-                                        ? "Searching…"
-                                        : "Loading files…"
-                                    : searchPagination
-                                      ? allItems.length
-                                          ? "Showing " +
-                                            (searchPagination.offset + 1) +
-                                            "–" +
-                                            (searchPagination.offset +
-                                                allItems.length) +
-                                            (searchPagination.hasMore
-                                                ? " · More available"
-                                                : "")
-                                          : "No Results"
-                                      : isRecent
-                                        ? allItems.length +
-                                          (allItems.length === 1
-                                              ? " item"
-                                              : " items") +
-                                          (paging?.complete
-                                              ? ""
-                                              : " · More available")
-                                        : itemCount +
-                                          (itemCount === 1
-                                              ? " item"
-                                              : " items")}
-                                {isPublic ? " · Read-only" : ""}
-                            </span>
+                            {!narrow && (
+                                <span className="file-item-count">
+                                    {fileCountLabel}
+                                    {isPublic ? " · Read-only" : ""}
+                                </span>
+                            )}
                             <div className="file-toolbar-actions">
                                 {!isPublic && (
                                     <button
                                         type="button"
                                         className="text-button file-selection-toggle"
-                                        title="Select files and folders"
-                                        aria-pressed={selectionMode}
+                                        title={
+                                            compact
+                                                ? "Select files and folders"
+                                                : "Shift-click for a range. Ctrl-click or Command-click to toggle an item."
+                                        }
+                                        aria-pressed={!!selectionMode}
                                         onClick={() => {
-                                            setSelectionMode(!selectionMode);
+                                            setSelectionMode("manual");
                                             setSelected(new Set());
                                         }}
                                     >
@@ -903,32 +1190,32 @@ export default function FileBrowser({
                             </div>
                         </>
                     )}
-                    <div
+                    <ToggleGroup
                         className="file-view-toggle"
-                        role="group"
                         aria-label="File view"
+                        value={[layout]}
+                        deselectable={false}
+                        onValueChange={([next]) => {
+                            if (next) setView(next);
+                        }}
                     >
-                        <button
-                            type="button"
+                        <Toggle
+                            value="list"
                             className="icon-button"
                             aria-label="List view"
                             title="List view"
-                            aria-pressed={layout === "list"}
-                            onClick={() => setView("list")}
                         >
-                            <List size={18} />
-                        </button>
-                        <button
-                            type="button"
+                            <List size={16} aria-hidden="true" /> List
+                        </Toggle>
+                        <Toggle
+                            value="grid"
                             className="icon-button"
                             aria-label="Grid view"
                             title="Grid view"
-                            aria-pressed={layout === "grid"}
-                            onClick={() => setView("grid")}
                         >
-                            <LayoutGrid size={18} />
-                        </button>
-                    </div>
+                            <LayoutGrid size={16} aria-hidden="true" /> Grid
+                        </Toggle>
+                    </ToggleGroup>
                 </div>
             </div>
             {!isPublic && directory.read_only && (
@@ -941,42 +1228,83 @@ export default function FileBrowser({
                     and try changes.
                 </p>
             )}
-            {/* Server filters reload the list; keep their chips in place meanwhile. */}
-            {(!loading || (paging && (filter !== "all" || chipCounts))) &&
-                !error &&
-                (!chipCounts || chipCounts.size > 1 || filter !== "all") && (
-                    <div
-                        className="file-filters"
-                        role="group"
-                        aria-label="Filter by type"
-                    >
-                        {FILE_FILTERS.filter(
-                            ([value]) =>
-                                // Recent lists only files.
-                                !(isRecent && value === "folder") &&
-                                (value === "all" ||
-                                    !chipCounts ||
-                                    chipCounts.has(value) ||
-                                    value === filter),
-                        ).map(([value, label, Icon]) => (
-                            <button
-                                key={value}
-                                type="button"
-                                className="file-filter-chip"
-                                aria-pressed={filter === value}
-                                onClick={() =>
-                                    withViewTransition(() => {
-                                        setFilter(value);
-                                        setPage(0);
-                                    })
-                                }
+            {/* Keep the filter in place while server results reload. */}
+            {showTypeFilter && (
+                <div
+                    className="file-filters"
+                    role="group"
+                    aria-label="Filter by type"
+                >
+                    {availableFilters.map(([value, label, Icon]) => (
+                        <button
+                            key={value}
+                            type="button"
+                            className="file-filter-chip"
+                            aria-pressed={filter === value}
+                            onClick={() => changeFilter(value)}
+                        >
+                            {Icon && <Icon size={15} aria-hidden="true" />}
+                            {label}
+                        </button>
+                    ))}
+                </div>
+            )}
+            {(showTypeFilter || narrow) && (
+                <div className="file-compact-browse-bar">
+                    {showTypeFilter && (
+                        <Select
+                            items={availableFilters.map(([value, label]) => ({
+                                value,
+                                label: value === "all" ? "All types" : label,
+                            }))}
+                            value={filter}
+                            onValueChange={(value) => {
+                                if (value !== null)
+                                    changeFilter(value as FileFilter);
+                            }}
+                        >
+                            <SelectTrigger
+                                className="file-type-trigger"
+                                aria-label="Type"
+                                data-filtered={filter !== "all" || undefined}
                             >
-                                {Icon && <Icon size={15} aria-hidden="true" />}
-                                {label}
-                            </button>
-                        ))}
-                    </div>
-                )}
+                                <ListFilter size={16} aria-hidden="true" />
+                                <SelectValue />
+                                <ChevronDown size={14} aria-hidden="true" />
+                            </SelectTrigger>
+                            <SelectContent
+                                className="file-type-options"
+                                aria-label="File type"
+                                align="start"
+                                sideOffset={6}
+                                collisionPadding={12}
+                            >
+                                {availableFilters.map(([value, label]) => (
+                                    <SelectItem key={value} value={value}>
+                                        <span>
+                                            {value === "all"
+                                                ? "All types"
+                                                : label}
+                                        </span>
+                                        <SelectItemIndicator>
+                                            <Check
+                                                size={16}
+                                                aria-hidden="true"
+                                            />
+                                        </SelectItemIndicator>
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    )}
+                    {narrow && (
+                        <span className="file-item-count file-mobile-item-count">
+                            {fileCountLabel}
+                            {isPublic ? " · Read-only" : ""}
+                        </span>
+                    )}
+                </div>
+            )}
             <div
                 className={
                     "file-list-scroll" +
@@ -1366,38 +1694,70 @@ export default function FileBrowser({
                                                     "--i": Math.min(index, 14),
                                                 } as CSSProperties
                                             }
-                                            onClick={(event) => {
+                                            onClick={(event) =>
+                                                clickItem(event, item)
+                                            }
+                                            onContextMenu={(event) => {
                                                 if (
-                                                    (event.detail > 1 &&
-                                                        pointerKind.current ===
-                                                            "mouse" &&
-                                                        !selectionMode) ||
+                                                    pointerKind.current ===
+                                                        "touch" ||
                                                     (
                                                         event.target as Element
                                                     ).closest(
-                                                        "button,a,input,label,summary,details",
+                                                        "a,input,label,.action-menu",
                                                     )
                                                 )
                                                     return;
-                                                openPrimary(item);
+                                                if (
+                                                    openContextMenu(
+                                                        event.currentTarget,
+                                                        item,
+                                                        {
+                                                            x: event.clientX,
+                                                            y: event.clientY,
+                                                        },
+                                                    )
+                                                )
+                                                    event.preventDefault();
+                                            }}
+                                            onKeyDown={(event) => {
+                                                if (
+                                                    (event.key ===
+                                                        "ContextMenu" ||
+                                                        (event.shiftKey &&
+                                                            event.key ===
+                                                                "F10")) &&
+                                                    (
+                                                        event.target as Element
+                                                    ).closest(
+                                                        ".item-name-button, summary",
+                                                    ) &&
+                                                    openContextMenu(
+                                                        event.currentTarget,
+                                                        item,
+                                                    )
+                                                )
+                                                    event.preventDefault();
                                             }}
                                             onDoubleClick={(event) => {
                                                 if (
-                                                    selectionMode ||
+                                                    selectionMode ===
+                                                        "manual" ||
+                                                    event.shiftKey ||
+                                                    event.ctrlKey ||
+                                                    event.metaKey ||
                                                     pointerKind.current !==
                                                         "mouse" ||
                                                     (
                                                         event.target as Element
-                                                    ).closest(
-                                                        "a,input,label,summary,details,button:not(.item-name-button)",
-                                                    )
+                                                    ).closest(ROW_CONTROL)
                                                 )
                                                     return;
-                                                openPrimary(item, false, true);
+                                                openPrimary(item);
                                             }}
                                         >
-                                            <Cell className="name-cell">
-                                                {layout === "grid" && (
+                                            {layout === "grid" &&
+                                                item.type !== "folder" && (
                                                     <FileThumbnail
                                                         item={item}
                                                         progress={visibleVideoProgress?.get(
@@ -1407,6 +1767,7 @@ export default function FileBrowser({
                                                         disabled={isTrash}
                                                     />
                                                 )}
+                                            <Cell className="name-cell">
                                                 <div className="name-cell-content">
                                                     {!isPublic &&
                                                         selectionMode && (
@@ -1423,8 +1784,11 @@ export default function FileBrowser({
                                                                                 item.id,
                                                                             )}
                                                                             onChange={() =>
-                                                                                toggle(
+                                                                                selection.toggle(
                                                                                     item.id,
+                                                                                    {
+                                                                                        reason: "item-press",
+                                                                                    },
                                                                                 )
                                                                             }
                                                                         />
@@ -1460,26 +1824,10 @@ export default function FileBrowser({
                                                         <div className="file-title-line">
                                                             <button
                                                                 className="file-name item-name-button"
+                                                                aria-keyshortcuts="Shift+F10"
                                                                 title={
                                                                     item.name
                                                                 }
-                                                                onClick={(
-                                                                    event,
-                                                                ) => {
-                                                                    if (
-                                                                        event.detail >
-                                                                            1 &&
-                                                                        pointerKind.current ===
-                                                                            "mouse" &&
-                                                                        !selectionMode
-                                                                    )
-                                                                        return;
-                                                                    openPrimary(
-                                                                        item,
-                                                                        event.detail ===
-                                                                            0,
-                                                                    );
-                                                                }}
                                                             >
                                                                 {item.name}
                                                             </button>
@@ -1522,14 +1870,15 @@ export default function FileBrowser({
                                                                     </span>
                                                                 )}
                                                         </div>
-                                                        <span className="file-size-mobile">
-                                                            {item.type ===
-                                                            "folder"
-                                                                ? "Folder"
-                                                                : formatBytes(
-                                                                      item.size,
-                                                                  )}
-                                                        </span>
+                                                        {layout === "list" &&
+                                                            compact && (
+                                                                <MobileFileMetadata
+                                                                    item={item}
+                                                                    recent={
+                                                                        isRecent
+                                                                    }
+                                                                />
+                                                            )}
                                                         {(isSearch ||
                                                             isTrash ||
                                                             isStarred ||
@@ -1554,303 +1903,332 @@ export default function FileBrowser({
                                                         )}
                                                     </div>
                                                     {item.type === "folder" &&
-                                                        layout !== "grid" && (
+                                                        (layout === "grid" ||
+                                                            !compact) && (
                                                             <span className="sr-only">
                                                                 Folder
                                                             </span>
                                                         )}
                                                 </div>
                                             </Cell>
-                                            <Cell className="date-cell">
-                                                {formatDate(
-                                                    item.active_at ||
-                                                        item.upload_date,
-                                                )}
-                                            </Cell>
-                                            <Cell className="size-cell">
-                                                {item.type === "folder"
-                                                    ? layout === "grid"
-                                                        ? "Folder"
-                                                        : "—"
-                                                    : formatBytes(item.size)}
-                                                {layout === "grid" &&
-                                                    item.upload_date && (
-                                                        <span className="file-grid-date">
-                                                            {" · " +
-                                                                formatShortDate(
-                                                                    item.active_at ||
-                                                                        item.upload_date,
-                                                                )}
-                                                        </span>
-                                                    )}
-                                            </Cell>
+                                            {layout === "list" && (
+                                                <>
+                                                    <Cell className="date-cell">
+                                                        {formatDate(
+                                                            rowDate(
+                                                                item,
+                                                                isRecent,
+                                                            ),
+                                                        )}
+                                                    </Cell>
+                                                    <Cell className="size-cell">
+                                                        {item.type === "folder"
+                                                            ? "—"
+                                                            : formatBytes(
+                                                                  item.size,
+                                                              )}
+                                                    </Cell>
+                                                </>
+                                            )}
                                             <Cell className="actions-cell">
                                                 {isPublic ? (
-                                                    <a
-                                                        className="icon-button"
-                                                        href={
-                                                            item.type === "file"
-                                                                ? fileUrl(
-                                                                      itemPath(
-                                                                          item,
-                                                                      ),
-                                                                      auth,
-                                                                      true,
-                                                                  )
-                                                                : "/?" +
-                                                                  new URLSearchParams(
-                                                                      {
-                                                                          path:
-                                                                              "/share_" +
-                                                                              itemPath(
-                                                                                  item,
-                                                                              ).slice(
-                                                                                  1,
-                                                                              ),
-                                                                          auth,
-                                                                      },
-                                                                  )
-                                                        }
-                                                        download={
-                                                            item.type === "file"
-                                                                ? item.name
-                                                                : undefined
-                                                        }
-                                                        aria-label={
-                                                            (item.type ===
-                                                            "file"
-                                                                ? "Download "
-                                                                : "Open ") +
-                                                            item.name
-                                                        }
-                                                        onClick={
-                                                            item.type ===
-                                                            "folder"
-                                                                ? (event) => {
-                                                                      event.preventDefault();
-                                                                      onOpen(
-                                                                          item,
-                                                                      );
-                                                                  }
-                                                                : undefined
-                                                        }
-                                                    >
-                                                        {item.type ===
-                                                        "file" ? (
-                                                            <Download
-                                                                size={18}
-                                                            />
-                                                        ) : (
-                                                            <ChevronRight
-                                                                size={18}
-                                                            />
-                                                        )}
-                                                    </a>
-                                                ) : (
-                                                    <details
-                                                        className="item-actions"
-                                                        name="file-actions"
-                                                        onToggle={(event) => {
-                                                            if (
-                                                                event.target ===
-                                                                event.currentTarget
-                                                            )
-                                                                positionItemMenu(
-                                                                    event.currentTarget,
-                                                                );
-                                                        }}
-                                                    >
-                                                        <summary
+                                                    <>
+                                                        <a
                                                             className="icon-button"
+                                                            href={
+                                                                item.type ===
+                                                                "file"
+                                                                    ? fileUrl(
+                                                                          itemPath(
+                                                                              item,
+                                                                          ),
+                                                                          auth,
+                                                                          true,
+                                                                      )
+                                                                    : "/?" +
+                                                                      new URLSearchParams(
+                                                                          {
+                                                                              path:
+                                                                                  "/share_" +
+                                                                                  itemPath(
+                                                                                      item,
+                                                                                  ).slice(
+                                                                                      1,
+                                                                                  ),
+                                                                              auth,
+                                                                          },
+                                                                      )
+                                                            }
+                                                            download={
+                                                                item.type ===
+                                                                "file"
+                                                                    ? item.name
+                                                                    : undefined
+                                                            }
                                                             aria-label={
-                                                                "Actions for " +
+                                                                (item.type ===
+                                                                "file"
+                                                                    ? "Download "
+                                                                    : "Open ") +
                                                                 item.name
                                                             }
+                                                            onClick={
+                                                                item.type ===
+                                                                "folder"
+                                                                    ? (
+                                                                          event,
+                                                                      ) => {
+                                                                          event.preventDefault();
+                                                                          onOpen(
+                                                                              item,
+                                                                          );
+                                                                      }
+                                                                    : undefined
+                                                            }
                                                         >
-                                                            <MoreHorizontal
-                                                                size={20}
-                                                            />
-                                                        </summary>
-                                                        <div
-                                                            className="action-menu"
-                                                            popover="manual"
+                                                            {item.type ===
+                                                            "file" ? (
+                                                                <Download
+                                                                    size={18}
+                                                                />
+                                                            ) : (
+                                                                <ChevronRight
+                                                                    size={18}
+                                                                />
+                                                            )}
+                                                        </a>
+                                                        <ItemActions
+                                                            name={item.name}
+                                                            contextOnly
                                                         >
-                                                            {isTrash ? (
-                                                                <>
-                                                                    <button
-                                                                        onClick={() => {
-                                                                            closeItemMenus();
-                                                                            onAction(
-                                                                                "restore",
-                                                                                [
+                                                            <button
+                                                                onClick={() => {
+                                                                    closeItemMenus();
+                                                                    onOpen(
+                                                                        item,
+                                                                    );
+                                                                }}
+                                                            >
+                                                                <Eye
+                                                                    size={16}
+                                                                    aria-hidden="true"
+                                                                />{" "}
+                                                                Open
+                                                            </button>
+                                                            {item.type ===
+                                                                "file" && (
+                                                                <a
+                                                                    href={fileUrl(
+                                                                        itemPath(
+                                                                            item,
+                                                                        ),
+                                                                        auth,
+                                                                        true,
+                                                                    )}
+                                                                    download={
+                                                                        item.name
+                                                                    }
+                                                                    onClick={
+                                                                        closeItemMenus
+                                                                    }
+                                                                >
+                                                                    <Download
+                                                                        size={
+                                                                            16
+                                                                        }
+                                                                        aria-hidden="true"
+                                                                    />{" "}
+                                                                    Download
+                                                                </a>
+                                                            )}
+                                                        </ItemActions>
+                                                    </>
+                                                ) : (
+                                                    <ItemActions
+                                                        name={item.name}
+                                                    >
+                                                        {compact && (
+                                                            <p className="file-action-name">
+                                                                {item.name}
+                                                            </p>
+                                                        )}
+                                                        {isTrash ? (
+                                                            <>
+                                                                <button
+                                                                    onClick={() => {
+                                                                        closeItemMenus();
+                                                                        onAction(
+                                                                            "restore",
+                                                                            [
+                                                                                item,
+                                                                            ],
+                                                                        );
+                                                                    }}
+                                                                >
+                                                                    <RefreshCw
+                                                                        size={
+                                                                            16
+                                                                        }
+                                                                    />{" "}
+                                                                    Restore
+                                                                </button>
+                                                                <hr />
+                                                                <button
+                                                                    className="danger-text"
+                                                                    onClick={() =>
+                                                                        showDialog(
+                                                                            {
+                                                                                type: "delete",
+                                                                                items: [
                                                                                     item,
                                                                                 ],
-                                                                            );
-                                                                        }}
-                                                                    >
-                                                                        <RefreshCw
-                                                                            size={
-                                                                                16
-                                                                            }
-                                                                        />{" "}
-                                                                        Restore
-                                                                    </button>
-                                                                    <hr />
-                                                                    <button
-                                                                        className="danger-text"
-                                                                        onClick={() =>
-                                                                            showDialog(
-                                                                                {
-                                                                                    type: "delete",
-                                                                                    items: [
-                                                                                        item,
-                                                                                    ],
-                                                                                },
-                                                                            )
+                                                                            },
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    <Trash2
+                                                                        size={
+                                                                            16
                                                                         }
-                                                                    >
-                                                                        <Trash2
-                                                                            size={
-                                                                                16
-                                                                            }
-                                                                        />{" "}
-                                                                        Delete
-                                                                        Permanently
-                                                                    </button>
-                                                                </>
-                                                            ) : (
-                                                                <>
-                                                                    <button
-                                                                        onClick={() => {
-                                                                            closeItemMenus();
-                                                                            onOpen(
-                                                                                item,
-                                                                            );
-                                                                        }}
-                                                                    >
-                                                                        <Eye
-                                                                            size={
-                                                                                16
-                                                                            }
-                                                                        />{" "}
-                                                                        Open
-                                                                    </button>
-                                                                    {item.type ===
-                                                                        "file" && (
-                                                                        <>
-                                                                            <a
-                                                                                href={fileUrl(
-                                                                                    itemPath(
-                                                                                        item,
-                                                                                    ),
-                                                                                    "",
-                                                                                    true,
-                                                                                )}
-                                                                                download={
-                                                                                    item.name
-                                                                                }
-                                                                                onClick={
-                                                                                    closeItemMenus
-                                                                                }
-                                                                            >
-                                                                                <Download
-                                                                                    size={
-                                                                                        16
-                                                                                    }
-                                                                                />{" "}
-                                                                                Download
-                                                                            </a>
-                                                                            <button
-                                                                                role="menuitem"
-                                                                                onClick={() =>
-                                                                                    showDialog(
-                                                                                        {
-                                                                                            type: "download-link",
-                                                                                            item,
-                                                                                        },
-                                                                                    )
-                                                                                }
-                                                                            >
-                                                                                <Link
-                                                                                    size={
-                                                                                        16
-                                                                                    }
-                                                                                />{" "}
-                                                                                Copy
-                                                                                Download
-                                                                                Link
-                                                                            </button>
-                                                                            <button
-                                                                                role="menuitem"
-                                                                                title="Cache the whole file on the server for faster streaming and downloads"
-                                                                                onClick={() =>
-                                                                                    showDialog(
-                                                                                        {
-                                                                                            type: "prepare",
-                                                                                            item,
-                                                                                        },
-                                                                                    )
-                                                                                }
-                                                                            >
-                                                                                <Server
-                                                                                    size={
-                                                                                        16
-                                                                                    }
-                                                                                    aria-hidden="true"
-                                                                                />{" "}
-                                                                                Preload
-                                                                                file
-                                                                            </button>
-                                                                        </>
-                                                                    )}
-                                                                    <hr />
-                                                                    {onLocate && (
-                                                                        <button
-                                                                            onClick={() => {
-                                                                                closeItemMenus();
-                                                                                onLocate(
+                                                                    />{" "}
+                                                                    Delete
+                                                                    Permanently
+                                                                </button>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <button
+                                                                    onClick={() => {
+                                                                        closeItemMenus();
+                                                                        onOpen(
+                                                                            item,
+                                                                        );
+                                                                    }}
+                                                                >
+                                                                    <Eye
+                                                                        size={
+                                                                            16
+                                                                        }
+                                                                    />{" "}
+                                                                    Open
+                                                                </button>
+                                                                {item.type ===
+                                                                    "file" && (
+                                                                    <>
+                                                                        <a
+                                                                            href={fileUrl(
+                                                                                itemPath(
                                                                                     item,
-                                                                                );
-                                                                            }}
+                                                                                ),
+                                                                                "",
+                                                                                true,
+                                                                            )}
+                                                                            download={
+                                                                                item.name
+                                                                            }
+                                                                            onClick={
+                                                                                closeItemMenus
+                                                                            }
                                                                         >
-                                                                            <FolderOpen
+                                                                            <Download
+                                                                                size={
+                                                                                    16
+                                                                                }
+                                                                            />{" "}
+                                                                            Download
+                                                                        </a>
+                                                                        <button
+                                                                            onClick={() =>
+                                                                                showDialog(
+                                                                                    {
+                                                                                        type: "download-link",
+                                                                                        item,
+                                                                                    },
+                                                                                )
+                                                                            }
+                                                                        >
+                                                                            <Link
+                                                                                size={
+                                                                                    16
+                                                                                }
+                                                                            />{" "}
+                                                                            Copy
+                                                                            Download
+                                                                            Link
+                                                                        </button>
+                                                                        <button
+                                                                            title="Cache the whole file on the server for faster streaming and downloads"
+                                                                            onClick={() =>
+                                                                                showDialog(
+                                                                                    {
+                                                                                        type: "prepare",
+                                                                                        item,
+                                                                                    },
+                                                                                )
+                                                                            }
+                                                                        >
+                                                                            <Server
                                                                                 size={
                                                                                     16
                                                                                 }
                                                                                 aria-hidden="true"
                                                                             />{" "}
-                                                                            Show
-                                                                            in
-                                                                            Folder
+                                                                            Preload
+                                                                            file
                                                                         </button>
-                                                                    )}
-                                                                    {onStar && (
-                                                                        <button
-                                                                            onClick={() => {
-                                                                                closeItemMenus();
-                                                                                onStar(
-                                                                                    item,
-                                                                                );
-                                                                            }}
-                                                                        >
-                                                                            <Star
-                                                                                size={
-                                                                                    16
-                                                                                }
-                                                                                fill={
-                                                                                    item.starred
-                                                                                        ? "currentColor"
-                                                                                        : "none"
-                                                                                }
-                                                                            />
-                                                                            {item.starred
-                                                                                ? "Remove from Starred"
-                                                                                : "Add to Starred"}
-                                                                        </button>
-                                                                    )}
-                                                                    {isExtractableArchive(
-                                                                        item,
-                                                                    ) && (
+                                                                    </>
+                                                                )}
+                                                                <hr />
+                                                                {onLocate && (
+                                                                    <button
+                                                                        onClick={() => {
+                                                                            closeItemMenus();
+                                                                            onLocate(
+                                                                                item,
+                                                                            );
+                                                                        }}
+                                                                    >
+                                                                        <FolderOpen
+                                                                            size={
+                                                                                16
+                                                                            }
+                                                                            aria-hidden="true"
+                                                                        />{" "}
+                                                                        Show in
+                                                                        Folder
+                                                                    </button>
+                                                                )}
+                                                                {onStar && (
+                                                                    <button
+                                                                        onClick={() => {
+                                                                            closeItemMenus();
+                                                                            onStar(
+                                                                                item,
+                                                                            );
+                                                                        }}
+                                                                    >
+                                                                        <Star
+                                                                            size={
+                                                                                16
+                                                                            }
+                                                                            fill={
+                                                                                item.starred
+                                                                                    ? "currentColor"
+                                                                                    : "none"
+                                                                            }
+                                                                        />
+                                                                        {item.starred
+                                                                            ? "Remove from Starred"
+                                                                            : "Add to Starred"}
+                                                                    </button>
+                                                                )}
+                                                                {item.type ===
+                                                                    "file" &&
+                                                                    item.name
+                                                                        .toLowerCase()
+                                                                        .endsWith(
+                                                                            ".pdf",
+                                                                        ) && (
                                                                         <button
                                                                             disabled={
                                                                                 item.read_only ||
@@ -1859,22 +2237,25 @@ export default function FileBrowser({
                                                                             onClick={() =>
                                                                                 showDialog(
                                                                                     {
-                                                                                        type: "extract",
+                                                                                        type: "pdf-password",
                                                                                         item,
                                                                                     },
                                                                                 )
                                                                             }
                                                                         >
-                                                                            <FolderArchive
+                                                                            <LockKeyhole
                                                                                 size={
                                                                                     16
                                                                                 }
                                                                                 aria-hidden="true"
                                                                             />{" "}
-                                                                            Extract
-                                                                            archive
+                                                                            PDF
+                                                                            password
                                                                         </button>
                                                                     )}
+                                                                {isExtractableArchive(
+                                                                    item,
+                                                                ) && (
                                                                     <button
                                                                         disabled={
                                                                             item.read_only ||
@@ -1883,102 +2264,123 @@ export default function FileBrowser({
                                                                         onClick={() =>
                                                                             showDialog(
                                                                                 {
-                                                                                    type: "archive",
-                                                                                    items: [
-                                                                                        item,
-                                                                                    ],
+                                                                                    type: "extract",
+                                                                                    item,
                                                                                 },
                                                                             )
                                                                         }
                                                                     >
-                                                                        <Archive
+                                                                        <FolderArchive
                                                                             size={
                                                                                 16
                                                                             }
                                                                             aria-hidden="true"
                                                                         />{" "}
-                                                                        Create
-                                                                        ZIP
+                                                                        Extract
+                                                                        archive
                                                                     </button>
-                                                                    <button
-                                                                        onClick={() =>
-                                                                            showDialog(
-                                                                                {
-                                                                                    type: "rename",
-                                                                                    item,
-                                                                                },
-                                                                            )
-                                                                        }
-                                                                    >
-                                                                        <Pencil
-                                                                            size={
-                                                                                16
-                                                                            }
-                                                                        />{" "}
-                                                                        Rename
-                                                                    </button>
-                                                                    <button
-                                                                        onClick={() =>
-                                                                            showDialog(
-                                                                                {
-                                                                                    type: "move",
-                                                                                    items: [
-                                                                                        item,
-                                                                                    ],
-                                                                                },
-                                                                            )
-                                                                        }
-                                                                    >
-                                                                        <Move
-                                                                            size={
-                                                                                16
-                                                                            }
-                                                                        />{" "}
-                                                                        Move
-                                                                    </button>
-                                                                    <button
-                                                                        onClick={() =>
-                                                                            showDialog(
-                                                                                {
-                                                                                    type: "share",
-                                                                                    item,
-                                                                                },
-                                                                            )
-                                                                        }
-                                                                    >
-                                                                        <Link
-                                                                            size={
-                                                                                16
-                                                                            }
-                                                                        />{" "}
-                                                                        Share
-                                                                        Link
-                                                                    </button>
-                                                                    <hr />
-                                                                    <button
-                                                                        className="danger-text"
-                                                                        onClick={() => {
-                                                                            closeItemMenus();
-                                                                            onAction(
-                                                                                "trash",
-                                                                                [
+                                                                )}
+                                                                <button
+                                                                    disabled={
+                                                                        item.read_only ||
+                                                                        directory.read_only
+                                                                    }
+                                                                    onClick={() =>
+                                                                        showDialog(
+                                                                            {
+                                                                                type: "archive",
+                                                                                items: [
                                                                                     item,
                                                                                 ],
-                                                                            );
-                                                                        }}
-                                                                    >
-                                                                        <Trash2
-                                                                            size={
-                                                                                16
-                                                                            }
-                                                                        />{" "}
-                                                                        Move to
-                                                                        Trash
-                                                                    </button>
-                                                                </>
-                                                            )}
-                                                        </div>
-                                                    </details>
+                                                                            },
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    <Archive
+                                                                        size={
+                                                                            16
+                                                                        }
+                                                                        aria-hidden="true"
+                                                                    />{" "}
+                                                                    Create ZIP
+                                                                </button>
+                                                                <button
+                                                                    onClick={() =>
+                                                                        showDialog(
+                                                                            {
+                                                                                type: "rename",
+                                                                                item,
+                                                                            },
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    <Pencil
+                                                                        size={
+                                                                            16
+                                                                        }
+                                                                    />{" "}
+                                                                    Rename
+                                                                </button>
+                                                                <button
+                                                                    onClick={() =>
+                                                                        showDialog(
+                                                                            {
+                                                                                type: "move",
+                                                                                items: [
+                                                                                    item,
+                                                                                ],
+                                                                            },
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    <Move
+                                                                        size={
+                                                                            16
+                                                                        }
+                                                                    />{" "}
+                                                                    Move
+                                                                </button>
+                                                                <button
+                                                                    onClick={() =>
+                                                                        showDialog(
+                                                                            {
+                                                                                type: "share",
+                                                                                item,
+                                                                            },
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    <Link
+                                                                        size={
+                                                                            16
+                                                                        }
+                                                                    />{" "}
+                                                                    Share Link
+                                                                </button>
+                                                                <hr />
+                                                                <button
+                                                                    className="danger-text"
+                                                                    onClick={() => {
+                                                                        closeItemMenus();
+                                                                        onAction(
+                                                                            "trash",
+                                                                            [
+                                                                                item,
+                                                                            ],
+                                                                        );
+                                                                    }}
+                                                                >
+                                                                    <Trash2
+                                                                        size={
+                                                                            16
+                                                                        }
+                                                                    />{" "}
+                                                                    Move to
+                                                                    Trash
+                                                                </button>
+                                                            </>
+                                                        )}
+                                                    </ItemActions>
                                                 )}
                                             </Cell>
                                         </Row>,

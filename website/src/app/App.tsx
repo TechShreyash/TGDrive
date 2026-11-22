@@ -11,7 +11,10 @@ import {
     useState,
     useSyncExternalStore,
     type FormEvent,
+    type MouseEvent,
 } from "react";
+import { useMediaQuery } from "@mantine/hooks";
+import { UnstyledButton } from "@mantine/core";
 import {
     Star,
     Clock,
@@ -39,8 +42,13 @@ import {
     ShieldAlert,
     Menu,
     SlidersHorizontal,
+    Settings as SettingsIcon,
 } from "lucide-react";
 import { api, ApiError, errorMessage } from "../shared/api";
+import { useShareOpen } from "../features/shares/useShareOpen";
+import SharedUnlock, {
+    needsSharePassword,
+} from "../features/shares/SharedUnlock";
 import {
     itemLink,
     itemPath,
@@ -82,7 +90,10 @@ import PerformanceSettings from "../features/performance/PerformanceSettings";
 import Preloads from "../features/performance/Preloads";
 import PerformancePanel from "../features/performance/PerformancePanel";
 import FileBrowser, { type FileFilter } from "../features/files/FileBrowser";
-import { COMPACT_LAYOUT_QUERY } from "../shared/responsive";
+import {
+    COMPACT_LAYOUT_QUERY,
+    NAVIGATION_DRAWER_QUERY,
+} from "../shared/responsive";
 import type { FileSort } from "../features/files/SortMenu";
 import type { SortOrder } from "../features/files/fileSorting";
 import ActionDialog, {
@@ -135,13 +146,43 @@ function getLocation() {
                 : "",
     };
 }
-const TOOL_VIEWS: View[] = [
-    "performance",
-    "preloads",
-    "settings",
-    "connections",
-    "storage",
-];
+const TOOLS_NAVIGATION = {
+    label: "Tools and settings",
+    links: [
+        {
+            view: "performance",
+            label: "Performance",
+            icon: ChartNoAxesCombined,
+        },
+        { view: "preloads", label: "Preloads", icon: Server },
+        { view: "settings", label: "Settings", icon: SettingsIcon },
+        { view: "connections", label: "Connections", icon: Plug },
+        {
+            view: "storage",
+            label: "Backups",
+            icon: ShieldCheck,
+        },
+    ],
+} as const;
+const DRIVE_NAVIGATION = [
+    {
+        label: "Files",
+        links: [
+            { view: "files", label: "My Files", icon: FolderClosed },
+            { view: "recent", label: "Recent", icon: Clock },
+            { view: "starred", label: "Starred", icon: Star },
+            { view: "trash", label: "Trash", icon: Trash2, path: "/trash" },
+        ],
+    },
+    {
+        label: "Activity",
+        links: [
+            { view: "activity", label: "Transfers", icon: ArrowDownUp },
+            { view: "shares", label: "Shared Links", icon: Link },
+        ],
+    },
+    TOOLS_NAVIGATION,
+] as const;
 const ROOT_CRUMB = { path: "/", name: "My Files" };
 function folderDirectory(pages: FolderPages): Directory {
     const folder = pages.folder;
@@ -154,25 +195,34 @@ function folderDirectory(pages: FolderPages): Directory {
         ),
     };
 }
-const ADMIN_SETTING_TITLES: Record<string, string> = {
-    cache: "Cache and preloading",
-    transfers: "Uploads and Telegram",
-    regional: "Regional settings",
-};
+const SETTINGS_SECTIONS = [
+    { section: "cache", label: "Cache", icon: Database },
+    { section: "transfers", label: "Transfer limits", icon: Gauge },
+    { section: "regional", label: "Timezone", icon: Globe },
+] as const;
 function searchHistoryOffset() {
     const value = window.history.state?.tgdriveSearchOffset;
     return Number.isSafeInteger(value) && value >= 0 && value % 100 === 0
         ? value
         : 0;
 }
+function handleLocalLink(event: MouseEvent<HTMLAnchorElement>) {
+    if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+    ) {
+        return false;
+    }
+    event.preventDefault();
+    return true;
+}
+
 export default function App() {
     const [location, setLocation] = useState(getLocation);
-    const [toolsOpen, setToolsOpen] = useState(() =>
-        TOOL_VIEWS.includes(location.view),
-    );
-    useEffect(() => {
-        setToolsOpen(TOOL_VIEWS.includes(location.view));
-    }, [location.view, location.settingsSection]);
     const [authenticated, setAuthenticated] = useState<boolean | null>(null);
     const [admissionPaused, setAdmissionPaused] = useState(false);
     const [telegramWarning, setTelegramWarning] = useState<{
@@ -235,6 +285,7 @@ export default function App() {
     }>({ path: "", filter: "all" });
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState("");
+    const [lockedShare, setLockedShare] = useState("");
     const [refresh, setRefresh] = useState(0);
     const [metadataRefresh, setMetadataRefresh] = useState(0);
     const [dialog, setDialog] = useState<ActionDialogState | null>(null);
@@ -331,7 +382,6 @@ export default function App() {
     useEffect(() => {
         if (!mobileNav) return;
         const navigation = document.getElementById("drive-navigation");
-        if (navigation) navigation.scrollTop = 0;
         const controls = () =>
             Array.from(
                 navigation?.querySelectorAll<HTMLElement>(
@@ -341,7 +391,7 @@ export default function App() {
         (
             navigation?.querySelector<HTMLElement>('[aria-current="page"]') ||
             controls()[0]
-        )?.focus();
+        )?.focus({ preventScroll: true });
         const keydown = (event: KeyboardEvent) => {
             if (event.key === "Escape") {
                 event.preventDefault();
@@ -376,18 +426,20 @@ export default function App() {
         };
     }, [mobileNav]);
 
-    const [mobile, setMobile] = useState(
-        () => window.matchMedia(COMPACT_LAYOUT_QUERY).matches,
+    const mobile = useMediaQuery(COMPACT_LAYOUT_QUERY, false, {
+        getInitialValueInEffect: false,
+    });
+    const navigationDrawer = useMediaQuery(NAVIGATION_DRAWER_QUERY, false, {
+        getInitialValueInEffect: false,
+    });
+    const routineUploadsInTabBar = useMediaQuery(
+        "(max-height: 320px), (orientation: landscape) and (max-height: 440px) and (max-width: 1000px) and (pointer: coarse)",
+        false,
+        { getInitialValueInEffect: false },
     );
     useEffect(() => {
-        const media = window.matchMedia(COMPACT_LAYOUT_QUERY);
-        const update = () => {
-            setMobile(media.matches);
-            if (!media.matches) setMobileNav(false);
-        };
-        media.addEventListener("change", update);
-        return () => media.removeEventListener("change", update);
-    }, []);
+        if (!navigationDrawer) setMobileNav(false);
+    }, [navigationDrawer]);
     const [crumbs, setCrumbs] = useState([ROOT_CRUMB]);
     const [crumbsExpanded, setCrumbsExpanded] = useState(false);
     useEffect(() => setCrumbsExpanded(false), [location.path]);
@@ -406,6 +458,47 @@ export default function App() {
     const isPublic = currentPath.startsWith("/share_");
     const isSearch = currentPath.startsWith("/search_");
     const view = location.view;
+    const activeTool = TOOLS_NAVIGATION.links.find(
+        (tool) => tool.view === view,
+    );
+    const [toolsOverride, setToolsOverride] = useState<{
+        view: View;
+        expanded: boolean;
+    }>();
+    const toolsExpanded =
+        toolsOverride?.view === view
+            ? toolsOverride.expanded
+            : Boolean(activeTool);
+    const sidebarScroll = useRef<HTMLDivElement>(null);
+    useLayoutEffect(() => {
+        const scroll = sidebarScroll.current;
+        const active = scroll?.querySelector('[aria-current="page"]');
+        if (
+            (navigationDrawer && !mobileNav) ||
+            !scroll ||
+            !active?.getClientRects().length
+        )
+            return;
+        const reveal = () => {
+            const visible = scroll.getBoundingClientRect();
+            const link = active.getBoundingClientRect();
+            if (link.top < visible.top)
+                scroll.scrollTop += link.top - visible.top;
+            else if (link.bottom > visible.bottom)
+                scroll.scrollTop += link.bottom - visible.bottom;
+        };
+        reveal();
+        const resize = new ResizeObserver(reveal);
+        resize.observe(scroll);
+        return () => resize.disconnect();
+    }, [
+        authenticated,
+        config.recovery_only,
+        isPublic,
+        navigationDrawer,
+        mobileNav,
+        view,
+    ]);
     const searchLabel =
         view === "files"
             ? "Search Files and Folders"
@@ -448,6 +541,16 @@ export default function App() {
         isPaged ? [folderSort, folderOrder, folderFilter] : "",
     ]);
     const listingPending = displayedKey !== listingKey;
+    useShareOpen(
+        isPublic &&
+            view === "files" &&
+            !listingPending &&
+            !loading &&
+            !loadError &&
+            lockedShare !== location.auth,
+        location.auth,
+        currentPath,
+    );
     const directory = useMemo(
         () =>
             listingPending
@@ -495,6 +598,7 @@ export default function App() {
         items
             .filter(
                 (item) =>
+                    item.initiatedHere &&
                     ![
                         "completed",
                         "error",
@@ -932,6 +1036,8 @@ export default function App() {
         const failed = (error: ApiError, background: boolean) => {
             if (controller.signal.aborted) return false;
             if (error.name !== "AbortError") {
+                if (isPublic && needsSharePassword(error))
+                    setLockedShare(location.auth);
                 if (
                     background &&
                     (!error.status ||
@@ -1142,11 +1248,9 @@ export default function App() {
                         : view === "connections"
                           ? "Connections"
                           : view === "storage"
-                            ? "Storage and Backups"
+                            ? "Backups"
                             : view === "settings"
-                              ? ADMIN_SETTING_TITLES[
-                                    location.settingsSection
-                                ] || "Settings"
+                              ? "Settings"
                               : isSearch
                                 ? "Search Results"
                                 : isPublic
@@ -1421,15 +1525,14 @@ export default function App() {
         if (item.section) params.set("section", item.section);
         const current =
             view === item.view &&
-            (item.view !== "settings" ||
-                location.settingsSection === (item.section || "cache"));
+            (!item.section || location.settingsSection === item.section);
         return (
             <a
                 key={item.label}
                 href={"/" + (params.size ? "?" + params.toString() : "")}
                 aria-current={current ? "page" : undefined}
                 onClick={(event) => {
-                    event.preventDefault();
+                    if (!handleLocalLink(event)) return;
                     navigate(
                         item.path || "/",
                         item.view,
@@ -1509,7 +1612,8 @@ export default function App() {
                                                 })
                                             }
                                             onClick={(event) => {
-                                                event.preventDefault();
+                                                if (!handleLocalLink(event))
+                                                    return;
                                                 navigate(
                                                     crumb.path,
                                                     "files",
@@ -1660,7 +1764,7 @@ export default function App() {
                     )}
                 </form>
             )}
-            {!mobile && <ThemeControl />}
+            {(!navigationDrawer || isPublic) && !mobile && <ThemeControl />}
         </div>
     );
     const configGate = (
@@ -1700,6 +1804,17 @@ export default function App() {
             )}
         </div>
     );
+    if (isPublic && lockedShare && lockedShare === location.auth)
+        return (
+            <SharedUnlock
+                key={location.auth}
+                auth={location.auth}
+                onUnlocked={() => {
+                    setLockedShare("");
+                    reload();
+                }}
+            />
+        );
     if (authenticated === null && !isPublic)
         return (
             <div className="startup" role="status">
@@ -1761,30 +1876,35 @@ export default function App() {
             </div>
         );
     return (
-        <div className={"app-shell " + (isPublic ? "public-shell" : "")}>
+        <div
+            className={"app-shell " + (isPublic ? "public-shell" : "")}
+            data-tablet-drawer={
+                (navigationDrawer && !mobile && !isPublic) || undefined
+            }
+        >
             <a className="skip-link" href="#main-content">
-                Skip to Files
+                Skip to main content
             </a>
             {!isPublic && (
                 <aside
                     id="drive-navigation"
-                    role={mobile && mobileNav ? "dialog" : undefined}
-                    aria-modal={mobile && mobileNav ? true : undefined}
+                    role={navigationDrawer && mobileNav ? "dialog" : undefined}
+                    aria-modal={navigationDrawer && mobileNav ? true : undefined}
                     className={"sidebar " + (mobileNav ? "nav-open" : "")}
                     aria-label="Drive navigation"
-                    inert={mobile && !mobileNav}
+                    inert={navigationDrawer && !mobileNav}
+                    data-drawer={navigationDrawer || undefined}
                 >
                     <a
                         className="brand"
                         href="/"
                         onClick={(event) => {
-                            event.preventDefault();
-                            navigate("/");
+                            if (handleLocalLink(event)) navigate("/");
                         }}
                     >
                         <BrandLogo />
                     </a>
-                    {mobile && (
+                    {navigationDrawer && (
                         <div className="mobile-nav-heading">
                             <span className="mobile-drawer-brand">
                                 <BrandLogo />
@@ -1813,175 +1933,117 @@ export default function App() {
                     >
                         <Plus size={23} /> New
                     </button>
-                    <nav className="drive-nav">
-                        {navigationLink({
-                            view: "files",
-                            label: "My Files",
-                            icon: FolderClosed,
-                        })}
-                        {navigationLink({
-                            view: "recent",
-                            label: "Recent",
-                            icon: Clock,
-                        })}
-                        {navigationLink({
-                            view: "starred",
-                            label: "Starred",
-                            icon: Star,
-                        })}
-                        {navigationLink({
-                            view: "activity",
-                            label: "Transfers",
-                            icon: ArrowDownUp,
-                        })}
-                        {navigationLink({
-                            view: "shares",
-                            label: "Shared Links",
-                            icon: Link,
-                        })}
-                        {navigationLink({
-                            view: "trash",
-                            label: "Trash",
-                            icon: Trash2,
-                            path: "/trash",
-                        })}
-                        <details
-                            className="sidebar-tools"
-                            open={toolsOpen}
-                            onToggle={(event) =>
-                                setToolsOpen(event.currentTarget.open)
-                            }
-                        >
-                            <summary
-                                id="tools-settings-summary"
-                                aria-controls="tools-settings-content"
-                            >
-                                <SlidersHorizontal
-                                    size={19}
-                                    aria-hidden="true"
-                                />
-                                <span>Tools and settings</span>
-                                <ChevronRight
-                                    className="nav-disclosure"
-                                    size={16}
-                                    aria-hidden="true"
-                                />
-                            </summary>
-                            <div
-                                className="sidebar-tools-content"
-                                id="tools-settings-content"
-                                role="group"
-                                aria-labelledby="tools-settings-summary"
-                            >
+                    <div className="sidebar-scroll" ref={sidebarScroll}>
+                        <nav className="drive-nav" aria-label="Drive pages">
+                            {DRIVE_NAVIGATION.map((group) => (
                                 <div
-                                    className="monitor-nav"
+                                    className="nav-group"
                                     role="group"
-                                    aria-label="Monitor"
+                                    aria-label={group.label}
+                                    key={group.label}
                                 >
-                                    <span className="nav-section-label">
-                                        Monitor
-                                    </span>
-                                    {navigationLink({
-                                        view: "performance",
-                                        label: "Performance",
-                                        icon: ChartNoAxesCombined,
-                                    })}
-                                    {navigationLink({
-                                        view: "preloads",
-                                        label: "Preloads",
-                                        icon: Server,
-                                    })}
+                                    {group === TOOLS_NAVIGATION ? (
+                                        <>
+                                            <UnstyledButton
+                                                className="nav-tools-toggle"
+                                                aria-expanded={toolsExpanded}
+                                                aria-controls="drive-tool-links"
+                                                aria-description={
+                                                    activeTool && !toolsExpanded
+                                                        ? "Current page is " +
+                                                          activeTool.label
+                                                        : undefined
+                                                }
+                                                data-active={
+                                                    Boolean(
+                                                        activeTool &&
+                                                        !toolsExpanded,
+                                                    ) || undefined
+                                                }
+                                                onClick={() =>
+                                                    setToolsOverride({
+                                                        view,
+                                                        expanded:
+                                                            !toolsExpanded,
+                                                    })
+                                                }
+                                            >
+                                                <SlidersHorizontal
+                                                    size={18}
+                                                    aria-hidden="true"
+                                                />
+                                                {group.label}
+                                                <ChevronRight
+                                                    size={15}
+                                                    aria-hidden="true"
+                                                />
+                                            </UnstyledButton>
+                                            <div
+                                                id="drive-tool-links"
+                                                className="nav-tool-links"
+                                                hidden={!toolsExpanded}
+                                            >
+                                                {group.links.map(
+                                                    navigationLink,
+                                                )}
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <span
+                                                className="nav-section-label"
+                                                aria-hidden="true"
+                                            >
+                                                {group.label}
+                                            </span>
+                                            {group.links.map(navigationLink)}
+                                        </>
+                                    )}
                                 </div>
-                                <div
-                                    className="admin-nav"
-                                    role="group"
-                                    aria-label="Configuration"
+                            ))}
+                        </nav>
+                        <div className="sidebar-bottom">
+                            {config.demo_data && (
+                                <small className="demo-data-label">
+                                    Local demo · sample content and metrics
+                                </small>
+                            )}
+                            <div className="sidebar-support">
+                                <a
+                                    className="sidebar-help"
+                                    href="https://github.com/TechShreyash/TGDrive/blob/main/docs/README.md"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
                                 >
-                                    <span className="nav-section-label">
-                                        Configuration
-                                    </span>
-                                    {navigationLink({
-                                        view: "settings",
-                                        section: "cache",
-                                        label: "Cache settings",
-                                        icon: Database,
-                                    })}
-                                    {navigationLink({
-                                        view: "settings",
-                                        section: "transfers",
-                                        label: "Transfer limits",
-                                        icon: Gauge,
-                                    })}
-                                    {navigationLink({
-                                        view: "settings",
-                                        section: "regional",
-                                        label: "Timezone",
-                                        icon: Globe,
-                                    })}
-                                </div>
-                                <div
-                                    className="admin-nav"
-                                    role="group"
-                                    aria-label="Management"
+                                    <BookOpen size={18} aria-hidden="true" />{" "}
+                                    Documentation
+                                </a>
+                                <a
+                                    className="sidebar-project"
+                                    href="https://github.com/TechShreyash/TGDrive"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    aria-label="TGDrive on GitHub"
+                                    title="View TGDrive on GitHub"
                                 >
-                                    <span className="nav-section-label">
-                                        Management
-                                    </span>
-                                    {navigationLink({
-                                        view: "connections",
-                                        label: "Connections",
-                                        icon: Plug,
-                                    })}
-                                    {navigationLink({
-                                        view: "storage",
-                                        label: "Storage and Backups",
-                                        icon: ShieldCheck,
-                                    })}
-                                </div>
+                                    <GitHubMark />
+                                </a>
                             </div>
-                        </details>
-                    </nav>
-                    <div className="sidebar-bottom">
-                        {config.demo_data && (
-                            <small className="demo-data-label">
-                                Local demo · sample content and metrics
-                            </small>
-                        )}
-                        <div className="sidebar-support">
-                            <a
-                                className="sidebar-help"
-                                href="https://github.com/TechShreyash/TGDrive/blob/main/docs/README.md"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                            >
-                                <BookOpen size={18} aria-hidden="true" />{" "}
-                                Documentation
-                            </a>
-                            <a
-                                className="sidebar-project"
-                                href="https://github.com/TechShreyash/TGDrive"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                aria-label="TGDrive on GitHub"
-                                title="View TGDrive on GitHub"
-                            >
-                                <GitHubMark />
-                            </a>
+                            <SidebarLogout
+                                onLoggedOut={() => {
+                                    setMobileNav(false);
+                                    setNewOpen(false);
+                                    endSession();
+                                    notify(
+                                        "Logged out. Server transfers continue.",
+                                    );
+                                }}
+                            />
                         </div>
-                        <SidebarLogout
-                            onLoggedOut={() => {
-                                setMobileNav(false);
-                                setNewOpen(false);
-                                endSession();
-                                notify(
-                                    "Logged out. Server transfers continue.",
-                                );
-                            }}
-                        />
                     </div>
                 </aside>
             )}
-            {mobile && mobileNav && (
+            {navigationDrawer && mobileNav && (
                 <button
                     className="nav-dismiss"
                     tabIndex={-1}
@@ -1993,7 +2055,7 @@ export default function App() {
                 id="main-content"
                 className="main-content"
                 tabIndex={-1}
-                inert={mobile && mobileNav}
+                inert={navigationDrawer && mobileNav}
                 onDragOver={(event) => {
                     if (event.dataTransfer.types.includes("Files"))
                         event.preventDefault();
@@ -2028,7 +2090,7 @@ export default function App() {
                     addFiles(Array.from(event.dataTransfer.files));
                 }}
             >
-                <header className="topbar" hidden={!mobile && !isPublic}>
+                <header className="topbar" hidden={!navigationDrawer && !isPublic}>
                     {isPublic ? (
                         <a href="/" className="brand">
                             <BrandLogo />
@@ -2051,14 +2113,13 @@ export default function App() {
                             </button>
                         </>
                     )}
-                    {mobile && !isPublic && (
+                    {navigationDrawer && !isPublic && (
                         <>
                             <a
                                 className="mobile-brand"
                                 href="/"
                                 onClick={(event) => {
-                                    event.preventDefault();
-                                    navigate("/");
+                                    if (handleLocalLink(event)) navigate("/");
                                 }}
                             >
                                 <BrandLogo size="compact" />
@@ -2066,18 +2127,20 @@ export default function App() {
                             {view === "files" && !isSearch && !dialog && (
                                 <button
                                     id="compact-new-button"
+                                    type="button"
                                     disabled={admissionPaused}
                                     className="mobile-new primary-button"
+                                    aria-label="New"
                                     onClick={() => setNewOpen(!newOpen)}
                                     aria-expanded={newOpen}
                                     aria-controls="new-menu"
                                 >
-                                    <Plus size={18} /> New
+                                    <Plus size={22} aria-hidden="true" />
                                 </button>
                             )}
                         </>
                     )}
-                    {mobile && <ThemeControl />}
+                    {(mobile || (navigationDrawer && !isPublic)) && <ThemeControl />}
                     {isPublic && (
                         <span className="public-label">
                             <Globe size={16} /> Read-Only Shared Folder
@@ -2133,6 +2196,16 @@ export default function App() {
                         </div>
                     )}
                     {!isFiles && pageHeading}
+                    {!isPublic && view === "settings" && (
+                        <nav
+                            className="settings-sections"
+                            aria-label="Settings sections"
+                        >
+                            {SETTINGS_SECTIONS.map((entry) =>
+                                navigationLink({ ...entry, view: "settings" }),
+                            )}
+                        </nav>
+                    )}
                     {!isPublic && view === "trash" && (
                         <DeletionNotice
                             jobs={deletionProgress.jobs}
@@ -2335,7 +2408,6 @@ export default function App() {
                         />
                     ) : view === "performance" ? (
                         <PerformancePanel
-                            onNotice={notify}
                             maxFileSizeBytes={config.max_file_size}
                         />
                     ) : ["connections", "storage", "settings"].includes(
@@ -2411,10 +2483,23 @@ export default function App() {
                         </Activity>
                     )}
                 </section>
+                {!mobile &&
+                    !isPublic &&
+                    ["files", "trash", "shares"].includes(view) && (
+                        <TransferPanel
+                            pageContext={view}
+                            items={items}
+                            onLocate={(item, folder) =>
+                                void locateTransfer(item, folder)
+                            }
+                            onError={(message) => notify(message, true)}
+                        />
+                    )}
                 {mobile &&
                     !isPublic &&
                     view !== "activity" &&
-                    (mobileActiveCount > 0 || mobileUploadIssues) && (
+                    (mobileUploadIssues ||
+                        (!routineUploadsInTabBar && mobileActiveCount > 0)) && (
                         <button
                             className="mobile-transfer-status"
                             onClick={() => navigate("/", "activity")}
@@ -2422,12 +2507,12 @@ export default function App() {
                         >
                             <Upload size={18} aria-hidden="true" />
                             <span>
-                                {mobileActiveCount > 0
-                                    ? mobileActiveCount +
+                                {mobileUploadIssues
+                                    ? "Uploads need attention"
+                                    : mobileActiveCount +
                                       (mobileActiveCount === 1
                                           ? " upload in progress"
-                                          : " uploads in progress")
-                                    : "Uploads need attention"}
+                                          : " uploads in progress")}
                             </span>
                             <ChevronRight size={18} aria-hidden="true" />
                         </button>
@@ -2493,18 +2578,6 @@ export default function App() {
                     </nav>
                 )}
             </main>
-            {!mobile &&
-                !isPublic &&
-                ["files", "trash", "shares"].includes(view) && (
-                    <TransferPanel
-                        pageContext={view}
-                        items={items}
-                        onLocate={(item, folder) =>
-                            void locateTransfer(item, folder)
-                        }
-                        onError={(message) => notify(message, true)}
-                    />
-                )}
             {newOpen && (
                 <>
                     <button

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Input } from "@ui-sdk/react/input";
 
 /** Parses a typed page number; null when it is not a whole number. */
 export function parsePage(text: string, total: number): number | null {
@@ -26,7 +27,7 @@ export default function PageJump({
         if (page !== null && page !== current) onJump(page);
     }
     return (
-        <input
+        <Input
             id={id}
             className="page-jump"
             type="text"
@@ -37,9 +38,11 @@ export default function PageJump({
             placeholder="–"
             value={draft ?? (total < 1 ? "" : String(current))}
             onFocus={(event) => event.currentTarget.select()}
-            onChange={(event) =>
-                setDraft(event.target.value.replace(/\D/g, "").slice(0, 6))
-            }
+            onValueChange={(value, details) => {
+                const text = value.trim();
+                if (/^\d*$/.test(text)) setDraft(text.slice(0, 6));
+                else details.cancel();
+            }}
             onBlur={commit}
             onKeyDown={(event) => {
                 if (event.key === "Enter") {

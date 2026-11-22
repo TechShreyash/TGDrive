@@ -154,6 +154,9 @@ async def test_restart_preserves_guard_deadline_and_sends_only_once(
         await resumed.recover()
         recovered = resumed.registry.get(record.id)
         assert recovered.context["lineage_retry_at"] == deadline
+        assert recovered.status == TransferStatus.ERROR
+        assert recovered.task is None
+        await resumed.retry_job(record.id)
         await asyncio.sleep(0.01)
         assert not client.sent
         assert recovered.task is not None

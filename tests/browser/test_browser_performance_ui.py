@@ -289,8 +289,8 @@ def test_cache_inventory_filters_verified_coverage_and_clear_actions(server, des
         if width == 320 and theme == "dark":
             brand = page.locator(".mobile-brand .brand-logo")
             expect(brand.locator("img:visible")).to_have_count(1)
-            expect(brand.locator(".brand-logo-dark")).not_to_be_visible()
-            expect(brand.locator(".brand-logo-icon")).to_be_visible()
+            expect(brand.locator(".brand-logo-dark")).to_be_visible()
+            expect(brand.locator(".brand-logo-icon")).not_to_be_visible()
         if width <= 640:
             selector = page.get_by_role("combobox", name="Filter cached entries")
             selector.select_option("ready")
@@ -378,9 +378,23 @@ def test_cache_settings_groups_and_scoped_save(server, desktop):
     ).to_be_visible()
     limits = page.get_by_role("group", name="Media cache limits", exact=True)
     automatic = page.get_by_role("group", name="Automatic preloading", exact=True)
-    for settings_width in (1440, 390):
+    for settings_width, theme in ((1440, "dark"), (390, "light")):
         page.set_viewport_size({"width": settings_width, "height": 900})
+        set_appearance(page, theme)
         page.evaluate("document.fonts.ready")
+        mode = limits.get_by_label("Media disk cache mode", exact=True)
+        expect(mode).to_have_css(
+            "background-color",
+            page.locator(".workspace").evaluate(
+                "node => getComputedStyle(node).backgroundColor"
+            ),
+        )
+        mode.focus()
+        page.keyboard.press("Tab")
+        page.keyboard.press("Shift+Tab")
+        expect(mode).to_be_focused()
+        expect(mode).to_have_css("outline-width", "2px")
+        mode.blur()
         legend = limits.locator(":scope > legend").bounding_box()
         help_line = limits.locator(":scope > .settings-help").first.bounding_box()
         assert help_line["x"] == pytest.approx(legend["x"], abs=1)
@@ -404,8 +418,11 @@ def test_cache_settings_groups_and_scoped_save(server, desktop):
     expect(
         page.get_by_role("button", name="Save Performance Settings")
     ).to_be_disabled()
-    preload = page.get_by_role("switch", name=re.compile(r"^Preload during playback"))
+    preload = page.get_by_role("switch", name="Preload during playback", exact=True)
     expect(preload).to_be_checked()
+    expect(preload).to_have_accessible_description(
+        re.compile(r"^Adapts extra server caching to media playback\.")
+    )
     preload.locator("xpath=ancestor::label").click()
     expect(page.get_by_text("Unsaved changes", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="Save Performance Settings")).to_be_enabled()
@@ -556,29 +573,56 @@ def measured_snapshot(page, server):
 
 
 @pytest.mark.parametrize(
-    "width,theme", [(1920, "light"), (1440, "dark"), (390, "light"), (320, "dark")]
+    "width,theme",
+    [(1920, "light"), (1440, "dark"), (820, "light"), (390, "light"), (320, "dark")],
 )
-def test_two_performance_views_keep_layout_and_measured_activity(
+def test_performance_views_keep_layout_and_measured_activity(
     server, desktop, width, theme
 ):
     _, page = desktop
-    page.set_viewport_size({"width": width, "height": 960 if width > 600 else 844})
+    page.set_viewport_size({"width": width, "height": 695 if width > 1160 else 844})
     page.add_init_script(f"localStorage.setItem('tgdrive.appearance','{theme}')")
     page.emulate_media(reduced_motion="reduce")
     login(page, server.url)
     snapshot = measured_snapshot(page, server)
+    snapshot["telegram"]["queued"] = 2
+    snapshot["telegram"]["accounts"][0]["cooldown_seconds"] = 3
+    snapshot["telegram"]["accounts"][0]["requests"]["queued"] = 2
+    for index, sample in enumerate(snapshot["server"]["history"]):
+        sample.update(
+            cpu_percent=30 + index,
+            cpu_scope="cgroup",
+            memory_bytes=(128 + index) * 1024**2,
+        )
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
-    overview = page.get_by_role("tabpanel", name="Performance", exact=True)
-    expect(page.get_by_role("tab", name="Performance", exact=True)).to_have_attribute(
+    overview = page.get_by_role("tabpanel", name="Overview", exact=True)
+    expect(page.get_by_role("tab", name="Overview", exact=True)).to_have_attribute(
         "aria-selected", "true"
     )
-    expect(overview.locator(".network-readings dd")).to_have_text(["16 Mbps", "8 Mbps"])
-    expect(page.get_by_role("tab")).to_have_text(["Performance", "Accounts"])
+    readings = overview.locator(".network-readings dd")
+    expect(readings).to_have_text(["16 Mbps", "8 Mbps"])
+    expect(readings.first).to_have_css("font-size", "18px")
+    expect(page.get_by_role("tab")).to_have_text(
+        ["Overview", "Server resources", "Tuning", "Accounts"]
+    )
     expect(overview.locator(".performance-network-chart")).to_have_count(1)
     expect(overview.locator(".network-trend")).to_have_count(0)
-    expect(overview.get_by_role("heading", name="Current activity")).to_be_visible()
-    expect(overview.get_by_role("region", name="What is waiting")).to_be_visible()
+    activity = overview.get_by_role("region", name="Transfer activity")
+    waiting = overview.get_by_role("region", name="Current waits")
+    expect(activity).to_be_visible()
+    expect(waiting).to_be_visible()
+    expect(
+        waiting.get_by_text("2 operations queued · 1 account on hold", exact=True)
+    ).to_have_count(1)
+    expect(activity).not_to_contain_text("Telegram")
+    waiting_box = waiting.bounding_box()
+    activity_box = activity.bounding_box()
+    assert waiting_box and activity_box
+    if width >= 1080:
+        assert waiting_box["x"] >= activity_box["x"] + activity_box["width"]
+    else:
+        assert waiting_box["y"] >= activity_box["y"] + activity_box["height"]
     upload_color = overview.locator("polyline.performance-plot-active").first.evaluate(
         "n=>getComputedStyle(n).stroke"
     )
@@ -590,9 +634,19 @@ def test_two_performance_views_keep_layout_and_measured_activity(
     workspace.evaluate("n=>n.scrollTo({top:0,behavior:'instant'})")
     expect(workspace).to_have_js_property("scrollTop", 0)
     page.screenshot(
-        path=ARTIFACTS / f"two-tab-performance-{width}-{theme}.png",
+        path=ARTIFACTS / f"performance-overview-{width}-{theme}.png",
         animations="disabled",
     )
+    if width <= 820:
+        tabs = page.get_by_role("tablist", name="Performance views").bounding_box()
+        expect(page.get_by_role("button", name="Refresh Performance")).to_have_count(0)
+        assert tabs and tabs["x"] + tabs["width"] <= width
+        tabs_center = tabs["y"] + tabs["height"] / 2
+        for tab in page.get_by_role("tab").all():
+            bounds = tab.bounding_box()
+            assert bounds and bounds["height"] >= 44
+            assert abs(bounds["y"] + bounds["height"] / 2 - tabs_center) <= 1
+
     transfers_link = overview.get_by_role("link", name="Open Transfers", exact=True)
     transfers_link.focus()
     expect(transfers_link).to_be_focused()
@@ -603,7 +657,8 @@ def test_two_performance_views_keep_layout_and_measured_activity(
             <= footer.bounding_box()["y"]
         )
 
-    page.get_by_role("tab", name="Accounts", exact=True).click()
+    waiting.get_by_role("button", name="View Accounts").press("Enter")
+    expect(page.get_by_role("tab", name="Accounts", exact=True)).to_be_focused()
     accounts = page.get_by_role("tabpanel", name="Accounts", exact=True)
     expect(
         accounts.get_by_role("cell", name="347 MiB uploaded 0 B downloaded", exact=True)
@@ -615,22 +670,40 @@ def test_two_performance_views_keep_layout_and_measured_activity(
         accounts.get_by_role("heading", name="Waiting for Telegram", exact=True)
     ).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
+    assert page.evaluate("document.scrollingElement.scrollHeight <= innerHeight + 1")
     workspace.evaluate("n=>n.scrollTo({top:0,behavior:'instant'})")
     page.screenshot(
         path=ARTIFACTS / f"final-accounts-{width}-{theme}.png", animations="disabled"
     )
-    page.get_by_role("tab", name="Performance", exact=True).click()
-    resources = page.get_by_role("tabpanel", name="Performance", exact=True)
-    expect(
-        resources.get_by_role("heading", name="Charts and history", exact=True)
-    ).to_be_visible()
+    page.get_by_role("tab", name="Overview", exact=True).click()
+    resources = page.get_by_role("tabpanel", name="Overview", exact=True)
+    history = resources.get_by_role("heading", name="Charts and history", exact=True)
+    expect(history).to_be_visible()
+    history.evaluate(
+        "node => node.scrollIntoView({block: 'start', behavior: 'instant'})"
+    )
+    assert page.evaluate("scrollY") == 0
+    assert page.evaluate("document.scrollingElement.scrollHeight <= innerHeight + 1")
     network_card = resources.locator(".performance-network-chart")
     cpu_card = resources.locator(".performance-resource-charts > section").first
-    assert (
-        cpu_card.bounding_box()["y"]
-        - (network_card.bounding_box()["y"] + network_card.bounding_box()["height"])
-        >= 16
-    )
+    ram_card = resources.locator(".performance-resource-charts > section").last
+    network_box = network_card.bounding_box()
+    cpu_box = cpu_card.bounding_box()
+    ram_box = ram_card.bounding_box()
+    assert network_box and cpu_box and ram_box
+    assert abs(cpu_box["x"] - ram_box["x"]) <= 1
+    assert ram_box["y"] - (cpu_box["y"] + cpu_box["height"]) >= 12
+    for card in (network_card, cpu_card, ram_card):
+        plot = card.locator(".performance-chart-plot > svg").bounding_box()
+        times = card.locator(".performance-chart-times").bounding_box()
+        assert plot and times and plot["y"] + plot["height"] <= times["y"] + 1
+    if width >= 1160:
+        assert abs(network_box["y"] - cpu_box["y"]) <= 1
+        assert cpu_box["x"] - (network_box["x"] + network_box["width"]) >= 12
+    else:
+        assert abs(network_box["x"] - cpu_box["x"]) <= 1
+        assert cpu_box["y"] - (network_box["y"] + network_box["height"]) >= 12
+    expect(network_card.locator(".performance-chart-plot circle")).to_have_count(0)
     expect(network_card).to_contain_text("Upload from server")
     expect(network_card).to_contain_text("Download to server")
     expect(network_card.locator("polyline.performance-plot-active").first).to_have_css(
@@ -643,12 +716,16 @@ def test_two_performance_views_keep_layout_and_measured_activity(
         "n=>getComputedStyle(n).strokeDasharray.split(/[ ,]+/).map(parseFloat)"
     )
     assert dash == [5, 4]
-    legend = network_card.locator(".performance-chart-legend .chart-series-secondary")
+    legend = network_card.locator(".network-readings .chart-series-secondary")
     assert (
         legend.evaluate("n=>getComputedStyle(n,'::before').borderTopStyle") == "dashed"
     )
 
-    readout = network_card.locator(".performance-chart-readout")
+    readout = network_card.locator(".performance-chart-tooltip")
+    expect(readout).to_have_count(0)
+    inspect = network_card.get_by_role("button", name="Inspect Server network samples")
+    inspect.press("Home")
+    expect(readout).to_be_visible()
     assert (
         readout.locator(".chart-series-primary").evaluate(
             "n=>getComputedStyle(n,'::before').backgroundColor"
@@ -664,27 +741,106 @@ def test_two_performance_views_keep_layout_and_measured_activity(
         secondary_marker.evaluate("n=>getComputedStyle(n,'::before').borderTopStyle")
         == "dashed"
     )
+    inspect.press("Escape")
+    expect(readout).to_have_count(0)
+    expect(inspect).to_be_focused()
 
     expect(network_card.locator(".performance-chart-axis")).not_to_contain_text("MiB/s")
 
-    expect(resources.get_by_text("TGDrive process", exact=True)).to_be_visible()
-    expect(resources.get_by_text("1.5 CPU equivalents", exact=True)).to_be_visible()
-    expect(resources.get_by_text("Memory cache", exact=True)).to_be_visible()
+    page.get_by_role("tab", name="Server resources", exact=True).click()
+    storage = page.get_by_role("tabpanel", name="Server resources", exact=True)
+    expect(storage.get_by_text("RAM cache", exact=True)).to_be_visible()
+    memory_detail = storage.locator(".performance-memory-details dd + dd").first
+    expect(memory_detail).to_have_css("font-size", "13px")
+    expect(storage.locator(".performance-facts > div > :not(dt, dd)")).to_have_count(0)
+    expect(storage.get_by_text("TGDrive process", exact=True)).to_be_visible()
+    expect(storage.get_by_text("1.5 CPU equivalents", exact=True)).to_be_visible()
+    page.get_by_role("tab", name="Tuning", exact=True).click()
+    diagnostics = page.get_by_role("tabpanel", name="Tuning", exact=True)
     expect(
-        resources.get_by_role("heading", name="All-time totals", exact=True)
+        diagnostics.get_by_role("heading", name="All-time totals", exact=True)
     ).to_be_visible()
-    tuning = resources.get_by_role("region", name="Automatic tuning", exact=True)
-    totals = resources.locator(".performance-all-time")
+    tuning = diagnostics.get_by_role("region", name="Automatic tuning", exact=True)
+    totals = diagnostics.get_by_role("region", name="All-time totals", exact=True)
+    expect(totals.get_by_role("table")).to_be_visible()
+    expect(diagnostics.locator("details")).to_have_count(0)
     assert (
         totals.bounding_box()["y"]
         - (tuning.bounding_box()["y"] + tuning.bounding_box()["height"])
-        >= 20
+        >= 16
     )
     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
     workspace.evaluate("n=>n.scrollTo({top:0,behavior:'instant'})")
     page.screenshot(
-        path=ARTIFACTS / f"two-tab-resources-{width}-{theme}.png", animations="disabled"
+        path=ARTIFACTS / f"performance-tuning-{width}-{theme}.png",
+        animations="disabled",
     )
+
+
+@pytest.mark.parametrize(
+    "width,height,theme", [(1536, 695, "dark"), (390, 844, "light")]
+)
+def test_showcase_tuning_reports_effective_values_and_retains_stale_reading(
+    monkeypatch, request, desktop, width, height, theme
+):
+    monkeypatch.setenv("TGDRIVE_UI_SHOWCASE", "1")
+    server = request.getfixturevalue("server")
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": height})
+    page.add_init_script(f"localStorage.setItem('tgdrive.appearance','{theme}')")
+    login(page, server.url)
+    response = page.request.get(server.url + "/api/v1/performance")
+    assert response.ok
+    snapshot = response.json()
+    assert snapshot["tuning"]["values"]["cache_disk_bytes"] == 6 * 1024**3
+    assert snapshot["tuning"]["values"]["staging_budget_bytes"] == 12 * 1024**3
+    assert snapshot["tuning"]["measurements"]["disk_effective_free"] == 14 * 1024**3
+
+    page.clock.install()
+    page.goto(server.url + "/?view=performance")
+    page.get_by_role("tab", name="Tuning", exact=True).click()
+    tuning = page.get_by_role("region", name="Automatic tuning", exact=True)
+    expect(tuning).to_contain_text("Example")
+    expect(tuning).to_contain_text("6 GiB")
+    expect(tuning).to_contain_text("50% of free media-cache disk after reserve")
+    expect(tuning).to_contain_text("12 GiB")
+    expect(tuning).not_to_contain_text("Other Parameters")
+    expect(tuning).not_to_contain_text("startup ceiling")
+    fits_line = tuning.get_by_text("12 GiB", exact=True).first.evaluate("""value => {
+        const range = document.createRange();
+        range.selectNodeContents(value);
+        return range.getClientRects().length === 1;
+    }""")
+    assert fits_line
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(
+        path=ARTIFACTS / f"tuning-example-{width}.png", animations="disabled"
+    )
+
+    state = "stale"
+
+    def report(route):
+        payload = {**snapshot, "tuning": dict(snapshot["tuning"])}
+        if state == "stale":
+            payload["tuning"]["measurements"] = {
+                "sampled_at": snapshot["server"]["at"] - 45
+            }
+        elif state == "missing":
+            payload["tuning"] = None
+        route.fulfill(json=payload)
+
+    page.route("**/api/v1/performance", report)
+    page.clock.fast_forward(6000)
+    expect(tuning).to_contain_text("Last applied values")
+    expect(tuning).to_contain_text("6 GiB")
+    state = "missing"
+    page.clock.fast_forward(6000)
+    expect(tuning).to_contain_text("Waiting for a tuning report")
+    expect(tuning).not_to_contain_text("6 GiB")
+    state = "fresh"
+    page.clock.fast_forward(6000)
+    expect(tuning).to_contain_text("6 GiB")
+    expect(tuning).not_to_contain_text("Last applied values")
 
 
 @pytest.mark.parametrize("state", ["missing", "stale", "zero"])
@@ -712,17 +868,17 @@ def test_performance_missing_and_stale_samples_never_become_zero(
     )
     expect(page.locator(".network-readings dd")).to_have_text(expected)
     if state != "zero":
-        expect(page.get_by_role("region", name="What is waiting")).to_contain_text(
-            "Current wait evidence is unavailable"
+        expect(page.get_by_role("region", name="Current waits")).to_contain_text(
+            "Current wait readings unavailable."
         )
     if state == "missing":
-        page.get_by_role("tab", name="Performance", exact=True).click()
+        page.get_by_role("tab", name="Overview", exact=True).click()
         expect(
-            page.get_by_role("tabpanel", name="Performance", exact=True)
+            page.get_by_role("tabpanel", name="Overview", exact=True)
         ).to_contain_text("Unavailable")
 
 
-def test_performance_failed_refresh_preserves_context_and_recovers(server, desktop):
+def test_performance_failed_poll_preserves_context_and_recovers(server, desktop):
     _, page = desktop
     login(page, server.url)
     snapshot = measured_snapshot(page, server)
@@ -736,14 +892,16 @@ def test_performance_failed_refresh_preserves_context_and_recovers(server, deskt
         else:
             route.fulfill(json=snapshot)
 
+    page.clock.install()
     page.route("**/api/v1/performance", respond)
     page.goto(server.url + "/?view=performance")
     expect(page.locator(".network-readings dd")).to_have_text(["16 Mbps", "8 Mbps"])
     fail = True
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    page.clock.fast_forward(5100)
     expect(page.locator("#performance").get_by_role("alert")).to_contain_text(
         "Showing the last loaded snapshot"
     )
+    expect(page.locator(".toast-error")).to_have_count(0)
     expect(page.locator(".network-readings dd")).to_have_text(
         ["Unavailable", "Unavailable"]
     )
@@ -751,14 +909,14 @@ def test_performance_failed_refresh_preserves_context_and_recovers(server, deskt
     expect(page.get_by_role("tabpanel", name="Accounts", exact=True)).to_contain_text(
         "347 MiB"
     )
-    page.get_by_role("tab", name="Performance", exact=True).click()
+    page.get_by_role("tab", name="Overview", exact=True).click()
     fail = False
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
+    page.clock.fast_forward(5100)
     expect(page.locator(".network-readings dd")).to_have_text(["16 Mbps", "8 Mbps"])
     expect(page.locator("#performance").get_by_role("alert")).not_to_be_visible()
 
 
-def test_performance_manual_refresh_wins_over_an_older_poll(server, desktop):
+def test_performance_poll_waits_for_the_pending_snapshot(server, desktop):
     _, page = desktop
     login(page, server.url)
     snapshot = measured_snapshot(page, server)
@@ -782,11 +940,12 @@ def test_performance_manual_refresh_wins_over_an_older_poll(server, desktop):
     with page.expect_request(
         lambda request: request.url.endswith("/api/v1/performance")
     ):
-        page.clock.fast_forward(3100)
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(page.get_by_role("button", name="Refresh Performance")).to_be_enabled()
-    assert len(held) == 1
+        page.clock.fast_forward(5100)
+    page.clock.fast_forward(10_000)
+    assert calls == 2 and len(held) == 1
     held[0].fulfill(json=old)
+    expect(page.locator(".network-readings dd").first).to_have_text("792 Mbps")
+    page.clock.fast_forward(5100)
     expect(page.locator(".network-readings dd").first).to_have_text("16 Mbps")
 
 
@@ -799,9 +958,16 @@ def test_performance_help_supports_keyboard_escape_and_focus_return(server, desk
     page.keyboard.press("Enter")
     content = page.get_by_role(
         "dialog", name="About Server network", exact=True
-    ).filter(has_text="interface counters")
+    ).filter(has_text="all traffic on the reported interface")
     expect(content).to_be_visible()
+    expect(content.locator("[data-autofocus]")).to_be_focused()
     page.keyboard.press("Escape")
+    expect(content).not_to_be_visible()
+    expect(help_button).to_be_focused()
+    help_button.press("Enter")
+    expect(content).to_be_visible()
+    expect(content.locator("[data-autofocus]")).to_be_focused()
+    help_button.press("Escape")
     expect(content).not_to_be_visible()
     expect(help_button).to_be_focused()
     page.set_viewport_size({"width": 390, "height": 844})
@@ -873,6 +1039,61 @@ def test_transfer_speed_controls_preserve_conflicts_and_category_save(server, de
     ).to_have_value(re.compile(r"^80(?:\.0+)? Mbps$"))
 
 
+@pytest.mark.parametrize(
+    "width,height,theme",
+    [(1536, 695, "dark"), (820, 1180, "light"), (390, 844, "dark")],
+)
+def test_transfer_speed_controls_save_both_limits_to_the_backend(
+    server, desktop, width, height, theme
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": height})
+    page.add_init_script(f"localStorage.setItem('tgdrive.appearance','{theme}')")
+    login(page, server.url)
+    page.goto(server.url + "/?view=performance")
+    page.get_by_role("tab", name="Tuning", exact=True).click()
+    link = page.get_by_role("link", name="Upload and download speed limits", exact=True)
+    expect(link).to_be_visible()
+    expect(
+        page.get_by_role("region", name="Transfer activity", exact=True)
+    ).to_be_hidden()
+    expect(link).to_be_in_viewport()
+
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=ARTIFACTS / f"tuning-speed-limits-{width}.png")
+    if width == 820:
+        link.focus()
+        expect(link).to_be_focused()
+        link.press("Enter")
+    else:
+        link.click()
+    expect(page).to_have_url(re.compile(r"\?view=settings&section=transfers$"))
+    for direction, rate in (("Upload from server", "80"), ("Download to server", "20")):
+        page.get_by_role(
+            "combobox", name=f"{direction} limit mode", exact=True
+        ).select_option("custom")
+        page.get_by_role("textbox", name=f"{direction} limit (Mbps)", exact=True).fill(
+            rate
+        )
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "PATCH"
+            and response.url.endswith("/api/v1/settings/performance")
+        )
+    ) as saved:
+        page.get_by_role("button", name="Save Performance Settings", exact=True).click()
+    assert saved.value.ok, saved.value.text()
+    persisted = page.request.get(server.url + "/api/v1/settings/performance").json()
+    assert persisted["upload_limit_bytes_per_second"] == 10_000_000
+    assert persisted["download_limit_bytes_per_second"] == 2_500_000
+
+    page.reload()
+    for direction, rate in (("Upload from server", "80"), ("Download to server", "20")):
+        expect(
+            page.get_by_role("textbox", name=f"{direction} limit (Mbps)", exact=True)
+        ).to_have_value(re.compile(rf"^{rate}(?:\.0+)? Mbps$"))
+
+
 def test_intentional_speed_wait_is_separate_from_network_failure(server, desktop):
     _, page = desktop
     login(page, server.url)
@@ -893,17 +1114,43 @@ def test_intentional_speed_wait_is_separate_from_network_failure(server, desktop
     snapshot["diagnosis"]["constraints"] = []
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
-    waiting = page.get_by_role("region", name="What is waiting", exact=True)
-    expect(waiting).to_contain_text(
-        "waiting for its configured speed limit (<0.01 Mbps)"
-    )
-    expect(waiting).to_contain_text("intentional throttling")
+    waiting = page.get_by_role("region", name="Current waits", exact=True)
+    expect(waiting).to_contain_text("Server uploads waiting at <0.01 Mbps")
     expect(page.locator(".network-readings dd").first).to_have_text("16 Mbps")
-    page.get_by_role("link", name="Transfer settings", exact=True).click()
+    waiting.get_by_role("link", name="Transfer limits", exact=True).click()
     expect(page).to_have_url(re.compile(r"\?view=settings&section=transfers$"))
     expect(
         page.get_by_role("heading", name="Uploads and Telegram", exact=True)
     ).to_be_visible()
+
+
+def test_overview_shows_stream_waits_but_omits_idle_cooldowns(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    snapshot = measured_snapshot(page, server)
+    snapshot["telegram"]["queued"] = 0
+    snapshot["telegram"]["accounts"][0]["cooldown_seconds"] = 3
+    snapshot["diagnosis"]["constraints"] = []
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
+    page.goto(server.url + "/?view=performance")
+    waiting = page.get_by_role("region", name="Current waits", exact=True)
+    expect(waiting).to_contain_text("No service waits observed.")
+    expect(waiting.get_by_role("button", name="View Accounts")).to_have_count(0)
+
+    snapshot["diagnosis"]["constraints"] = [
+        {
+            "code": "scratch_wait",
+            "certainty": "observed",
+            "evidence": [{"name": "waiting_heads", "value": 2, "unit": "streams"}],
+        }
+    ]
+    expect(waiting).to_contain_text(
+        "2 streams waiting for a read buffer", timeout=9_000
+    )
+    waiting.get_by_role("button", name="Server resources").press("Enter")
+    resources = page.get_by_role("tab", name="Server resources", exact=True)
+    expect(resources).to_have_attribute("aria-selected", "true")
+    expect(resources).to_be_focused()
 
 
 def test_resource_long_unknown_value_is_contained_at_320(server, desktop):
@@ -916,8 +1163,8 @@ def test_resource_long_unknown_value_is_contained_at_320(server, desktop):
     )
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
-    page.get_by_role("tab", name="Performance", exact=True).click()
-    value = page.get_by_text("Not separately measured", exact=True)
+    page.get_by_role("tab", name="Server resources", exact=True).click()
+    value = page.get_by_text("Not configured", exact=True)
     expect(value).to_be_visible()
     boxes = value.evaluate("""n=>{
         const box=x=>{
@@ -927,7 +1174,10 @@ def test_resource_long_unknown_value_is_contained_at_320(server, desktop):
         return {label:box(n.previousElementSibling),
                 value:box(n),row:box(n.parentElement)};
     }""")
-    assert boxes["label"]["bottom"] <= boxes["value"]["top"] + 1
+    assert (
+        boxes["label"]["right"] <= boxes["value"]["left"] + 1
+        or boxes["label"]["bottom"] <= boxes["value"]["top"] + 1
+    )
     assert boxes["value"]["left"] >= boxes["row"]["left"] - 1
     assert boxes["value"]["right"] <= boxes["row"]["right"] + 1
     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
@@ -969,8 +1219,7 @@ def test_isolated_network_samples_are_visible_without_bridging_gaps(
         "circle.performance-chart-point, circle.performance-chart-point-secondary"
     )
     expect(points).to_have_count(4)
-    for line in chart.locator("polyline").all():
-        assert " " not in line.get_attribute("points")
+    expect(chart.locator("polyline")).to_have_count(0)
     for point in points.all():
         reading = point.evaluate(
             "n=>({r:n.r.baseVal.value,fill:getComputedStyle(n).fill,opacity:getComputedStyle(n).opacity,box:n.getBoundingClientRect().width})"
@@ -1009,8 +1258,9 @@ def test_primary_storage_uses_verified_envelope_not_virtual_filesystem(
     )
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
+    page.get_by_role("tab", name="Server resources", exact=True).click()
     primary = page.locator('[data-storage="effective"]')
-    expect(primary).to_contain_text("Backing storage free")
+    expect(primary).to_contain_text("Verified free disk space")
     expect(primary.locator("strong")).to_have_text(
         "100 GiB" if backing_known else "Unavailable"
     )
@@ -1018,11 +1268,8 @@ def test_primary_storage_uses_verified_envelope_not_virtual_filesystem(
     expect(primary.locator("progress")).to_have_count(0)
     if backing_known:
         expect(primary).to_contain_text("45 GiB available after reserve")
-    details = page.locator("details").filter(
-        has=page.locator("summary", has_text="Filesystem measurement details")
-    )
-    expect(details).not_to_have_attribute("open", "")
-    details.locator("summary").click()
+    details = page.get_by_role("region", name="Filesystem measurement details")
+    expect(details).to_be_visible()
     expect(details).to_contain_text("846 GiB")
 
 
@@ -1058,15 +1305,17 @@ def test_memory_scope_does_not_invent_a_container_limit(server, desktop, scope):
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
     memory = page.locator('[data-metric="memory_bytes"]')
-    expect(memory.get_by_role("heading")).to_have_text(
-        "Visible system RAM" if scope == "host" else "Server memory"
-    )
-    memory.get_by_text("Measurement scope", exact=True).click()
+    title = "Visible system RAM" if scope == "host" else "Server memory"
+    expect(memory.get_by_role("heading")).to_have_text(title)
+    memory.get_by_role("button", name=f"About {title}").click()
+    help_popup = page.get_by_role("dialog", name=f"About {title}")
     if scope == "host":
-        expect(memory).to_contain_text("not a container hard limit")
+        expect(help_popup).to_contain_text("not a container hard limit")
     else:
-        expect(memory).to_contain_text("No finite visible container limit established")
-    expect(memory).not_to_contain_text("Current container limit")
+        expect(help_popup).to_contain_text(
+            "No finite visible container limit established"
+        )
+    expect(help_popup).not_to_contain_text("Current container limit")
 
 
 def test_effective_memory_budget_is_not_a_container_hard_limit(server, desktop):
@@ -1086,26 +1335,39 @@ def test_effective_memory_budget_is_not_a_container_hard_limit(server, desktop):
     page.goto(server.url + "/?view=performance")
     memory = page.locator('[data-metric="memory_bytes"]')
     expect(memory.locator('[title="Current reading"]')).not_to_contain_text("8 GiB")
-    memory.get_by_text("Measurement scope", exact=True).click()
-    expect(memory).to_contain_text("No finite visible container limit established")
+    memory.get_by_role("button", name="About Container RAM").click()
+    expect(page.get_by_role("dialog", name="About Container RAM")).to_contain_text(
+        "No finite visible container limit established"
+    )
+    expect(page.get_by_role("link", name="Open Transfers", exact=True)).to_have_count(1)
+    page.get_by_role("tab", name="Server resources", exact=True).click()
     budget = page.locator(".performance-facts > div").filter(
-        has=page.get_by_text("Automatic resource-sizing ceiling", exact=True)
+        has=page.get_by_text("Memory reference for automatic limits", exact=True)
     )
     expect(budget).to_contain_text("8 GiB")
-    expect(budget).to_contain_text("not a container hard limit")
-    expect(page.get_by_role("heading", name="Files in This Drive")).to_be_visible()
-    expect(page.get_by_role("heading", name="Temporary Storage")).to_be_visible()
-    expect(page.get_by_role("link", name="Open Transfers", exact=True)).to_have_count(1)
+    expect(budget).to_contain_text("Uses the memory reported by Linux")
+    expect(budget).not_to_contain_text("proc_meminfo")
+    expect(page.get_by_role("heading", name="Drive contents")).to_have_count(0)
+    expect(page.get_by_role("heading", name="Temporary upload storage")).to_be_visible()
 
 
-def test_drive_statistics_move_to_performance_and_share_manual_refresh(server, desktop):
+@pytest.mark.parametrize(
+    "width,theme", [(1536, "dark"), (820, "light"), (390, "light")]
+)
+def test_overview_library_and_server_resources_are_separate(
+    server, desktop, width, theme
+):
     _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844 if width < 721 else 695})
+    page.emulate_media(color_scheme=theme)
     login(page, server.url)
     management = page.request.get(server.url + "/api/v1/settings").json()
     management["stats"].update(
         files=17,
         folders=3,
         trashed_files=2,
+        total_bytes=5 * 1024**2,
+        trashed_bytes=2 * 1024,
         active_jobs=1,
         queued_jobs=2,
         failed_jobs=3,
@@ -1118,39 +1380,58 @@ def test_drive_statistics_move_to_performance_and_share_manual_refresh(server, d
         page.get_by_role("heading", name="Cloud Database", exact=True)
     ).to_be_visible()
     for label in [
-        "Files in This Drive",
-        "Temporary Storage",
+        "Temporary upload storage",
         "Current Transfers",
         "Start a new drive",
     ]:
         expect(page.get_by_role("heading", name=label, exact=True)).to_have_count(0)
     expect(page.locator(".start-new-drive")).to_have_count(0)
+    files = page.get_by_role("region", name="TGDrive library", exact=True)
+    expect(files).to_have_count(0)
+
+    snapshot = measured_snapshot(page, server)
+    snapshot["drive"] = {
+        key: management["stats"][key]
+        for key in ("files", "folders", "total_bytes", "trashed_files", "trashed_bytes")
+    }
+    page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
-    files = page.get_by_role("region", name="Files in This Drive", exact=True)
-    expect(files).to_contain_text("17")
-    expect(
-        page.get_by_role("region", name="Temporary Storage", exact=True)
-    ).to_be_visible()
-    expect(page.get_by_label("Current Transfers", exact=True)).to_contain_text(
-        "Transfer manager:"
+    expect(files.locator("dt")).to_have_text(
+        ["Files", "Folders", "Stored in Telegram", "Files in Trash"]
     )
-    expect(files).to_contain_text("Drive figures updated")
-    expect(page.get_by_role("link", name="Open Transfers", exact=True)).to_have_count(1)
+    expect(files.locator("dd")).to_have_text(["17", "3", "5 MiB", "2", "2 KiB"])
+    chart = page.get_by_role("heading", name="Charts and history", exact=True)
+    assert files.bounding_box()["y"] < chart.bounding_box()["y"]
+    assert files.evaluate("el => el.scrollWidth <= el.clientWidth")
+    network = page.locator(".performance-network-chart")
+    resources = page.locator(".performance-resource-charts")
+    network_bounds, resource_bounds = network.bounding_box(), resources.bounding_box()
+    assert network_bounds and resource_bounds
+    if width == 1536:
+        assert abs(network_bounds["y"] - resource_bounds["y"]) <= 1
+        assert abs(network_bounds["height"] - resource_bounds["height"]) <= 1
+    else:
+        assert resource_bounds["y"] >= network_bounds["y"] + network_bounds["height"]
     trash = files.get_by_role("link", name="Open Trash", exact=True)
-    expect(trash).to_have_attribute("href", "/?path=%2Ftrash")
     trash.click()
     expect(page.get_by_role("heading", name="Trash", exact=True)).to_be_visible()
     page.go_back()
     expect(files).to_be_visible()
-    management["stats"]["files"] = 23
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(files).to_contain_text("23")
+    expect(page.get_by_role("link", name="Open Transfers", exact=True)).to_have_count(1)
+    page.get_by_role("tab", name="Server resources", exact=True).click()
+    expect(files).not_to_be_visible()
+    staging = page.get_by_role("region", name="Temporary upload storage", exact=True)
+    expect(
+        staging.get_by_role("progressbar", name="Upload staging reservations")
+    ).to_be_visible()
+    expect(staging).to_contain_text("1 MiB / 8 MiB")
 
 
-def test_fast_performance_poll_does_not_repeat_catalog_statistics(server, desktop):
+def test_management_statistics_poll_only_while_resources_are_open(server, desktop):
     _, page = desktop
     login(page, server.url)
     snapshot = measured_snapshot(page, server)
+    snapshot["drive"] = {"files": 17, "folders": 3, "total_bytes": 1024}
     management = page.request.get(server.url + "/api/v1/settings").json()
     settings_calls = []
 
@@ -1162,21 +1443,34 @@ def test_fast_performance_poll_does_not_repeat_catalog_statistics(server, deskto
     page.route("**/api/v1/settings", settings)
     page.route("**/api/v1/performance", lambda route: route.fulfill(json=snapshot))
     page.goto(server.url + "/?view=performance")
-    expect(page.get_by_role("region", name="Files in This Drive")).to_contain_text(
-        "Drive figures updated"
-    )
+    expect(page.get_by_role("tab", name="Overview", exact=True)).to_be_visible()
+    files = page.get_by_role("region", name="TGDrive library").locator("dd").first
+    expect(files).to_have_text("17")
+    assert not settings_calls
+    page.get_by_role("tab", name="Server resources", exact=True).click()
+    staging = page.get_by_role("region", name="Temporary upload storage")
+    expect(staging).to_contain_text("Upload space checked")
     assert len(settings_calls) == 1
-    for _ in range(3):
+    management["stats"].update(
+        staging_reserved_bytes=2 * 1024**2, staging_budget_bytes=8 * 1024**2
+    )
+    page.clock.fast_forward(5100)
+    expect(staging).to_contain_text("2 MiB / 8 MiB")
+    assert len(settings_calls) == 2
+    snapshot["drive"]["files"] = 23
+    page.get_by_role("tab", name="Overview", exact=True).click()
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/v1/performance")
+    ):
+        page.clock.fast_forward(5100)
+    expect(files).to_have_text("23")
+    assert len(settings_calls) == 2
+
+    page.goto(server.url + "/?view=storage")
+    expect(page.get_by_role("heading", name="Backups", exact=True)).to_be_visible()
+    for _ in range(2):
         with page.expect_request(
-            lambda request: request.url.endswith("/api/v1/performance")
+            lambda request: request.url.endswith("/api/v1/status")
         ):
-            page.clock.fast_forward(3100)
-    assert len(settings_calls) == 1
-    page.evaluate("window.dispatchEvent(new Event('tgdrive:files-changed'))")
-    expect(page.get_by_role("region", name="Files in This Drive")).to_contain_text(
-        "Files changed; refresh"
-    )
-    assert len(settings_calls) == 1
-    page.get_by_role("button", name="Refresh Performance", exact=True).click()
-    expect(page.get_by_role("button", name="Refresh Performance")).to_be_enabled()
+            page.clock.fast_forward(5100)
     assert len(settings_calls) == 2

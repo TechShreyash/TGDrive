@@ -28,6 +28,12 @@ vi.mock("./pdf/PdfPreview", () => {
 vi.mock("./books/BookPreview", () => {
     throw new Error("The book viewer chunk is unavailable.");
 });
+vi.mock("./archives/ArchivePreview", () => {
+    throw new Error("The archive viewer chunk is unavailable.");
+});
+vi.mock("./OfficePreview", () => {
+    throw new Error("The Office viewer chunk is unavailable.");
+});
 afterEach(() => vi.unstubAllGlobals());
 describe("bounded safe previews", () => {
     it("retries a full Telegram queue twice without shortening its retry delay", () => {
@@ -94,7 +100,7 @@ describe("bounded safe previews", () => {
     });
 
     it("keeps recovery controls available when a document viewer chunk rejects", async () => {
-        expect(viewerLoaders).toHaveLength(2);
+        expect(viewerLoaders).toHaveLength(4);
         for (const load of viewerLoaders) {
             const viewer = await load();
             const html = renderToStaticMarkup(createElement(viewer.default));

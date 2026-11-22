@@ -26,6 +26,7 @@ from tgdrive.recovery.recovery_file import write_recovery_snapshot
 from tgdrive.settings.managed_settings import SettingsProblem
 from tgdrive.storage.mongo import DatabaseUnavailable, MongoBackend
 from tgdrive.storage.mongo_store import MongoStore
+from tgdrive.telegram.client_pool import ClientPoolNotRunning
 from tgdrive.transfers.tasks import TransferRegistry
 
 
@@ -777,7 +778,8 @@ async def test_scheduled_backup_does_not_skip_in_place_job_changes(
         awaitable.close()
         raise TimeoutError
 
-    async def snapshot(_store):
+    async def snapshot(_store, *, scheduled):
+        assert scheduled
         assert backend.db.jobs.find_one({})["data"]["phase"] == "finished"
         service._stop.set()
 
@@ -786,7 +788,45 @@ async def test_scheduled_backup_does_not_skip_in_place_job_changes(
         "tgdrive.recovery.mongo_backup.asyncio.wait_for", interval_elapsed
     )
     await service._loop(store)
-    service.snapshot_now.assert_awaited_once_with(store)
+    service.snapshot_now.assert_awaited_once_with(store, scheduled=True)
+
+
+async def test_manual_confirmation_postpones_the_next_scheduled_backup(
+    snapshot_source, monkeypatch
+):
+    service, store, backend = snapshot_source
+    clock = [1000.0]
+    interval = service.settings.mongodb_backup_seconds
+    waits = []
+
+    def confirmed(identity, timestamp):
+        value = datetime.fromtimestamp(timestamp, UTC).isoformat()
+        row = {
+            "_id": identity,
+            "status": "confirmed",
+            "format": "tgdrive-backup-v2",
+            "created_at": value,
+            "confirmed_at": value,
+            "pin_verified_at": value,
+        }
+        backend.db.backups.insert_one(row)
+        service._observe_backup(row)
+
+    confirmed("first", clock[0])
+
+    async def next_wait(awaitable, timeout):
+        awaitable.close()
+        waits.append(timeout)
+        if len(waits) == 1:
+            clock[0] += interval
+            confirmed("manual", clock[0] - 20)
+            raise TimeoutError
+
+    monkeypatch.setattr("tgdrive.recovery.mongo_backup.time.time", lambda: clock[0])
+    monkeypatch.setattr("tgdrive.recovery.mongo_backup.asyncio.wait_for", next_wait)
+    await service._loop(store)
+    assert waits == [interval, interval - 20]
+    assert backend.db.backups.count_documents({}) == 2
 
 
 async def test_verified_backup_retries_pin_after_restart_without_local_file(
@@ -814,6 +854,42 @@ async def test_verified_backup_retries_pin_after_restart_without_local_file(
         restarted._pin.await_args_list[0].args[1]
         == restarted._pin.await_args_list[1].args[1]
     )
+
+
+async def test_scheduled_backup_waits_through_provider_cooldown(
+    snapshot_source, monkeypatch
+):
+    service, store, backend = snapshot_source
+    with pytest.raises(RuntimeError, match="Publication paused"):
+        await service.snapshot_now(store)
+    row = backend.db.backups.find_one({"status": "pending"})
+    backend.db.backups.update_one({"_id": row["id"]}, {"$set": {"message_id": 77}})
+    Path(row["local_path"]).unlink()
+    service.pool.defer_channel = AsyncMock()
+    service._pin = AsyncMock(
+        side_effect=[BackupError("Telegram cooldown", retry_after=600), None]
+    )
+
+    clock = [1000.0]
+    waits = []
+
+    async def next_wait(awaitable, timeout):
+        awaitable.close()
+        waits.append(timeout)
+        if len(waits) <= 2:
+            clock[0] += timeout
+            raise TimeoutError
+
+    monkeypatch.setattr(
+        "tgdrive.recovery.mongo_backup.time", SimpleNamespace(time=lambda: clock[0])
+    )
+    monkeypatch.setattr("tgdrive.recovery.mongo_backup.asyncio.wait_for", next_wait)
+    await service._loop(store)
+
+    assert waits == [1, 600.25, service.settings.mongodb_backup_seconds]
+    assert service._pin.await_count == 2
+    assert backend.db.backups.find_one({"_id": row["_id"]})["status"] == "confirmed"
+    service.pool.lease.assert_called_once()
 
 
 @pytest.mark.parametrize("cooldown", [False, True])
@@ -890,10 +966,22 @@ async def test_actual_verified_send_and_pin_retry_share_durable_failure_handling
         await service.snapshot_now(store)
     row = backend.db.backups.find_one({"status": "pending"})
     assert row["message_id"] == 77
+    assert row["trigger"] == "manual"
     assert service._last_success_at == good["confirmed_at"]
     assert previous.is_file()
     Path(row["local_path"]).unlink()
     restarted = MongoProtection(service.settings, service.pool, backend)
+    reopened = await restarted.restore()
+    assert restarted.latest_history()[0]["status"] == "pending"
+    assert (
+        restarted.protection_status(reopened)["last_success_at"] == good["confirmed_at"]
+    )
+    assert restarted.protection_status(reopened)["standalone_backup"] == {
+        "last_trigger": None,
+        "next_eligible_at": None,
+        "retry_pending": True,
+        "retry_after": row["retry_at"] if cooldown else None,
+    }
     if cooldown:
         assert row["retry_at"] == 1030.25
         leases_before_wait = len(leased)
@@ -914,6 +1002,23 @@ async def test_actual_verified_send_and_pin_retry_share_durable_failure_handling
     confirmed = backend.db.backups.find_one({"_id": row["_id"]})
     assert confirmed["status"] == "confirmed"
     assert confirmed["pin_verified_at"]
+    assert confirmed["trigger"] == "manual"
+    assert restarted.protection_status(reopened)["standalone_backup"] == {
+        "last_trigger": "manual",
+        "next_eligible_at": clock[0] + service.settings.mongodb_backup_seconds,
+        "retry_pending": False,
+        "retry_after": None,
+    }
+    after_confirmation = MongoProtection(service.settings, service.pool, backend)
+    reopened = await after_confirmation.restore()
+    assert (
+        after_confirmation.protection_status(reopened)["standalone_backup"][
+            "last_trigger"
+        ]
+        == "manual"
+    )
+    assert await after_confirmation.snapshot_now(reopened, scheduled=True) is False
+    assert backend.db.backups.count_documents({}) == 2
     assert confirmed["random_id"] == row["random_id"]
     assert confirmed["sender"] == "backup-bot" and confirmed["message_id"] == 77
     assert client.send_document.await_count == 1
@@ -1081,8 +1186,9 @@ async def test_cancelled_backup_confirmation_drains_its_fenced_write(
 
 
 @pytest.mark.parametrize("pin", [77, 88, ConnectionError("Telegram unavailable")])
+@pytest.mark.parametrize("pool_ready", [True, False])
 async def test_restore_rechecks_historic_pin_without_repinning_or_losing_evidence(
-    snapshot_source, pin
+    snapshot_source, pin, pool_ready
 ):
     service, store, backend = snapshot_source
     path = service.settings.resolved_cache_dir / "historic.tgdb"
@@ -1112,11 +1218,21 @@ async def test_restore_rechecks_historic_pin_without_repinning_or_losing_evidenc
     @asynccontextmanager
     async def lease(**kwargs):
         assert kwargs == {"client_name": "backup-bot"}
+        if not pool_ready:
+            raise ClientPoolNotRunning("Pool is starting")
         yield client
 
     service.pool.lease = lease
     reopened = await service.restore()
     try:
+        if not pool_ready:
+            assert backend.db.backups.find_one({"_id": row["_id"]})["status"] == (
+                "confirmed"
+            )
+            assert service.latest_history()[0]["status"] == "unverified"
+            client.get_pinned_message_id.assert_not_awaited()
+            pool_ready = True
+            assert not await service.backup(reopened)
         observed = service.latest_history()[0]
         saved = backend.db.backups.find_one({"_id": row["_id"]})
         assert saved["confirmed_at"] == row["confirmed_at"]

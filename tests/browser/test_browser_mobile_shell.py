@@ -49,15 +49,34 @@ def test_phone_browsing_drawer_and_upload_use_separate_surfaces(
     page.route(NODES, listing)
     login(page, server.url)
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
-    expect(page.locator("#compact-new-button")).to_be_visible()
-    assert page.locator("#compact-new-button").evaluate(
-        "e => getComputedStyle(e).position !== 'fixed'"
-    )
+    header = page.locator(".topbar")
+    new = header.get_by_role("button", name="New", exact=True)
+    expect(new).to_be_visible()
+    expect(
+        header.locator(":is(.brand-logo-light, .brand-logo-dark):visible")
+    ).to_have_count(1)
+    idle_new = new.bounding_box()
+    theme_menu = header.locator(".theme-trigger").bounding_box()
+    assert idle_new["width"] >= 44 and idle_new["height"] >= 44
+    assert idle_new["x"] + idle_new["width"] <= theme_menu["x"]
     page.screenshot(path=ARTIFACTS / f"phone-files-idle-{width}.png")
     upload(page, ["Project walkthrough.mp4"])
     server.wait_started(1)
     status = page.get_by_role("button", name="Open transfer progress", exact=True)
     expect(status).to_be_visible()
+    assert new.bounding_box() == idle_new
+    assert page.locator(".file-row summary").evaluate_all("""actions => {
+        const workspace = document.querySelector('.workspace').getBoundingClientRect();
+        const visible = actions.filter(action => {
+            const r = action.getBoundingClientRect();
+            return r.top >= workspace.top && r.bottom <= workspace.bottom;
+        });
+        return visible.length > 0 && visible.every(action => {
+            const r = action.getBoundingClientRect();
+            return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+                ?.closest('summary') === action;
+        });
+    }""")
     expect(page.locator("#transfer-dialog")).to_have_count(0)
     assert (
         page.locator(".workspace").bounding_box()["y"]
@@ -109,9 +128,7 @@ def test_phone_browsing_drawer_and_upload_use_separate_surfaces(
 @pytest.mark.parametrize(
     "width,theme", [(1440, "light"), (390, "dark"), (320, "light")]
 )
-def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
-    server, desktop, width, theme
-):
+def test_sidebar_groups_tools_and_exposes_project_link(server, desktop, width, theme):
     _, page = desktop
     page.set_viewport_size({"width": width, "height": 844})
     page.emulate_media(color_scheme=theme)
@@ -126,12 +143,19 @@ def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
             )
 
     open_drawer()
-    tools = page.locator(".sidebar-tools")
-    summary = tools.locator("summary")
-    expect(tools).not_to_have_attribute("open", "")
-    expect(page.get_by_role("link", name="Performance", exact=True)).not_to_be_visible()
+    navigation = page.get_by_role("navigation", name="Drive pages", exact=True)
+    expect(navigation.get_by_role("group")).to_have_count(3)
+    tools = navigation.get_by_role("group", name="Tools and settings", exact=True)
+    expect(tools.get_by_role("link")).to_have_count(0)
     for label in ["My Files", "Starred", "Transfers", "Shared Links", "Trash"]:
         expect(page.get_by_role("link", name=label, exact=True)).to_be_in_viewport()
+    recent = navigation.get_by_role("link", name="Recent", exact=True)
+    starred = navigation.get_by_role("link", name="Starred", exact=True)
+    recent_bounds, starred_bounds = recent.bounding_box(), starred.bounding_box()
+    assert recent_bounds and starred_bounds
+    assert recent_bounds["height"] >= (44 if width <= 720 else 40)
+    assert starred_bounds["y"] - recent_bounds["y"] - recent_bounds["height"] >= 4
+    starred.hover()
     github = page.get_by_role("link", name="TGDrive on GitHub", exact=True)
     expect(github).to_have_attribute("href", "https://github.com/TechShreyash/TGDrive")
     expect(github).to_have_attribute("target", "_blank")
@@ -163,24 +187,13 @@ def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
     page.screenshot(
         path=ARTIFACTS / f"sidebar-simple-{theme}-{width}.png", animations="disabled"
     )
-    summary.focus()
-    page.keyboard.press("Enter")
-    expect(tools).to_have_attribute("open", "")
-    children = page.get_by_role("group", name="Tools and settings", exact=True)
-    for category in ("Monitor", "Configuration", "Management"):
-        expect(children.get_by_role("group", name=category, exact=True)).to_be_visible()
-    assert children.evaluate("""e => {
-        const parent = e.closest('details').querySelector('summary');
-        return e.getBoundingClientRect().x > parent.getBoundingClientRect().x + 12
-          && getComputedStyle(e).borderInlineStartWidth === '1px'
-          && [...e.querySelectorAll('[role=group]')].every(group =>
-            group.getBoundingClientRect().x ===
-              e.firstElementChild.getBoundingClientRect().x);
-    }""")
-    page.get_by_role("link", name="Performance", exact=True).click()
+    tools.get_by_role("button", name="Tools and settings", exact=True).press("Enter")
+    expect(tools.get_by_role("link")).to_have_text(
+        ["Performance", "Preloads", "Settings", "Connections", "Backups"]
+    )
+    tools.get_by_role("link", name="Performance", exact=True).press("Enter")
     expect(page.get_by_role("heading", name="Performance", exact=True)).to_be_visible()
     open_drawer()
-    expect(tools).to_have_attribute("open", "")
     expect(page.locator('.drive-nav a[aria-current="page"]')).to_have_text(
         "Performance"
     )
@@ -190,19 +203,166 @@ def test_sidebar_keeps_rare_tools_collapsed_and_exposes_project_link(
     page.get_by_role("link", name="My Files", exact=True).click()
     expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
     open_drawer()
-    expect(tools).not_to_have_attribute("open", "")
     page.goto(server.url + "/?view=settings&section=regional")
     expect(
         page.get_by_role("heading", name="Regional settings", exact=True)
     ).to_be_visible()
     open_drawer()
-    expect(tools).to_have_attribute("open", "")
-    expect(page.get_by_role("link", name="Timezone", exact=True)).to_have_attribute(
+    expect(page.get_by_role("link", name="Settings", exact=True)).to_have_attribute(
         "aria-current", "page"
     )
-    summary.click()
-    expect(tools).not_to_have_attribute("open", "")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_upload_count_keeps_files_reachable_in_a_very_short_viewport(server, desktop):
+    _, page = desktop
+    page.set_viewport_size({"width": 392, "height": 640})
+    login(page, server.url)
+    upload(page, ["zoom-layout.bin"])
+    server.wait_started(1)
+    status = page.get_by_role("button", name="Open transfer progress", exact=True)
+    expect(status).to_be_visible()
+
+    page.set_viewport_size({"width": 392, "height": 197})
+    expect(status).to_have_count(0)
+    folder = page.get_by_role("button", name="Preview samples", exact=True)
+    folder.scroll_into_view_if_needed()
+    expect(folder).to_be_in_viewport(ratio=1)
+    transfers = page.get_by_role("navigation", name="Sections").get_by_role(
+        "button", name="Transfers", exact=False
+    )
+    expect(transfers).to_contain_text("1")
+    transfers.press("Enter")
+    expect(page.get_by_role("heading", name="Transfers", exact=True)).to_be_visible()
+
+
+@pytest.mark.parametrize(
+    "width,height,theme",
+    [(1536, 695, "dark"), (820, 1180, "light"), (390, 844, "light")],
+)
+def test_tools_and_settings_collapses_during_file_browsing(
+    server, browser, width, height, theme
+):
+    touch = width <= 390
+    with browser.new_context(
+        viewport={"width": width, "height": height},
+        has_touch=touch,
+    ) as context:
+        page = context.new_page()
+        page.add_init_script(f"localStorage.setItem('tgdrive.appearance', '{theme}')")
+        login(page, server.url)
+
+        def drawer():
+            if page.locator(".sidebar").get_attribute("inert") is not None:
+                page.get_by_role("button", name="Toggle Navigation", exact=True).click()
+
+        drawer()
+        navigation = page.get_by_role("navigation", name="Drive pages")
+        tools = navigation.get_by_role("group", name="Tools and settings")
+        page.screenshot(
+            path=ARTIFACTS / f"sidebar-tools-{width}.png", animations="disabled"
+        )
+        toggle = tools.get_by_role("button", name="Tools and settings", exact=True)
+        settings = tools.get_by_role("link", name="Settings", exact=True)
+        expect(toggle).to_have_attribute("aria-expanded", "false", timeout=2000)
+        expect(settings).to_have_count(0)
+        if touch:
+            toggle.tap()
+        else:
+            toggle.press("Space")
+        expect(toggle).to_have_attribute("aria-expanded", "true")
+        expect(settings).to_be_visible()
+        toggle.press("Enter")
+        expect(toggle).to_be_focused()
+        expect(settings).to_have_count(0)
+
+        page.goto(server.url + "/?view=settings&section=transfers")
+        expect(page.get_by_role("heading", name="Settings", exact=True)).to_be_visible()
+        drawer()
+        expect(toggle).to_have_attribute("aria-expanded", "true")
+        expect(settings).to_have_attribute("aria-current", "page")
+        toggle.press("Enter")
+        expect(toggle).to_have_attribute("aria-expanded", "false")
+        expect(toggle).to_be_focused()
+        expect(toggle).to_have_accessible_description("Current page is Settings")
+        navigation.get_by_role("link", name="My Files", exact=True).click()
+        drawer()
+        expect(toggle).to_have_attribute("aria-expanded", "false")
+
+
+@pytest.mark.parametrize("width,height", [(1280, 420), (1536, 695)])
+def test_desktop_sidebar_scrolls_links_and_footer_with_brand_pinned(
+    server, desktop, width, height
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 960})
+    login(page, server.url + "/?view=performance")
+    sidebar = page.locator(".sidebar")
+    scroll = sidebar.locator(".sidebar-scroll")
+    nav = sidebar.get_by_role("navigation", name="Drive pages")
+    brand = sidebar.locator(".brand:visible")
+    performance = nav.get_by_role("link", name="Performance", exact=True)
+    expect(performance).to_have_attribute("aria-current", "page")
+    page.set_viewport_size({"width": width, "height": height})
+    expect(performance).to_be_in_viewport(ratio=1)
+    expect(performance).not_to_be_focused()
+    before = brand.bounding_box()
+    assert before is not None
+    storage = nav.get_by_role("link", name="Backups", exact=True)
+    if height == 695:
+        expect(storage).to_be_in_viewport(ratio=1)
+    storage.focus()
+    expect(storage).to_be_in_viewport()
+    expect(brand).to_be_in_viewport()
+    logout = sidebar.get_by_role("button", name="Log Out", exact=True)
+    logout.focus()
+    expect(logout).to_be_in_viewport(ratio=1)
+    documentation = sidebar.get_by_role("link", name="Documentation", exact=True)
+    expect(documentation).to_be_in_viewport(ratio=1)
+    before_wheel = scroll.evaluate("e => e.scrollTop")
+    documentation.hover()
+    page.mouse.wheel(0, -120)
+    page.wait_for_function(
+        "(before) => document.querySelector('.sidebar-scroll').scrollTop < before",
+        arg=before_wheel,
+    )
+    assert abs(brand.bounding_box()["y"] - before["y"]) <= 1
+    assert page.evaluate("document.documentElement.scrollHeight <= innerHeight")
+
+
+@pytest.mark.parametrize("width,height", [(320, 640), (740, 360)])
+def test_short_phone_drawer_keeps_close_visible_while_reaching_footer(
+    server, browser, width, height
+):
+    context = browser.new_context(
+        viewport={"width": width, "height": height},
+        has_touch=True,
+        is_mobile=True,
+        reduced_motion="reduce",
+    )
+    try:
+        page = context.new_page()
+        login(page, server.url + "/?view=performance")
+        toggle = page.get_by_role("button", name="Toggle Navigation", exact=True)
+        toggle.tap()
+        drawer = page.get_by_role("dialog", name="Drive navigation", exact=True)
+        active = drawer.get_by_role("link", name="Performance", exact=True)
+        close = drawer.get_by_role("button", name="Close Navigation", exact=True)
+        expect(active).to_be_focused()
+        expect(active).to_be_in_viewport(ratio=1)
+        pinned = close.bounding_box()
+        close.focus()
+        page.keyboard.press("Shift+Tab")
+        logout = drawer.get_by_role("button", name="Log Out", exact=True)
+        expect(logout).to_be_focused()
+        expect(logout).to_be_in_viewport(ratio=1)
+        assert close.bounding_box() == pinned
+        expect(close).to_be_in_viewport(ratio=1)
+        close.tap()
+        expect(drawer).to_have_count(0)
+        expect(toggle).to_be_focused()
+    finally:
+        context.close()
 
 
 @pytest.mark.parametrize(

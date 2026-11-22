@@ -108,6 +108,7 @@ def test_single_tap_and_selection_keep_file_positions_stable(
     page.on("pageerror", lambda error: errors.append(str(error)))
     try:
         open_fixture(page, server)
+        choose_view(page, "List view")
         folder = page.get_by_role("button", name="Preview samples", exact=True)
         folder_row = page.locator(".file-row").filter(has=folder)
         expect(folder_row.locator(".folder-icon")).to_be_visible()
@@ -123,6 +124,17 @@ def test_single_tap_and_selection_keep_file_positions_stable(
         for layout in ("List view", "Grid view"):
             choose_view(page, layout)
             target.scroll_into_view_if_needed()
+            if (width, height) == (740, 360) and layout == "Grid view":
+                grid = page.get_by_role("list", name="Files and folders", exact=True)
+                tracks = grid.evaluate(
+                    "element => getComputedStyle(element).gridTemplateColumns"
+                )
+                assert len(tracks.split()) == 3
+                card = grid.locator(".file-row").filter(has=target)
+                thumbnail = card.locator(".file-tile-preview")
+                preview = thumbnail.bounding_box()
+                assert abs(preview["width"] / preview["height"] - 16 / 9) < 0.03
+                assert preview["height"] <= height * 0.4
             target.tap()
             preview = page.locator("dialog.file-preview")
             expect(preview).to_be_visible()
@@ -135,7 +147,10 @@ def test_single_tap_and_selection_keep_file_positions_stable(
                 expect(preview).to_have_count(0)
                 expect(
                     page.get_by_label("Select sample.json", exact=True)
-                ).to_have_count(0)
+                ).to_be_checked()
+                expect(page.get_by_text("1 selected", exact=True)).to_be_visible()
+                page.keyboard.press("Escape")
+                expect(target).to_be_focused()
                 target.dblclick()
                 expect(preview).to_be_visible()
                 preview.get_by_role("button", name="Close Preview", exact=True).click()
@@ -235,12 +250,66 @@ def test_phone_navigation_search_new_and_owner_controls_are_reachable(
             drawer.get_by_role("link", name="Trash", exact=True).tap()
             expect(drawer).to_have_count(0)
             page.goto(url)
-        page.locator("#new-button:visible, #compact-new-button:visible").tap()
+        trigger = page.locator("#compact-new-button")
+        menu = page.get_by_role("group", name="New Item Actions")
+        trigger.press("Enter")
+        expect(menu.get_by_role("button", name="Upload Files")).to_be_focused()
+        page.keyboard.press("Escape")
+        expect(menu).to_have_count(0)
+        expect(trigger).to_be_focused()
+        trigger.tap()
         assert_bounded(page, "#new-menu")
+        trigger_box, menu_box = trigger.bounding_box(), menu.bounding_box()
+        assert menu_box["y"] >= trigger_box["y"] + trigger_box["height"]
+        assert (
+            abs(
+                menu_box["x"]
+                + menu_box["width"]
+                - trigger_box["x"]
+                - trigger_box["width"]
+            )
+            <= 1
+        )
         page.get_by_role("button", name="New Folder", exact=True).tap()
         expect(page.get_by_role("dialog")).to_be_visible()
         assert_bounded(page, "dialog[open], dialog[open] input, dialog[open] button")
         page.keyboard.press("Escape")
+        if height < 400:
+            with page.expect_response(
+                lambda response: (
+                    response.ok
+                    and response.request.method == "POST"
+                    and "/api/v1/uploads/" in response.url
+                    and response.url.endswith("/complete")
+                )
+            ):
+                fixtures.upload(page, ["landscape.bin"])
+            badge = page.locator(".mobile-tab-count")
+            status = page.get_by_role("button", name="Open transfer progress")
+            expect(badge).to_have_text("1")
+            expect(status).to_have_count(0)
+            page.set_viewport_size({"width": height, "height": width})
+            expect(status).to_have_text("1 upload in progress")
+            page.set_viewport_size({"width": width, "height": height})
+            expect(status).to_have_count(0)
+            row_action = page.locator(".file-row summary").first
+            assert (
+                trigger.bounding_box()["y"] + trigger.bounding_box()["height"]
+                <= row_action.bounding_box()["y"]
+            )
+            trigger.tap()
+            bounds = menu.bounding_box()
+            assert bounds is not None and bounds["y"] >= 0, bounds
+            assert bounds["y"] + bounds["height"] <= height, bounds
+            menu.get_by_role("button", name="Import torrent", exact=True).tap()
+            expect(page.get_by_role("dialog")).to_be_visible()
+            page.keyboard.press("Escape")
+            page.goto(url + "/?view=recent")
+            expect(
+                page.get_by_role("heading", name="Recent", exact=True)
+            ).to_be_visible()
+            expect(page.locator(".mobile-tab-count")).to_have_text("1")
+            expect(page.locator(".mobile-transfer-status")).to_be_hidden()
         shares = [
             {
                 "id": "phone-share",
@@ -269,6 +338,9 @@ def test_phone_navigation_search_new_and_owner_controls_are_reachable(
         ]:
             page.goto(url + "/" + suffix)
             expect(page.locator(".workspace h1").first).to_be_visible()
+            if height < 400 and name != "transfers":
+                expect(page.locator(".mobile-tab-count")).to_have_text("1")
+                expect(page.locator(".mobile-transfer-status")).to_be_hidden()
             page.wait_for_timeout(150)
             assert_bounded(
                 page,
@@ -334,12 +406,24 @@ def test_phone_navigation_search_new_and_owner_controls_are_reachable(
         ).to_be_checked()
         expect(page.get_by_role("button", name="Restore", exact=True)).to_be_visible()
         assert_bounded(page, ".file-toolbar button")
-        assert errors == []
+        if height < 400:
+            page.goto(url)
+            page.route(
+                "**/api/v1/uploads",
+                lambda route: route.fulfill(
+                    status=400, json={"detail": "Fixture upload rejected"}
+                ),
+            )
+            fixtures.upload(page, ["needs-attention.bin"])
+            expect(status).to_have_text("Uploads need attention")
+            status.tap()
+            expect(page.locator(".workspace h1").first).to_have_text("Transfers")
+        assert errors == [], errors
     finally:
         context.close()
 
 
-@pytest.mark.parametrize("width,height", [(320, 640), (740, 360)])
+@pytest.mark.parametrize("width,height", [(320, 240), (320, 640), (740, 360)])
 def test_phone_preview_pdf_options_unsupported_and_retry_fit_viewport(
     server, browser, width, height
 ):
@@ -352,6 +436,9 @@ def test_phone_preview_pdf_options_unsupported_and_retry_fit_viewport(
         page.get_by_role("button", name="Preview samples", exact=True).tap()
         page.get_by_role("button", name="sample.pdf", exact=True).tap()
         expect(page.locator(".pdf-page canvas").first).to_be_visible()
+        metadata = page.locator(".preview-file-meta")
+        expect(metadata).to_be_visible()
+        expect(metadata).to_contain_text("PDF ·")
         options = page.get_by_role("button", name="PDF View Options", exact=True)
         expect(options).to_be_visible()
         options.tap()
@@ -368,8 +455,7 @@ def test_phone_preview_pdf_options_unsupported_and_retry_fit_viewport(
         page.get_by_role("button", name=long_name, exact=True).tap()
         download = page.locator(".file-details-download")
         expect(download).to_be_visible()
-        download.scroll_into_view_if_needed()
-        expect(download).to_be_in_viewport()
+        expect(download).to_be_in_viewport(ratio=1)
         assert_bounded(page, ".file-preview button, .file-preview a")
         page.screenshot(path=ARTIFACTS / f"phone-unsupported-{width}x{height}.png")
         page.get_by_role("button", name="Close Preview", exact=True).tap()
@@ -381,12 +467,18 @@ def test_phone_preview_pdf_options_unsupported_and_retry_fit_viewport(
         )
         page.get_by_role("button", name="sample.json", exact=True).tap()
         retry = page.get_by_role("button", name="Try Preview Again", exact=True)
-        expect(retry).to_be_visible()
-        retry.scroll_into_view_if_needed()
-        expect(retry).to_be_in_viewport()
+        expect(retry).to_be_in_viewport(ratio=1)
+        expect(page.get_by_role("alert")).to_contain_text(
+            "Temporary preview fixture failure."
+        )
         assert_bounded(page, ".file-preview button, .file-preview a")
         page.screenshot(path=ARTIFACTS / f"phone-preview-error-{width}x{height}.png")
-        page.get_by_role("button", name="Close Preview", exact=True).tap()
+        page.unroute("**/api/v1/preview?*")
+        retry.tap()
+        expect(page.locator("dialog[open] pre")).to_contain_text('"count": 3')
+        close = page.get_by_role("button", name="Close Preview", exact=True)
+        expect(close).to_be_focused()
+        close.tap()
         expect(page.locator("dialog.file-preview")).to_have_count(0)
     finally:
         context.close()
