@@ -29,13 +29,13 @@ def test_shared_filename_opens_location_with_one_click(server, desktop):
     shared_name = page.get_by_role("button", name="資料", exact=True)
     expect(shared_name).to_be_visible()
     pending = []
-    page.route("**/api/v1/shares", lambda route: pending.append(route))
+    page.route("**/api/v1/shares{,?*}", lambda route: pending.append(route))
     shared_name.click()
     expect(shared_name).to_have_attribute("aria-busy", "true")
     shared_name.press("Enter")
     assert len(pending) == 1
     pending[0].continue_()
-    page.unroute("**/api/v1/shares")
+    page.unroute("**/api/v1/shares{,?*}")
     expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
     expect(page.locator("tr.selected")).to_contain_text("資料")
 
@@ -108,7 +108,7 @@ def test_shared_links_concise_expiry_keeps_exact_timezone(server, browser):
             "copyable": True,
         }
         page.route(
-            "**/api/v1/shares",
+            "**/api/v1/shares{,?*}",
             lambda route: route.fulfill(
                 json={
                     "shares": [
@@ -251,3 +251,28 @@ def test_backup_timestamp_uses_instance_timezone_in_another_browser_zone(
             )
     finally:
         context.close()
+
+
+def test_connections_keep_last_known_clients_when_polling_fails(server, desktop):
+    _, page = desktop
+    page.set_viewport_size({"width": 390, "height": 844})
+    login(page, server.url)
+    page.clock.install()
+    page.goto(server.url + "/?view=connections")
+    client = page.get_by_role("button", name="Manage TGDrive Test Bot")
+    expect(client).to_be_visible()
+
+    page.route(
+        "**/api/v1/settings",
+        lambda route: route.fulfill(status=503, json={"detail": "Service unavailable"}),
+    )
+    page.clock.fast_forward(11000)
+    stale = page.get_by_text("Connection status may be out of date", exact=True)
+    expect(stale).to_be_visible()
+    expect(page.locator(".connection-summary")).to_contain_text("Last known")
+    expect(client).to_be_visible()
+
+    page.unroute("**/api/v1/settings")
+    page.clock.fast_forward(11000)
+    expect(stale).to_have_count(0)
+    expect(client).to_be_visible()

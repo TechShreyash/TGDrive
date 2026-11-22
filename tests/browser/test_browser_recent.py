@@ -130,6 +130,7 @@ def test_recent_pages_by_cursor_and_shows_an_empty_state(
     ).to_be_visible()
     expect(page.get_by_text("Files you open or upload appear here.")).to_be_visible()
     expect(page.get_by_role("button", name="Upload Files", exact=True)).to_have_count(0)
+    expect(page.get_by_role("button", name="Select", exact=True)).to_have_count(0)
 
 
 def test_recent_failed_page_has_retry_and_previous(server, desktop):

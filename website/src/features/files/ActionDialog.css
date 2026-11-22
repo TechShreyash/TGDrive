@@ -4,8 +4,83 @@
     gap: 8px;
     margin-bottom: 16px;
 }
-.share-dialog-actions {
-    flex-wrap: wrap;
+.share-target {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 12px;
+    border-radius: 12px;
+    background: var(--surface-subtle);
+}
+.share-target > div {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.share-target strong {
+    color: var(--ink);
+    font-weight: 600;
+}
+.modal .share-target p,
+.modal .share-result p {
+    margin: 2px 0 0;
+    color: var(--muted);
+}
+.modal:has(> .share-target) .modal-header {
+    margin-bottom: 14px;
+}
+.modal:has(> .share-target) .share-expiry-options button[aria-pressed="true"] {
+    background: var(--selected);
+    color: var(--on-action-soft);
+    box-shadow: inset 0 0 0 1px var(--line);
+}
+.share-result + .share-result {
+    margin-top: 14px;
+}
+.share-result-control {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+}
+.modal .share-result-control input {
+    min-width: 0;
+    margin: 0;
+}
+.share-result-control button {
+    min-height: 46px;
+    white-space: nowrap;
+}
+.modal .share-result-hint,
+.modal .share-result-expiry {
+    margin: 10px 0 0;
+}
+@media (max-width: 479px) {
+    .modal:has(> .share-target) .share-expiry-options > div {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+    .modal:has(> .share-target) .share-expiry-options button {
+        grid-column: span 2;
+        min-height: 44px;
+    }
+    .modal:has(> .share-target)
+        .share-expiry-options
+        button:nth-last-child(-n + 2) {
+        grid-column: span 3;
+    }
+    .share-result-control {
+        grid-template-columns: minmax(0, 1fr);
+        justify-items: start;
+    }
+    .share-result-control input {
+        width: 100%;
+    }
+}
+.import-destination {
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+.import-destination strong {
+    color: var(--ink);
 }
 .item-name-field input {
     flex: 1;
@@ -53,4 +128,39 @@
 
 .move-breadcrumbs .text-button span {
     overflow-wrap: anywhere;
+}
+
+.modal .move-up {
+    justify-content: flex-start;
+    min-height: 44px;
+    text-align: start;
+    overflow-wrap: anywhere;
+}
+
+.modal .move-folders {
+    max-height: clamp(64px, 24dvh, 220px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.modal .move-folders > button > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.move-folder-status {
+    margin-block: 8px;
+    font-size: var(--mantine-font-size-sm);
+}
+
+.move-folder-status > p {
+    margin: 0;
+}
+
+.move-conflict {
+    margin-block-start: 12px;
+}
+
+.move-conflict select {
+    min-height: 44px;
 }

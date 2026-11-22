@@ -13,7 +13,13 @@ if os.environ.get("TGDRIVE_E2E") != "1":
     pytest.skip("Set TGDRIVE_E2E=1 for Chromium checks", allow_module_level=True)
 
 import tests.browser.test_browser_e2e as fixtures
-from tests.browser.node_pages import NODES, fetch_with_rows
+from tests.browser.node_pages import (
+    NODES,
+    ROOT_FOLDER,
+    fetch_with_rows,
+    node_page,
+    node_query,
+)
 from tests.browser.test_browser_e2e import ARTIFACTS, expect, login
 
 browser = fixtures.browser
@@ -402,13 +408,15 @@ def test_grid_views_preserve_selection_actions_and_bounded_thumbnails(
         expect(trigger).to_have_attribute("aria-description", re.compile("^Grid view"))
     grid = page.get_by_role("list", name="Files and folders", exact=True)
     expect(grid).to_be_visible()
-    # Ensure the fixture can scroll fully outside the thumbnail observer margin.
+    # Keep enough rows above the test thumbnail for it to leave view when
+    # scrolling to the top, even with a compact header on narrow screens.
     columns = grid.evaluate(
-        """element => {
+        """(element, count) => {
             const previous = element.style.gridTemplateColumns;
-            element.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
+            element.style.gridTemplateColumns = 'repeat(' + count + ', minmax(0, 1fr))';
             return previous;
-        }"""
+        }""",
+        1 if width < 721 else 2,
     )
     sample = grid.locator(".file-row").filter(has_text="sample.png")
     sample.scroll_into_view_if_needed()
@@ -1121,6 +1129,90 @@ def test_grid_tab_has_one_focus_ring_and_stable_thumbnail(server, desktop, theme
     page.screenshot(path=ARTIFACTS / f"grid-file-focus-{theme}.png")
 
 
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_recent_list_filename_focus_uses_an_underline(server, desktop, theme):
+    _, page = desktop
+    page.set_viewport_size({"width": 1536, "height": 695})
+    page.add_init_script(f"localStorage.setItem('tgdrive.appearance', '{theme}')")
+    items = [
+        {
+            "id": f"recent-{index}",
+            "name": name,
+            "type": "file",
+            "path": "/",
+            "parent_names": ["My Files"],
+            "size": 128,
+            "active_at": "2026-11-03T12:00:00Z",
+        }
+        for index, name in enumerate(("Audit player.mp4", "Audit reader.pdf"))
+    ]
+    page.route(
+        "**/api/v1/recent?**",
+        lambda route: route.fulfill(json={"items": items, "next_cursor": None}),
+    )
+
+    login(page, server.url)
+    page.get_by_role("link", name="Recent", exact=True).click()
+    first = page.get_by_role("button", name="Audit player.mp4", exact=True)
+    reader = page.get_by_role("button", name="Audit reader.pdf", exact=True)
+    first.click()
+    reader.click(modifiers=["Shift"])
+    expect(page.get_by_text("2 selected", exact=True)).to_be_visible()
+    expect(reader).to_have_css("outline-style", "none")
+
+    reader.press("Tab")
+    page.keyboard.press("Shift+Tab")
+    expect(reader).to_be_focused()
+    expect(reader).to_have_css("outline-style", "none")
+    expect(reader).to_have_css("text-decoration-line", "underline")
+    assert page.evaluate("getSelection().isCollapsed")
+    page.screenshot(path=ARTIFACTS / f"recent-list-focus-{theme}.png")
+
+    page.keyboard.press("Tab")
+    expect(reader).to_have_css("text-decoration-line", "none")
+    expect(page.get_by_text("2 selected", exact=True)).to_be_visible()
+
+
+@pytest.mark.parametrize("width", [1536, 820])
+def test_selection_actions_do_not_crowd_desktop_search(server, desktop, width):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 695 if width == 1536 else 1180})
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    search = page.get_by_role("searchbox", name="Search Files and Folders", exact=True)
+    select = page.get_by_role("button", name="Select", exact=True)
+    page.evaluate("document.fonts.ready")
+    initial_search = search.bounding_box()
+    assert initial_search
+
+    select.press("Enter")
+    bar = page.get_by_role("group", name="Selection actions", exact=True)
+    done = bar.get_by_role("button", name="Done", exact=True)
+    expect(done).to_be_focused()
+    expect(bar.get_by_role("status")).to_have_text("0 selected")
+    move = bar.get_by_role("button", name="Move", exact=True)
+    expect(move).to_be_disabled()
+    active_search = search.bounding_box()
+    bar_box = bar.bounding_box()
+    assert active_search and bar_box
+    assert active_search["width"] >= initial_search["width"] - 1
+    view_box = page.get_by_role("group", name="File view", exact=True).bounding_box()
+    assert view_box
+    assert bar_box["x"] + bar_box["width"] <= view_box["x"] + 1
+
+    checkbox = page.get_by_role("checkbox", name="Select sample.json", exact=True)
+    checkbox.check()
+    expect(bar.get_by_role("status")).to_have_text("1 selected")
+    expect(move).to_be_enabled()
+    choose_view(page, "Grid view")
+    expect(checkbox).to_be_checked()
+    assert bar.evaluate("e => e.scrollWidth <= e.clientWidth")
+    done.press("Enter")
+    expect(select).to_be_focused()
+    expect(bar).to_have_count(0)
+    expect(checkbox).to_have_count(0)
+
+
 @pytest.mark.parametrize("view", ["List view", "Grid view"])
 def test_mouse_modifiers_select_visible_file_ranges_and_individual_items(
     server, desktop, view
@@ -1147,6 +1239,13 @@ def test_mouse_modifiers_select_visible_file_ranges_and_individual_items(
     expect(chosen).to_have_text(names[1:3])
     files.nth(4).click(modifiers=["Control"])
     expect(chosen).to_have_text([*names[1:3], names[4]])
+    if view == "List view":
+        file = files.nth(4)
+        file.press("Tab")
+        page.keyboard.press("Shift+Tab")
+        expect(file).to_be_focused()
+        expect(file).to_have_css("outline-style", "none")
+        expect(file).to_have_css("text-decoration-line", "underline")
     files.nth(4).click(modifiers=["Meta"])
     expect(chosen).to_have_text(names[1:3])
     files.nth(3).click(modifiers=["Control"])
@@ -1243,6 +1342,84 @@ def test_new_browsers_open_files_in_list_with_type_filters(server, desktop, widt
         filters.get_by_role("button", name="All", exact=True).click()
     expect(page.get_by_role("button", name="sample.png", exact=True)).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_phone_type_filter_keeps_results_visible_during_request(server, desktop):
+    _, page = desktop
+    page.set_viewport_size({"width": 390, "height": 844})
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    expect(page.get_by_role("button", name="sample.png", exact=True)).to_be_visible()
+    heading = page.get_by_role("heading", name="Preview samples", exact=True)
+    page.evaluate("document.fonts.ready")
+    before = heading.bounding_box()
+    page.evaluate("""() => {
+        window.typeTransitions = 0;
+        const start = document.startViewTransition?.bind(document);
+        if (start) document.startViewTransition = (...args) => {
+            window.typeTransitions++;
+            return start(...args);
+        };
+    }
+    """)
+    held = []
+    page.route("**/api/v1/nodes?**type=audio*", lambda route: held.append(route))
+    picker = page.get_by_role("combobox", name="Type", exact=True)
+    picker.click()
+    page.get_by_role("option", name="Audio", exact=True).click()
+    expect(page.get_by_text("Updating files…", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="sample.wav", exact=True)).to_be_visible()
+    expect(page.locator(".file-skeleton")).to_have_count(0)
+    expect(picker).to_be_focused()
+    assert heading.bounding_box() == before
+    assert page.evaluate("window.typeTransitions") == 0
+    assert len(held) == 1
+    held[0].continue_()
+    expect(page.get_by_text("Updating files…", exact=True)).to_have_count(0)
+    expect(page.get_by_role("button", name="sample.png", exact=True)).to_have_count(0)
+
+
+def test_partial_type_filter_retries_without_activating_previous_rows(server, desktop):
+    _, page = desktop
+    page.set_viewport_size({"width": 390, "height": 844})
+    rows = [
+        {
+            "id": str(i),
+            "name": f"File {i:03}.txt",
+            "path": "/",
+            "type": "file",
+            "size": 1,
+        }
+        for i in range(220)
+    ]
+    audio = {"id": "last", "name": "Last.wav", "path": "/", "type": "file", "size": 1}
+    held = []
+
+    def listing(route):
+        query = node_query(route.request)
+        if query.get("type") == "audio":
+            held.append(route)
+        else:
+            route.fulfill(json=node_page([*rows, audio], query, ROOT_FOLDER))
+
+    page.route(NODES, listing)
+    login(page, server.url)
+    expect(page.get_by_role("button", name="File 000.txt", exact=True)).to_be_visible()
+    picker = page.get_by_role("combobox", name="Type", exact=True)
+    picker.click()
+    page.get_by_role("option", name="Audio", exact=True).click()
+    expect(page.get_by_text("Updating files…", exact=True)).to_be_visible()
+    expect(page.locator(".file-list-scroll")).to_have_attribute("inert", "")
+    expect(page.locator(".file-skeleton")).to_have_count(0)
+    held[0].fulfill(status=503, json={"detail": "Unavailable"})
+    retry = page.get_by_role("button", name="Retry", exact=True)
+    expect(retry).to_be_visible()
+    expect(picker).to_have_text("Audio")
+    retry.click()
+    expect(page.get_by_text("Updating files…", exact=True)).to_be_visible()
+    held[1].fulfill(json=node_page([audio], node_query(held[1].request), ROOT_FOLDER))
+    expect(page.get_by_role("button", name="Last.wav", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="File 000.txt", exact=True)).to_have_count(0)
 
 
 @pytest.mark.parametrize("view", ["List view", "Grid view"])

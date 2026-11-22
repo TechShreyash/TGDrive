@@ -455,10 +455,25 @@ def test_copy_download_link_is_explicit_public_capability_and_prepare_is_scoped(
     page.get_by_role("button", name="Copy Download Link", exact=True).click()
     dialog = page.get_by_role("dialog", name="Copy Download Link", exact=True)
     expect(dialog).to_contain_text("Anyone with this link")
+    page.evaluate("""() => {
+        navigator.clipboard.writeText = () => Promise.reject(
+            new DOMException("Clipboard permission denied", "NotAllowedError")
+        );
+    }""")
     with page.expect_response("**/api/v1/download-links") as response:
         dialog.get_by_role("button", name="Create or Copy Link", exact=True).click()
     link = response.value.json()
     expect(dialog.get_by_label("Download link", exact=True)).to_have_value(link["url"])
+    expect(dialog.get_by_role("alert")).to_contain_text(
+        "Select and copy the download link above."
+    )
+    retries = []
+    page.on("request", lambda request: retries.append(request.url)
+            if request.url.endswith("/api/v1/download-links") else None)
+    page.evaluate("() => delete navigator.clipboard.writeText")
+    dialog.get_by_role("button", name="Copy Link", exact=True).click()
+    expect(dialog.get_by_role("status")).to_have_text("Download link copied.")
+    assert not retries
     assert "auth=" in link["url"]
     assert page.evaluate("navigator.clipboard.readText()") == link["url"]
     zone = (

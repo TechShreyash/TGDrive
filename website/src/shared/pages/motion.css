@@ -124,41 +124,6 @@ progress::-webkit-progress-value {
     transform: scale(0.98);
 }
 
-/* Popover & action menus smooth entrance */
-.action-menu[popover],
-.new-menu {
-    animation: menu-pop 160ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
-    transform-origin: top right;
-}
-
-@keyframes menu-pop {
-    from {
-        opacity: 0;
-        transform: scale(0.95);
-    }
-    to {
-        opacity: 1;
-        transform: scale(1);
-    }
-}
-
-/* Modal dialog smooth entrance */
-.modal,
-dialog[open] {
-    animation: modal-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
-}
-
-@keyframes modal-enter {
-    from {
-        opacity: 0;
-        transform: scale(0.96) translateY(6px);
-    }
-    to {
-        opacity: 1;
-        transform: scale(1) translateY(0);
-    }
-}
-
 /* Startup screen pulse */
 .startup-status {
     display: inline-flex;

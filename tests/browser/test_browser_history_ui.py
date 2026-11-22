@@ -124,7 +124,6 @@ def test_history_interval_hover_keyboard_poll_and_persisted_selection(server, de
     network.get_by_role("button", name="Inspect Server network samples").press("End")
     expect(network.get_by_role("status")).to_contain_text("16.78 Mbps")
     expect(network.locator(".performance-chart-tooltip")).to_contain_text("8.39 Mbps")
-    page.get_by_role("tab", name="Tuning", exact=True).click()
     totals = page.locator(".performance-all-time")
     expect(page.get_by_role("heading", name="All-time totals")).to_be_visible()
     expect(totals.get_by_role("table")).to_be_visible()
@@ -299,7 +298,6 @@ def test_recorded_history_page_uses_real_private_history_endpoint(server, deskto
         "Recorded averages"
     )
     expect(page.locator(".performance-history-error")).to_have_count(0)
-    page.get_by_role("tab", name="Tuning", exact=True).click()
     expect(
         page.get_by_role("heading", name="All-time totals", exact=True)
     ).to_be_visible()

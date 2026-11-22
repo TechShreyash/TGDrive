@@ -27,6 +27,7 @@ export default function TorrentFilePicker({
     onChoose: (indexes: number[]) => Promise<void>;
 }) {
     const [open, setOpen] = useState(false);
+    const [busy, setBusy] = useState(false);
     return (
         <>
             <button
@@ -43,14 +44,22 @@ export default function TorrentFilePicker({
                     tone="violet"
                     description="Only the files you keep selected are downloaded and saved."
                     wide
-                    onClose={() => setOpen(false)}
+                    onClose={() => {
+                        if (!busy) setOpen(false);
+                    }}
                 >
                     <TorrentFileChoice
                         name={name}
                         files={files}
+                        busy={busy}
                         onChoose={async (indexes) => {
-                            await onChoose(indexes);
-                            setOpen(false);
+                            setBusy(true);
+                            try {
+                                await onChoose(indexes);
+                                setOpen(false);
+                            } finally {
+                                setBusy(false);
+                            }
                         }}
                     />
                 </Modal>
@@ -62,16 +71,17 @@ export default function TorrentFilePicker({
 function TorrentFileChoice({
     name,
     files,
+    busy,
     onChoose,
 }: {
     name: string;
     files: { path: string; size: number }[];
+    busy: boolean;
     onChoose: (indexes: number[]) => Promise<void>;
 }) {
     const [chosen, setChosen] = useState(
         () => new Set(files.map((_, index) => index)),
     );
-    const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const { indexes, size } = torrentSelection(files, chosen);
     const prefix = name + "/";
@@ -87,30 +97,37 @@ function TorrentFileChoice({
             aria-label={"Choose files from " + name}
             onSubmit={(event) => {
                 event.preventDefault();
-                setBusy(true);
+                if (busy || !indexes.length) return;
                 setError("");
-                onChoose(indexes)
-                    .catch((cause) => setError(String(cause?.message || cause)))
-                    .finally(() => setBusy(false));
+                void onChoose(indexes).catch((cause) =>
+                    setError(String(cause?.message || cause)),
+                );
             }}
         >
             <div className="torrent-picker-actions">
-                <button
-                    type="button"
-                    className="text-button"
-                    onClick={() =>
-                        setChosen(new Set(files.map((_, index) => index)))
-                    }
-                >
-                    Select all
-                </button>
-                <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => setChosen(new Set())}
-                >
-                    Select none
-                </button>
+                <label className="check-field">
+                    <input
+                        type="checkbox"
+                        checked={indexes.length === files.length}
+                        disabled={busy || !files.length}
+                        ref={(input) => {
+                            if (input)
+                                input.indeterminate =
+                                    indexes.length > 0 &&
+                                    indexes.length < files.length;
+                        }}
+                        onChange={(event) =>
+                            setChosen(
+                                new Set(
+                                    event.currentTarget.checked
+                                        ? files.map((_, index) => index)
+                                        : [],
+                                ),
+                            )
+                        }
+                    />
+                    <span>All files</span>
+                </label>
                 <span className="torrent-picker-count">
                     {indexes.length} of {files.length} selected
                 </span>

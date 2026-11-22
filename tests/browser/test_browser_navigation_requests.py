@@ -80,7 +80,8 @@ def test_folder_navigation_does_not_fetch_current_listing_for_breadcrumbs(
         "request",
         lambda request: (
             share_requests.append(request.url)
-            if request.method == "GET" and request.url.endswith("/api/v1/shares")
+            if request.method == "GET"
+            and request.url.split("?", 1)[0].endswith("/api/v1/shares")
             else None
         ),
     )
@@ -165,16 +166,22 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
         "request",
         lambda request: (
             shares.append(request)
-            if request.method == "GET" and request.url.endswith("/api/v1/shares")
+            if request.method == "GET"
+            and request.url.split("?", 1)[0].endswith("/api/v1/shares")
             else None
         ),
     )
     login(page, server.url)
     page.get_by_label("Actions for 資料", exact=True).click()
     page.get_by_role("button", name="Share Link", exact=True).click()
-    dialog = page.get_by_role("dialog", name="Share “資料”", exact=True)
+    dialog = page.get_by_role("dialog")
+    expect(dialog.get_by_role("heading", name="Share link", exact=True)).to_be_visible()
+    expect(dialog.get_by_text("資料", exact=True)).to_be_visible()
     dialog.get_by_role("button", name="Create Share Link", exact=True).click()
-    expect(dialog.get_by_label("Share Link", exact=True)).to_be_visible()
+    expect(
+        dialog.get_by_role("heading", name="Share link ready", exact=True)
+    ).to_be_visible()
+    expect(dialog.get_by_label("Share Link", exact=True)).to_be_focused()
     dialog.get_by_role("button", name="Done", exact=True).click()
     expect(page.get_by_title("Shared by Link", exact=True)).to_have_count(1)
     before = len(shares)
@@ -194,7 +201,8 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
     dialog.get_by_label("Name", exact=True).fill("Renamed shared folder")
     with page.expect_response(
         lambda response: (
-            response.request.method == "GET" and response.url.endswith("/api/v1/shares")
+            response.request.method == "GET"
+            and response.url.split("?", 1)[0].endswith("/api/v1/shares")
         )
     ):
         dialog.get_by_role("button", name="Save Name", exact=True).click()
@@ -214,7 +222,7 @@ def test_upload_refreshes_skip_shares_but_metadata_changes_refresh_badges(
         with page.expect_response(
             lambda response: (
                 response.request.method == "GET"
-                and response.url.endswith("/api/v1/shares")
+                and response.url.split("?", 1)[0].endswith("/api/v1/shares")
             )
         ):
             page.get_by_role("button", name="Move to Trash", exact=True).click()

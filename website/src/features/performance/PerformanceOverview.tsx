@@ -183,15 +183,26 @@ export default function PerformanceOverview({
         .join(" · ");
     const hasWait =
         telegramReadings || limits.length > 0 || readBufferWait || otherWaits;
+    const quiet =
+        current &&
+        diagnosisCurrent &&
+        diagnosis?.state !== "observing" &&
+        !hasWait;
+    const idle = needsAttention === 0 && active === 0 && queued === 0;
 
     return (
-        <div className="performance-dashboard">
+        <div className="performance-dashboard" data-quiet={quiet || undefined}>
             <section
                 className="performance-attention"
                 aria-labelledby="performance-activity-heading"
             >
                 <div className="performance-transfer-summary">
-                    <h3 id="performance-activity-heading">Transfer activity</h3>
+                    <h3
+                        id="performance-activity-heading"
+                        className={idle ? "performance-idle-label" : undefined}
+                    >
+                        Transfer activity
+                    </h3>
                     <p
                         className={
                             needsAttention > 0
@@ -204,15 +215,24 @@ export default function PerformanceOverview({
                         )}
                         <strong>
                             {needsAttention === 0
-                                ? "No transfers flagged for attention"
+                                ? idle
+                                    ? "Transfers idle"
+                                    : "Transfers in progress"
                                 : needsAttention === 1
                                   ? "1 transfer needs attention"
                                   : `${needsAttention} transfers need attention`}
                         </strong>
                     </p>
-                    <p>
-                        {active} active · {queued} queued
-                    </p>
+                    {!idle && (
+                        <p>
+                            {active} active · {queued} queued
+                        </p>
+                    )}
+                    {quiet && (
+                        <p className="performance-phone-waits">
+                            No requests waiting
+                        </p>
+                    )}
                 </div>
                 <Button
                     component="a"
@@ -223,7 +243,10 @@ export default function PerformanceOverview({
                 </Button>
             </section>
 
-            <section aria-labelledby="performance-waits-heading">
+            <section
+                className="performance-waits"
+                aria-labelledby="performance-waits-heading"
+            >
                 <h3 id="performance-waits-heading">Current waits</h3>
                 {hasWait ? (
                     <ul className="performance-wait-list">

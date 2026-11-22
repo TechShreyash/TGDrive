@@ -274,6 +274,7 @@ def test_phone_navigation_search_new_and_owner_controls_are_reachable(
         expect(page.get_by_role("dialog")).to_be_visible()
         assert_bounded(page, "dialog[open], dialog[open] input, dialog[open] button")
         page.keyboard.press("Escape")
+        expect(trigger).to_be_focused()
         status = page.get_by_role("button", name="Open transfer progress")
         if height < 400:
             with page.expect_response(
@@ -323,7 +324,8 @@ def test_phone_navigation_search_new_and_owner_controls_are_reachable(
             }
         ]
         page.route(
-            "**/api/v1/shares", lambda route: route.fulfill(json={"shares": shares})
+            "**/api/v1/shares{,?*}",
+            lambda route: route.fulfill(json={"shares": shares}),
         )
         for name, suffix in [
             ("shares", "?view=shares"),

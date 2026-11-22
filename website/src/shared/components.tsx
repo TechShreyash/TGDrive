@@ -121,6 +121,7 @@ export function Modal({
     onClose,
     wide = false,
     initialFocus,
+    getFallbackFocus,
     icon,
     tone,
     description,
@@ -130,6 +131,7 @@ export function Modal({
     onClose: () => void;
     wide?: boolean;
     initialFocus?: string;
+    getFallbackFocus?: () => HTMLElement | null;
     /** A tinted tile beside the title that names the action. */
     icon?: ReactNode;
     tone?: "amber" | "blue" | "violet" | "green" | "red" | "orange";
@@ -180,9 +182,13 @@ export function Modal({
             node.close();
             if (trigger?.isConnected && trigger !== document.body)
                 trigger.focus();
-            else document.getElementById("main-content")?.focus();
+            else
+                (
+                    getFallbackFocus?.() ??
+                    document.getElementById("main-content")
+                )?.focus();
         };
-    }, [initialFocus]);
+    }, [initialFocus, getFallbackFocus]);
     return (
         <dialog
             ref={dialog}

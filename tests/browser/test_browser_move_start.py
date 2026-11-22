@@ -16,7 +16,7 @@ def test_move_starts_in_source_folder_and_can_navigate_to_root(server, desktop):
     breadcrumb = dialog.get_by_role("navigation", name="Destination breadcrumb")
     expect(breadcrumb.get_by_role("button", name="資料")).to_be_visible()
     expect(dialog.get_by_role("button", name="Move Here")).to_be_disabled()
-    breadcrumb.get_by_role("button", name="My Files").click()
+    dialog.get_by_role("button", name="Up to My Files").click()
     expect(dialog.get_by_role("button", name="Private folder")).to_be_visible()
     expect(dialog.get_by_role("button", name="Move Here")).to_be_enabled()
 

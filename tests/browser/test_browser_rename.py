@@ -53,6 +53,9 @@ def test_file_rename_keeps_extension_and_video_preview(server, desktop, width):
     dialog = rename_dialog(page, "movtext-subtitles.mp4")
     name = dialog.get_by_label("Name", exact=True)
     expect(name).to_have_value("movtext-subtitles")
+    assert name.evaluate(
+        "input => input.value.slice(input.selectionStart, input.selectionEnd)"
+    ) == "movtext-subtitles"
     expect(name).to_have_attribute("aria-describedby", "item-name-hint")
     suffix = dialog.locator(".rename-extension")
     expect(suffix).to_be_visible()

@@ -129,6 +129,28 @@ export async function request<T>(
     }
     return data as T;
 }
+async function markedItems(
+    view: "starred" | "trash",
+    q: string,
+    signal?: AbortSignal,
+) {
+    const contents: Directory["contents"] = {};
+    const params = new URLSearchParams({ q, limit: "200" });
+    let cursor: string | null | undefined;
+    for (;;) {
+        if (cursor) params.set("cursor", cursor);
+        const page = await request<{
+            data: Directory;
+            auth_home_path?: string;
+            next_cursor?: string | null;
+        }>(`/api/v1/${view}?${params}`, undefined, { signal });
+        Object.assign(contents, page.data.contents);
+        cursor = page.next_cursor;
+        if (!cursor)
+            return { ...page, data: { ...page.data, contents } };
+    }
+}
+
 export interface BotUploadSettings {
     folder_path: string | null;
     resolved_path: string | null;
@@ -164,12 +186,7 @@ export const api = {
             },
             { method: "PATCH" },
         ),
-    starred: (q = "", signal?: AbortSignal) =>
-        request<{ data: Directory; auth_home_path?: string }>(
-            "/api/v1/starred?" + new URLSearchParams({ q }),
-            undefined,
-            { signal },
-        ),
+    starred: (q = "", signal?: AbortSignal) => markedItems("starred", q, signal),
     star: (path: string, starred: boolean) =>
         request("/api/v1/starred", { path, starred }, { method: "PATCH" }),
 
@@ -259,11 +276,7 @@ export const api = {
         return folders;
     },
     trash: (query = "", signal?: AbortSignal) =>
-        request<{ data: Directory; auth_home_path?: string }>(
-            "/api/v1/trash?" + new URLSearchParams({ q: query }),
-            undefined,
-            { signal },
-        ),
+        markedItems("trash", query, signal),
     search: (
         query: string,
         offset = 0,
@@ -322,8 +335,21 @@ export const api = {
             conflict,
             allow_public_exposure,
         }),
-    shares: (signal?: AbortSignal) =>
-        request<{ shares: Share[] }>("/api/v1/shares", undefined, { signal }),
+    shares: async (signal?: AbortSignal) => {
+        const shares: Share[] = [];
+        const params = new URLSearchParams({ limit: "200" });
+        let cursor: string | null | undefined;
+        do {
+            if (cursor) params.set("cursor", cursor);
+            const page = await request<{
+                shares: Share[];
+                next_cursor?: string | null;
+            }>(`/api/v1/shares?${params}`, undefined, { signal });
+            shares.push(...page.shares);
+            cursor = page.next_cursor;
+        } while (cursor);
+        return { shares };
+    },
     shareLink: (path: string, share_id?: string) =>
         request<{
             auth: string;

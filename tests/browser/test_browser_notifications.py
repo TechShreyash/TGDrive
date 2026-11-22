@@ -65,7 +65,11 @@ def test_notifications_are_single_dismissible_and_usable_in_modals(
     toast.get_by_role("button", name="Dismiss Notification").click()
     expect(toast).to_have_count(0)
     create_folder("Popup next")
-    check_notification("Folder created.")
+    toast = check_notification("Folder created.")
+    # On a narrow page the toast can appear under the former submit button.
+    # Move off it before asserting the idle lifetime.
+    page.mouse.move(0, 0)
+    assert toast.evaluate("el => !el.matches(':hover, :focus-within')")
     page.clock.run_for(6500)
     expect(toast).to_have_count(0)
 

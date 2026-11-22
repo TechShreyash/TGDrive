@@ -367,12 +367,24 @@
 }
 
 .performance-page .performance-storage-panel .performance-resource-summary {
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 1px;
     overflow: clip;
     border: 1px solid var(--line-subtle);
     border-radius: 12px;
     background: var(--line-subtle);
+}
+.performance-cache-meter-grid,
+.performance-disk-readings {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px;
+}
+.performance-cache-meter-grid > .performance-usage {
+    flex: 1 1 min(100%, 13rem);
+}
+.performance-disk-readings > .performance-usage {
+    flex: 1 1 min(100%, 18rem);
 }
 .performance-page
     .performance-storage-panel
@@ -579,7 +591,6 @@
     margin-block: 4px 20px;
     border-bottom: 1px solid var(--line);
 }
-.performance-page [role="tabpanel"] .performance-all-time,
 .performance-page [role="tabpanel"] .tuning-section,
 .performance-page [role="tabpanel"] .performance-account-section {
     background: transparent;
@@ -609,6 +620,8 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .performance-page .performance-dashboard > section + section {
+        grid-column: 2;
+        grid-row: 1;
         border-inline-start: 1px solid var(--line);
         padding-inline-start: 24px;
         border-radius: 0;
@@ -629,5 +642,133 @@
     }
     .performance-page .performance-dashboard {
         padding-block: 0 6px;
+    }
+}
+
+.performance-phone-waits,
+.performance-phone-label {
+    display: none;
+}
+
+.performance-update summary {
+    cursor: pointer;
+}
+
+.tuning-group-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 12px;
+}
+
+.tuning-group-header a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+}
+
+@media (max-width: 540px) {
+    .performance-page > .performance-toolbar.performance-section-heading {
+        gap: 2px;
+        margin-bottom: 8px;
+    }
+
+    .performance-page > .performance-toolbar .performance-view-tabs {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        width: 100%;
+    }
+
+    .performance-page > .performance-toolbar .performance-view-tabs button {
+        font-size: 14px;
+    }
+
+    .performance-page
+        > .performance-toolbar
+        .performance-view-tabs
+        button[data-selected] {
+        font-weight: 700;
+    }
+
+    .performance-wide-label,
+    .performance-dashboard[data-quiet] .performance-waits,
+    .performance-page .performance-idle-label {
+        display: none;
+    }
+
+    .performance-phone-label,
+    .performance-dashboard .performance-phone-waits {
+        display: block;
+    }
+
+    .performance-page .performance-dashboard {
+        padding-block: 0 8px;
+        margin-block-end: 0;
+    }
+
+    .performance-page .performance-dashboard > section {
+        padding-block: 6px;
+    }
+
+    .performance-page .performance-drive-summary {
+        padding: 10px 12px;
+        margin-block: 10px 12px;
+    }
+
+    .performance-drive-summary dl {
+        grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr) minmax(0, 1fr);
+        gap: 4px 10px;
+    }
+
+    .performance-drive-summary dd {
+        font-size: 16px;
+    }
+
+    .performance-drive-summary .performance-library-trash {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+    }
+
+    .performance-drive-heading {
+        margin-bottom: 2px;
+    }
+
+    .performance-page .performance-network-chart {
+        padding-block: 10px;
+    }
+
+    .performance-page
+        .performance-history-panel
+        .performance-measurements-heading {
+        display: grid;
+        align-items: center;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+        gap: 8px;
+    }
+
+    .performance-page .performance-history-availability[data-complete-live] {
+        display: none;
+    }
+
+    .performance-page
+        .performance-history-panel
+        .performance-history-controls
+        > label {
+        font-size: 0;
+        gap: 0;
+    }
+
+    .performance-page
+        .performance-history-panel
+        .performance-history-controls
+        select {
+        font-size: 16px;
+    }
+
+    .performance-page .performance-network-chart .performance-chart-plot {
+        height: 128px;
     }
 }

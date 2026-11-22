@@ -137,7 +137,7 @@ function AutomaticTuning({
             </div>
             <p className="tuning-intro">
                 {!hasValues
-                    ? "Waiting for a tuning report. You can review your configured limits above."
+                    ? "Waiting for a tuning report. You can still review your configured limits."
                     : tuning.example
                       ? "Sample values calculated from example server resources."
                       : stale
@@ -150,6 +150,22 @@ function AutomaticTuning({
                         <div key={group.title} className="tuning-group">
                             <div className="tuning-group-header">
                                 <h4>{group.title}</h4>
+                                {group.title === "Cache" && (
+                                    <a
+                                        className="inline-link"
+                                        href="/?view=settings&section=cache"
+                                    >
+                                        Cache settings
+                                    </a>
+                                )}
+                                {group.title === "Upload staging" && (
+                                    <a
+                                        className="inline-link"
+                                        href="/?view=settings&section=transfers"
+                                    >
+                                        Transfer limits
+                                    </a>
+                                )}
                             </div>
                             <dl className="tuning-facts">
                                 {group.keys.map((key) => {
@@ -969,6 +985,15 @@ export default function PerformancePanel({
         diskCapacity.effective.available
             ? measuredNumber(diskCapacity.effective.free_bytes)
             : null;
+    const visibleDisk = snapshot?.server.disk;
+    const visibleDiskFree =
+        visibleDisk?.available === false
+            ? null
+            : measuredNumber(visibleDisk?.free_bytes);
+    const visibleDiskTotal =
+        visibleDisk?.available === false
+            ? null
+            : measuredNumber(visibleDisk?.total_bytes);
     const memoryUsed =
         snapshot?.resource_summary?.memory.used_bytes ??
         memory?.cgroup_current ??
@@ -1090,8 +1115,17 @@ export default function PerformancePanel({
                     aria-label="Performance views"
                 >
                     <TabsTab value="server">Overview</TabsTab>
-                    <TabsTab value="storage" ref={resourcesTab}>
-                        Server resources
+                    <TabsTab
+                        value="storage"
+                        ref={resourcesTab}
+                        aria-label="Server resources"
+                    >
+                        <span className="performance-wide-label">
+                            Server resources
+                        </span>
+                        <span className="performance-phone-label">
+                            Resources
+                        </span>
                     </TabsTab>
                     <TabsTab value="tuning">Tuning</TabsTab>
                     <TabsTab value="telegram" ref={accountsTab}>
@@ -1099,13 +1133,23 @@ export default function PerformancePanel({
                     </TabsTab>
                 </TabsList>
                 {snapshot && (
-                    <p className="performance-update" data-stale={!current}>
-                        {current ? "Updates every 5s" : "Last loaded snapshot"}{" "}
-                        ·{" "}
-                        {formatTimestamp(
-                            snapshot.server.sampled_at ?? snapshot.server.at,
-                        )}
-                    </p>
+                    <details
+                        className="performance-update"
+                        data-stale={!current}
+                        open={!current}
+                    >
+                        <summary>
+                            {current
+                                ? "Live · every 5s"
+                                : "Last loaded snapshot"}
+                        </summary>
+                        <span>
+                            {formatTimestamp(
+                                snapshot.server.sampled_at ??
+                                    snapshot.server.at,
+                            )}
+                        </span>
+                    </details>
                 )}
             </div>
             {loading && (
@@ -1155,17 +1199,30 @@ export default function PerformancePanel({
                                     className="performance-overview-status"
                                     aria-label="Live Telegram activity"
                                 >
-                                    <span>
-                                        <strong>{uploads}</strong> uploading
-                                    </span>
-                                    <span>
-                                        <strong>{downloads}</strong> downloading
-                                        from Telegram
-                                    </span>
-                                    <span>
-                                        <strong>{telegram.queued}</strong>{" "}
-                                        waiting
-                                    </span>
+                                    {uploads === 0 &&
+                                    downloads === 0 &&
+                                    telegram.queued === 0 ? (
+                                        <span>
+                                            No active or waiting requests
+                                        </span>
+                                    ) : (
+                                        <>
+                                            <span>
+                                                <strong>{uploads}</strong>{" "}
+                                                uploading
+                                            </span>
+                                            <span>
+                                                <strong>{downloads}</strong>{" "}
+                                                downloading from Telegram
+                                            </span>
+                                            <span>
+                                                <strong>
+                                                    {telegram.queued}
+                                                </strong>{" "}
+                                                waiting
+                                            </span>
+                                        </>
+                                    )}
                                 </section>
                             </div>
 
@@ -1593,17 +1650,19 @@ export default function PerformancePanel({
                                 <h3 id="drive-library-heading">
                                     TGDrive library
                                 </h3>
-                                <a
-                                    className="inline-link"
-                                    href="/?path=%2Ftrash"
-                                >
-                                    Open Trash
-                                </a>
                             </div>
                             {Number.isFinite(snapshot.drive?.files) &&
                             Number.isFinite(snapshot.drive?.folders) &&
                             Number.isFinite(snapshot.drive?.total_bytes) ? (
                                 <dl>
+                                    <div>
+                                        <dt>Stored in Telegram</dt>
+                                        <dd>
+                                            {formatBytes(
+                                                snapshot.drive.total_bytes,
+                                            )}
+                                        </dd>
+                                    </div>
                                     <div>
                                         <dt>Files</dt>
                                         <dd>
@@ -1616,27 +1675,24 @@ export default function PerformancePanel({
                                             {snapshot.drive.folders.toLocaleString()}
                                         </dd>
                                     </div>
-                                    <div>
-                                        <dt>Stored in Telegram</dt>
-                                        <dd>
-                                            {formatBytes(
-                                                snapshot.drive.total_bytes,
-                                            )}
-                                        </dd>
-                                    </div>
                                     {typeof snapshot.drive.trashed_files ===
                                         "number" &&
                                         Number.isFinite(
                                             snapshot.drive.trashed_files,
                                         ) && (
-                                            <div>
+                                            <div className="performance-library-trash">
                                                 <dt>Files in Trash</dt>
                                                 <dd>
-                                                    {snapshot.drive.trashed_files.toLocaleString()}
+                                                    {snapshot.drive
+                                                        .trashed_files
+                                                        ? snapshot.drive.trashed_files.toLocaleString()
+                                                        : "Empty"}
                                                 </dd>
-                                                {typeof snapshot.drive
-                                                    .trashed_bytes ===
-                                                    "number" &&
+                                                {snapshot.drive.trashed_files >
+                                                    0 &&
+                                                    typeof snapshot.drive
+                                                        .trashed_bytes ===
+                                                        "number" &&
                                                     Number.isFinite(
                                                         snapshot.drive
                                                             .trashed_bytes,
@@ -1648,6 +1704,17 @@ export default function PerformancePanel({
                                                             )}
                                                         </dd>
                                                     )}
+                                                {snapshot.drive.trashed_files >
+                                                    0 && (
+                                                    <dd>
+                                                        <a
+                                                            className="inline-link"
+                                                            href="/?path=%2Ftrash"
+                                                        >
+                                                            Open Trash
+                                                        </a>
+                                                    </dd>
+                                                )}
                                             </div>
                                         )}
                                 </dl>
@@ -1660,8 +1727,15 @@ export default function PerformancePanel({
                         <div className="performance-history-panel">
                             <div className="performance-measurements-heading">
                                 <div className="performance-history-title">
-                                    <h3>Charts and history</h3>
-                                    <p className="performance-history-availability">
+                                    <h3>History</h3>
+                                    <p
+                                        className="performance-history-availability"
+                                        data-complete-live={
+                                            (!historical &&
+                                                resourceHistory.length > 1) ||
+                                            undefined
+                                        }
+                                    >
                                         {historical
                                             ? recorded &&
                                               loadedRange === rangeKey
@@ -1942,6 +2016,80 @@ export default function PerformancePanel({
                                 />
                             </div>
                         </div>
+                        {recorded && (
+                            <section
+                                className="performance-all-time"
+                                aria-labelledby="all-time-heading"
+                            >
+                                <h3 id="all-time-heading">All-time totals</h3>
+                                <p className="settings-help">
+                                    {recorded.tracked_since
+                                        ? `Since ${formatTimestamp(recorded.tracked_since)}.`
+                                        : "Tracking has just started."}{" "}
+                                    Totals survive restart and are independent
+                                    of the time range.
+                                </p>
+                                <table className="performance-totals-table">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Traffic source</th>
+                                            <th scope="col">
+                                                Received by server
+                                            </th>
+                                            <th scope="col">Sent by server</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(
+                                            [
+                                                [
+                                                    "Server network",
+                                                    recorded.totals
+                                                        .network_received_bytes,
+                                                    recorded.totals
+                                                        .network_sent_bytes,
+                                                ],
+                                                [
+                                                    "TGDrive files",
+                                                    recorded.totals
+                                                        .http_upload_bytes,
+                                                    recorded.totals
+                                                        .http_download_bytes,
+                                                ],
+                                                [
+                                                    "Telegram",
+                                                    recorded.totals
+                                                        .telegram_download_bytes,
+                                                    recorded.totals
+                                                        .telegram_upload_bytes,
+                                                ],
+                                            ] as const
+                                        ).map(([label, received, sent]) => (
+                                            <tr key={label}>
+                                                <th scope="row">{label}</th>
+                                                <td>
+                                                    {typeof received ===
+                                                    "number"
+                                                        ? formatBytes(received)
+                                                        : "Not available"}
+                                                </td>
+                                                <td>
+                                                    {typeof sent === "number"
+                                                        ? formatBytes(sent)
+                                                        : "Not available"}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                                <p className="settings-help">
+                                    Network includes Telegram, URL imports and
+                                    device traffic. The rows overlap; do not add
+                                    them together. Totals start when tracking
+                                    begins.
+                                </p>
+                            </section>
+                        )}
                     </TabsPanel>
                     <TabsPanel
                         value="storage"
@@ -1958,80 +2106,119 @@ export default function PerformancePanel({
                                 </h3>
                             </div>
                             <div className="performance-resource-summary">
-                                <div
-                                    className="performance-usage"
-                                    data-storage="effective"
-                                >
-                                    <div>
-                                        <span>Verified free disk space</span>
-                                        <strong>
-                                            {backingFree === null
-                                                ? "Unavailable"
-                                                : formatBytes(backingFree)}
-                                        </strong>
-                                    </div>
-                                    <small>
-                                        {backingFree === null
-                                            ? diskCapacity?.backing.configured
-                                                ? "The configured disk did not return a reading."
-                                                : "No host disk check configured."
-                                            : (diskCapacity!.effective
-                                                  .headroom_bytes === null
-                                                  ? "Reserve headroom unavailable."
-                                                  : formatBytes(
-                                                        diskCapacity!.effective
-                                                            .headroom_bytes,
-                                                    ) +
-                                                    " available after reserve.") +
-                                              " Uses the filesystem and configured disk readings."}
-                                    </small>
-                                </div>
-                                {snapshot.database && (
+                                <div className="performance-cache-meter-grid">
+                                    {snapshot.database && (
+                                        <UsageMeter
+                                            label="MongoDB catalog storage"
+                                            used={snapshot.database.used_bytes}
+                                            total={
+                                                snapshot.database
+                                                    .volume_total_bytes || NaN
+                                            }
+                                            unavailableLabel={formatBytes(
+                                                snapshot.database.used_bytes,
+                                            )}
+                                            detail={
+                                                formatBytes(
+                                                    snapshot.database
+                                                        .index_bytes,
+                                                ) +
+                                                " of it is search and listing indexes"
+                                            }
+                                        />
+                                    )}
                                     <UsageMeter
-                                        label="MongoDB storage"
-                                        used={snapshot.database.used_bytes}
+                                        label="RAM cache"
+                                        used={snapshot.cache.memory.bytes}
                                         total={
-                                            snapshot.database
-                                                .volume_total_bytes || NaN
+                                            snapshot.cache.memory
+                                                .effective_max_bytes
                                         }
-                                        unavailableLabel={formatBytes(
-                                            snapshot.database.used_bytes,
-                                        )}
                                         detail={
-                                            formatBytes(
-                                                snapshot.database.index_bytes,
-                                            ) +
-                                            " of it is search and listing indexes"
+                                            snapshot.cache.memory
+                                                .effective_max_bytes === 0
+                                                ? "Disabled"
+                                                : "Retained media; part of TGDrive process memory"
                                         }
                                     />
-                                )}
-                                <UsageMeter
-                                    label="RAM cache"
-                                    used={snapshot.cache.memory.bytes}
-                                    total={
-                                        snapshot.cache.memory
-                                            .effective_max_bytes
-                                    }
-                                    detail={
-                                        snapshot.cache.memory
-                                            .effective_max_bytes === 0
-                                            ? "Disabled"
-                                            : "Retained media; part of TGDrive process memory"
-                                    }
-                                />
-                                <UsageMeter
-                                    label="Disk cache"
-                                    used={snapshot.cache.disk.bytes}
-                                    total={snapshot.cache.disk.max_bytes}
-                                    detail={
-                                        !snapshot.cache.disk.available
-                                            ? "Unavailable"
-                                            : snapshot.cache.disk.max_bytes ===
-                                                0
-                                              ? "Disabled"
-                                              : "Disposable copies; originals stay in Telegram"
-                                    }
-                                />
+                                    <UsageMeter
+                                        label="Disk cache"
+                                        used={snapshot.cache.disk.bytes}
+                                        total={snapshot.cache.disk.max_bytes}
+                                        detail={
+                                            !snapshot.cache.disk.available
+                                                ? "Unavailable"
+                                                : snapshot.cache.disk
+                                                        .max_bytes === 0
+                                                  ? "Disabled"
+                                                  : "Disposable copies; originals stay in Telegram"
+                                        }
+                                    />
+                                </div>
+                                <div className="performance-disk-readings">
+                                    <div
+                                        className="performance-usage"
+                                        data-storage="effective"
+                                    >
+                                        <div>
+                                            <span>
+                                                Verified free disk space
+                                            </span>
+                                            <strong>
+                                                {backingFree === null
+                                                    ? "Unavailable"
+                                                    : formatBytes(backingFree)}
+                                            </strong>
+                                        </div>
+                                        <small>
+                                            {backingFree === null
+                                                ? diskCapacity?.backing
+                                                      .configured
+                                                    ? "The configured disk did not return a reading."
+                                                    : "No host disk check configured."
+                                                : (diskCapacity!.effective
+                                                      .headroom_bytes === null
+                                                      ? "Reserve headroom unavailable."
+                                                      : formatBytes(
+                                                            diskCapacity!
+                                                                .effective
+                                                                .headroom_bytes,
+                                                        ) +
+                                                        " available after reserve.") +
+                                                  " Uses the filesystem and configured disk readings."}
+                                        </small>
+                                    </div>
+                                    {backingFree === null &&
+                                        visibleDiskFree !== null && (
+                                            <div
+                                                className="performance-usage"
+                                                data-storage="filesystem"
+                                            >
+                                                <div>
+                                                    <span>
+                                                        Filesystem visible to
+                                                        TGDrive
+                                                    </span>
+                                                    <strong>
+                                                        {formatBytes(
+                                                            visibleDiskFree,
+                                                        )}{" "}
+                                                        free
+                                                        {visibleDiskTotal !==
+                                                            null &&
+                                                            " of " +
+                                                                formatBytes(
+                                                                    visibleDiskTotal,
+                                                                )}
+                                                    </strong>
+                                                </div>
+                                                <small>
+                                                    Reported by the container or
+                                                    operating system.
+                                                </small>
+                                            </div>
+                                        )}
+                                </div>
                             </div>
                             {diskCapacity?.backing.configured && (
                                 <div
@@ -2464,101 +2651,29 @@ export default function PerformancePanel({
                         </section>
                     </TabsPanel>
                     <TabsPanel value="tuning" keepMounted>
-                        <nav
-                            className="performance-tuning-links"
-                            aria-label="Performance settings"
-                        >
-                            <a
-                                className="inline-link"
-                                href="/?view=settings&section=cache"
-                            >
-                                Cache settings
-                            </a>
-                            <a
-                                className="inline-link"
-                                href="/?view=settings&section=transfers"
-                            >
-                                Upload and download speed limits
-                            </a>
-                        </nav>
                         <AutomaticTuning
                             tuning={snapshot.tuning}
                             current={current}
                             serverAt={snapshot.server.at}
                         />
-                        {recorded && (
-                            <section
-                                className="performance-all-time"
-                                aria-labelledby="all-time-heading"
+                        {!snapshot.tuning && (
+                            <nav
+                                className="performance-tuning-links"
+                                aria-label="Performance settings"
                             >
-                                <h3 id="all-time-heading">All-time totals</h3>
-                                <p className="settings-help">
-                                    {recorded.tracked_since
-                                        ? `Since ${formatTimestamp(recorded.tracked_since)}.`
-                                        : "Tracking has just started."}{" "}
-                                    Totals survive restart and are independent
-                                    of the time range.
-                                </p>
-                                <table className="performance-totals-table">
-                                    <thead>
-                                        <tr>
-                                            <th scope="col">Traffic source</th>
-                                            <th scope="col">
-                                                Received by server
-                                            </th>
-                                            <th scope="col">Sent by server</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {(
-                                            [
-                                                [
-                                                    "Server network",
-                                                    recorded.totals
-                                                        .network_received_bytes,
-                                                    recorded.totals
-                                                        .network_sent_bytes,
-                                                ],
-                                                [
-                                                    "TGDrive files",
-                                                    recorded.totals
-                                                        .http_upload_bytes,
-                                                    recorded.totals
-                                                        .http_download_bytes,
-                                                ],
-                                                [
-                                                    "Telegram",
-                                                    recorded.totals
-                                                        .telegram_download_bytes,
-                                                    recorded.totals
-                                                        .telegram_upload_bytes,
-                                                ],
-                                            ] as const
-                                        ).map(([label, received, sent]) => (
-                                            <tr key={label}>
-                                                <th scope="row">{label}</th>
-                                                <td>
-                                                    {typeof received ===
-                                                    "number"
-                                                        ? formatBytes(received)
-                                                        : "Not available"}
-                                                </td>
-                                                <td>
-                                                    {typeof sent === "number"
-                                                        ? formatBytes(sent)
-                                                        : "Not available"}
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                                <p className="settings-help">
-                                    Network includes Telegram, URL imports and
-                                    device traffic. The rows overlap; do not add
-                                    them together. Totals start when tracking
-                                    begins.
-                                </p>
-                            </section>
+                                <a
+                                    className="inline-link"
+                                    href="/?view=settings&section=cache"
+                                >
+                                    Cache settings
+                                </a>
+                                <a
+                                    className="inline-link"
+                                    href="/?view=settings&section=transfers"
+                                >
+                                    Transfer limits
+                                </a>
+                            </nav>
                         )}
                     </TabsPanel>
                 </>

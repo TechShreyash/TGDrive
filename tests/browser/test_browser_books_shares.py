@@ -459,6 +459,10 @@ def test_same_item_links_keep_their_copy_edit_and_revoke_scope(server, desktop, 
     expect(dialog).to_contain_text("Review updated")
     dialog.get_by_role("button", name="Revoke Link", exact=True).click()
     expect(page.locator(".share-row")).to_have_count(1)
+    expect(
+        page.get_by_role("group", name="Filter Shared Links")
+        .locator('button[aria-pressed="true"]')
+    ).to_be_focused()
 
     for link, expected_status in [(links[0], 403), (links[1], 200)]:
         if kind == "folder":
@@ -504,11 +508,12 @@ def test_share_mutation_supersedes_pending_manual_refresh(
         else:
             route.continue_()
 
-    page.route("**/api/v1/shares", hold_first_read)
+    page.route("**/api/v1/shares{,?*}", hold_first_read)
     refresh = page.get_by_role("button", name="Refresh Shared Links", exact=True)
     with page.expect_request(
         lambda request: (
-            request.url.endswith("/api/v1/shares") and request.method == "GET"
+            request.url.split("?", 1)[0].endswith("/api/v1/shares")
+            and request.method == "GET"
         )
     ):
         refresh.click()
@@ -530,7 +535,7 @@ def test_share_mutation_supersedes_pending_manual_refresh(
             method = "DELETE"
         with page.expect_response(
             lambda response: (
-                response.url.endswith("/api/v1/shares")
+                response.url.split("?", 1)[0].endswith("/api/v1/shares")
                 and response.request.method == method
             )
         ) as mutation:
@@ -560,9 +565,9 @@ def test_share_mutation_supersedes_pending_manual_refresh(
         expect(page.locator(".toast")).to_have_count(0)
 
         if late_result == "error":
-            page.unroute("**/api/v1/shares", hold_first_read)
+            page.unroute("**/api/v1/shares{,?*}", hold_first_read)
             page.route(
-                "**/api/v1/shares",
+                "**/api/v1/shares{,?*}",
                 lambda route: route.fulfill(
                     status=503, json={"detail": "Current share refresh failed"}
                 ),
@@ -576,7 +581,7 @@ def test_share_mutation_supersedes_pending_manual_refresh(
             )
             retry = page.get_by_role("button", name="Try Again", exact=True)
             expect(retry).to_be_enabled()
-            page.unroute("**/api/v1/shares")
+            page.unroute("**/api/v1/shares{,?*}")
             retry.click()
             expect(page.locator(".page-load-error")).to_have_count(0)
             expect(page.locator(".toast:not(.toast-error)")).to_contain_text(

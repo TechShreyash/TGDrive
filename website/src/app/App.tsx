@@ -96,7 +96,10 @@ import Login from "./Login";
 import SharesView from "../features/shares/SharesView";
 import PerformanceSettings from "../features/performance/PerformanceSettings";
 import Preloads from "../features/performance/Preloads";
-import FileBrowser, { type FileFilter } from "../features/files/FileBrowser";
+import FileBrowser, {
+    filterGroup,
+    type FileFilter,
+} from "../features/files/FileBrowser";
 import {
     COMPACT_LAYOUT_QUERY,
     NAVIGATION_DRAWER_QUERY,
@@ -315,6 +318,7 @@ export default function App() {
     const [pages, setPages] = useState<FolderPages>(emptyFolderPages);
     // Rows and errors are displayed only under the listing that produced them.
     const [displayedKey, setDisplayedKey] = useState("");
+    const [filterFailure, setFilterFailure] = useState("");
     const [pageError, setPageError] = useState("");
     const pagesRef = useRef(pages);
     pagesRef.current = pages;
@@ -384,10 +388,19 @@ export default function App() {
         error: boolean;
     } | null>(null);
     const [newOpen, setNewOpen] = useState(false);
+    const newInvoker = useRef<HTMLButtonElement | null>(null);
+    const closeNewMenu = useCallback(() => {
+        setNewOpen(false);
+        const invoker = newInvoker.current;
+        const target =
+            invoker?.isConnected && !invoker.closest("[inert]")
+                ? invoker
+                : document.getElementById("compact-new-button");
+        target?.focus({ preventScroll: true });
+    }, []);
     useEffect(() => {
         if (!newOpen) return;
         const menu = document.getElementById("new-menu");
-        const trigger = document.activeElement;
         const buttons = () =>
             Array.from(
                 menu?.querySelectorAll<HTMLButtonElement>(
@@ -399,14 +412,12 @@ export default function App() {
             if (event.key === "Escape") {
                 event.preventDefault();
                 event.stopPropagation();
-                setNewOpen(false);
-                if (trigger instanceof HTMLElement) trigger.focus();
+                closeNewMenu();
                 return;
             }
             if (!menu?.contains(event.target as Node)) return;
             if (event.key === "Tab") {
-                setNewOpen(false);
-                if (trigger instanceof HTMLElement) trigger.focus();
+                closeNewMenu();
                 return;
             }
             const actions = buttons();
@@ -426,7 +437,7 @@ export default function App() {
         };
         document.addEventListener("keydown", keydown, true);
         return () => document.removeEventListener("keydown", keydown, true);
-    }, [newOpen]);
+    }, [closeNewMenu, newOpen]);
     const [mobileNav, setMobileNav] = useState(false);
     const navigationReturn = useRef<HTMLElement | null>(null);
     useEffect(() => {
@@ -579,7 +590,7 @@ export default function App() {
     // A type filter belongs to the folder it was chosen in.
     const folderFilter =
         folderFilterState.path === folderKey ? folderFilterState.filter : "all";
-    const listingKey = JSON.stringify([
+    const listingScope = JSON.stringify([
         authenticated,
         view,
         currentPath,
@@ -588,9 +599,33 @@ export default function App() {
         isSearch ? searchSort : "",
         isSearch ? searchOrder : "",
         ["trash", "starred"].includes(view) ? scopedQuery : "",
-        isPaged ? [folderSort, folderOrder, folderFilter] : "",
+        isPaged ? [folderSort, folderOrder] : "",
     ]);
+    const listingPrefix = listingScope + "\n";
+    const listingKey = listingPrefix + (isPaged ? folderFilter : "");
     const listingPending = displayedKey !== listingKey;
+    const changingType =
+        isPaged && listingPending && displayedKey.startsWith(listingPrefix);
+    const localTypeRows = useMemo(
+        () =>
+            changingType &&
+            !isRecent &&
+            displayedKey === listingPrefix + "all" &&
+            folderComplete(pages)
+                ? pages.rows.filter(
+                      (item): item is DriveItem =>
+                          !!item && filterGroup(item) === folderFilter,
+                  )
+                : null,
+        [
+            changingType,
+            displayedKey,
+            folderFilter,
+            isRecent,
+            listingPrefix,
+            pages,
+        ],
+    );
     useShareOpen(
         isPublic &&
             view === "files" &&
@@ -603,12 +638,12 @@ export default function App() {
     );
     const directory = useMemo(
         () =>
-            listingPending
+            listingPending && !changingType
                 ? { contents: {} }
                 : isPaged
                   ? folderDirectory(pages)
                   : plainDirectory,
-        [listingPending, isPaged, pages, plainDirectory],
+        [listingPending, changingType, isPaged, pages, plainDirectory],
     );
     const loadedListing = useRef<string | null>(null);
     const listingRefresh = useRef<ReturnType<
@@ -618,14 +653,6 @@ export default function App() {
     useLayoutEffect(() => {
         if (workspace.current) workspace.current.scrollTop = 0;
     }, [currentPath, view, location.settingsSection, searchOffset]);
-    // Opacity only: a moving workspace would shift taps and fixed menus.
-    useEffect(() => {
-        if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-        workspace.current?.animate?.([{ opacity: 0 }, { opacity: 1 }], {
-            duration: 200,
-            easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
-        });
-    }, [view, location.settingsSection]);
     const items = useSyncExternalStore(transfers.subscribe, transfers.snapshot);
     const deletionProgress = useSyncExternalStore(
         transfers.subscribe,
@@ -639,12 +666,18 @@ export default function App() {
             )
             .map(transferTaskId),
     ).size;
-    const mobileUploadIssues = items.some(
-        (item) =>
-            item.initiatedHere &&
-            ["error", "awaiting_file"].includes(item.state),
+    const [dismissedTransferNotice, setDismissedTransferNotice] = useState("");
+    const mobileTransfersButton = useRef<HTMLButtonElement>(null);
+    const mobileIssueTasks = new Set(
+        items
+            .filter(
+                (item) =>
+                    item.initiatedHere &&
+                    ["error", "awaiting_file"].includes(item.state),
+            )
+            .map(transferTaskId),
     );
-    const mobileActiveCount = new Set(
+    const mobileActiveTasks = new Set(
         items
             .filter(
                 (item) =>
@@ -657,7 +690,13 @@ export default function App() {
                     ].includes(item.state),
             )
             .map(transferTaskId),
-    ).size;
+    );
+    const mobileUploadIssues = mobileIssueTasks.size > 0;
+    const mobileActiveCount = mobileActiveTasks.size;
+    const transferNoticeKey = JSON.stringify([
+        [...mobileActiveTasks].sort(),
+        [...mobileIssueTasks].sort(),
+    ]);
     const deviceUploadPending =
         authenticated === true && !isPublic && items.some(needsDeviceUpload);
     useEffect(() => {
@@ -760,6 +799,8 @@ export default function App() {
             setSearchOffset(searchHistoryOffset());
             setLocation(getLocation());
             setDialog(null);
+            setNewOpen(false);
+            setMobileNav(false);
         };
         window.addEventListener("popstate", pop);
         return () => window.removeEventListener("popstate", pop);
@@ -929,6 +970,7 @@ export default function App() {
         const queue = createListingRefreshQueue(async () => {
             clearTimeout(retryTimer);
             const background = loadedListing.current === listingKey;
+            setFilterFailure("");
             if (!background) loadedListing.current = null;
             setLoading(!background);
             setLoadFailure(null);
@@ -980,6 +1022,7 @@ export default function App() {
                     let wanted = background ? folderPage.current : 0;
                     if (
                         !background &&
+                        !changingType &&
                         target &&
                         !next.rows.some((item) => item?.id === target)
                     ) {
@@ -1088,6 +1131,17 @@ export default function App() {
             if (error.name !== "AbortError") {
                 if (isPublic && needsSharePassword(error))
                     setLockedShare(location.auth);
+                if (
+                    changingType &&
+                    !background &&
+                    (!error.status ||
+                        error.status === 408 ||
+                        error.status === 429 ||
+                        error.status >= 500)
+                ) {
+                    setFilterFailure(errorMessage(error));
+                    return false;
+                }
                 if (
                     background &&
                     (!error.status ||
@@ -1337,7 +1391,7 @@ export default function App() {
         setNewOpen(false);
     };
     const pickFiles = () => {
-        setNewOpen(false);
+        if (newOpen) closeNewMenu();
         if (admissionPaused) {
             notify(
                 "File changes and new uploads are paused. You can still browse, preview and download.",
@@ -1358,7 +1412,7 @@ export default function App() {
             );
             return;
         }
-        setNewOpen(false);
+        closeNewMenu();
         folderDestination.current = {
             path: destination,
             name:
@@ -1609,7 +1663,7 @@ export default function App() {
         <div className="page-heading">
             <div>
                 {isFiles &&
-                    !listingPending &&
+                    (!listingPending || changingType) &&
                     !isSearch &&
                     view !== "trash" &&
                     view !== "starred" &&
@@ -1688,7 +1742,7 @@ export default function App() {
                         </nav>
                     )}
                 <div className="page-title-line">
-                    <h1>{title}</h1>
+                    <h1 title={isFiles ? title : undefined}>{title}</h1>
                     {config.demo_data && (
                         <span
                             className="demo-marker"
@@ -1982,7 +2036,8 @@ export default function App() {
                         className="new-button"
                         aria-expanded={newOpen}
                         aria-controls="new-menu"
-                        onClick={() => {
+                        onClick={(event) => {
+                            newInvoker.current = event.currentTarget;
                             if (view !== "files") {
                                 navigate("/", "files");
                                 setNewOpen(true);
@@ -2185,14 +2240,18 @@ export default function App() {
                             >
                                 <BrandLogo size="compact" />
                             </a>
-                            {view === "files" && !isSearch && !dialog && (
+                            {view === "files" && !isSearch && (
                                 <button
                                     id="compact-new-button"
                                     type="button"
                                     disabled={admissionPaused}
                                     className="mobile-new primary-button"
                                     aria-label="New"
-                                    onClick={() => setNewOpen(!newOpen)}
+                                    onClick={(event) => {
+                                        newInvoker.current =
+                                            event.currentTarget;
+                                        setNewOpen(!newOpen);
+                                    }}
                                     aria-expanded={newOpen}
                                     aria-controls="new-menu"
                                 >
@@ -2286,7 +2345,15 @@ export default function App() {
                             listingKey={listingKey}
                             shareRefreshKey={String(metadataRefresh)}
                             highlightId={location.highlightId}
-                            loading={loading || listingPending}
+                            loading={
+                                !changingType && (loading || listingPending)
+                            }
+                            typePending={changingType}
+                            staleTypeRows={changingType && !localTypeRows}
+                            typeError={changingType ? filterFailure : ""}
+                            onRetryType={() =>
+                                void listingRefresh.current?.request()
+                            }
                             refreshing={listingRefreshAction.refreshing}
                             error={
                                 listingPending ? "" : loadFailure?.message || ""
@@ -2393,12 +2460,16 @@ export default function App() {
                             paging={
                                 isPaged
                                     ? {
-                                          rows: listingPending
-                                              ? []
-                                              : pages.rows,
-                                          total: listingPending
-                                              ? 0
-                                              : pages.total,
+                                          rows:
+                                              localTypeRows ??
+                                              (listingPending && !changingType
+                                                  ? []
+                                                  : pages.rows),
+                                          total:
+                                              localTypeRows?.length ??
+                                              (listingPending && !changingType
+                                                  ? 0
+                                                  : pages.total),
                                           error: listingPending
                                               ? ""
                                               : pageError,
@@ -2424,7 +2495,9 @@ export default function App() {
                                                   path: folderKey,
                                                   filter,
                                               }),
-                                          onPage: ensurePage,
+                                          onPage: changingType
+                                              ? undefined
+                                              : ensurePage,
                                       }
                                     : undefined
                             }
@@ -2446,6 +2519,7 @@ export default function App() {
                             onError={(message) => notify(message, true)}
                             onNotice={notify}
                             onChange={reloadMetadata}
+                            onBrowseFiles={() => navigate("/", "files")}
                             onLocate={(share) =>
                                 navigate(
                                     share.folder_path ||
@@ -2568,24 +2642,41 @@ export default function App() {
                 {mobile &&
                     !isPublic &&
                     view !== "activity" &&
+                    dismissedTransferNotice !== transferNoticeKey &&
                     (mobileUploadIssues ||
                         (!routineUploadsInTabBar && mobileActiveCount > 0)) && (
-                        <button
-                            className="mobile-transfer-status"
-                            onClick={() => navigate("/", "activity")}
-                            aria-label="Open transfer progress"
-                        >
-                            <Upload size={18} aria-hidden="true" />
-                            <span>
-                                {mobileUploadIssues
-                                    ? "Uploads need attention"
-                                    : mobileActiveCount +
-                                      (mobileActiveCount === 1
-                                          ? " upload in progress"
-                                          : " uploads in progress")}
-                            </span>
-                            <ChevronRight size={18} aria-hidden="true" />
-                        </button>
+                        <div className="mobile-transfer-status">
+                            <button
+                                type="button"
+                                className="mobile-transfer-open"
+                                onClick={() => navigate("/", "activity")}
+                                aria-label="Open transfer progress"
+                            >
+                                <Upload size={18} aria-hidden="true" />
+                                <span>
+                                    {mobileUploadIssues
+                                        ? "Uploads need attention"
+                                        : mobileActiveCount +
+                                          (mobileActiveCount === 1
+                                              ? " upload in progress"
+                                              : " uploads in progress")}
+                                </span>
+                                <ChevronRight size={18} aria-hidden="true" />
+                            </button>
+                            <button
+                                type="button"
+                                className="icon-button mobile-transfer-dismiss"
+                                aria-label="Dismiss transfer notice"
+                                onClick={() => {
+                                    setDismissedTransferNotice(
+                                        transferNoticeKey,
+                                    );
+                                    mobileTransfersButton.current?.focus();
+                                }}
+                            >
+                                <X size={18} aria-hidden="true" />
+                            </button>
+                        </div>
                     )}
                 {mobile && !isPublic && (
                     <nav className="mobile-tabbar" aria-label="Sections">
@@ -2609,6 +2700,11 @@ export default function App() {
                             <button
                                 key={tab.view}
                                 type="button"
+                                ref={
+                                    tab.view === "activity"
+                                        ? mobileTransfersButton
+                                        : undefined
+                                }
                                 aria-current={
                                     view === tab.view ? "page" : undefined
                                 }
@@ -2653,7 +2749,8 @@ export default function App() {
                     <button
                         className="menu-dismiss"
                         aria-label="Close New Item Menu"
-                        onClick={() => setNewOpen(false)}
+                        tabIndex={-1}
+                        onClick={closeNewMenu}
                     />
                     <div
                         id="new-menu"
@@ -2669,24 +2766,24 @@ export default function App() {
                         </button>
                         <button
                             onClick={() => {
+                                closeNewMenu();
                                 setDialog({ type: "folder" });
-                                setNewOpen(false);
                             }}
                         >
                             <FolderPlus size={18} /> New Folder
                         </button>
                         <button
                             onClick={() => {
+                                closeNewMenu();
                                 setDialog({ type: "url" });
-                                setNewOpen(false);
                             }}
                         >
                             <Globe size={18} /> Upload from URL
                         </button>
                         <button
                             onClick={() => {
+                                closeNewMenu();
                                 setDialog({ type: "torrent" });
-                                setNewOpen(false);
                             }}
                         >
                             <Magnet size={18} /> Import torrent
@@ -2751,6 +2848,7 @@ export default function App() {
                     key={dialog.type + ("item" in dialog ? dialog.item.id : "")}
                     dialog={dialog}
                     destination={destination}
+                    destinationName={destination === "/" ? "My Files" : title}
                     auth={location.auth}
                     videoProgressMode={
                         isPublic || configLoad !== "ready"

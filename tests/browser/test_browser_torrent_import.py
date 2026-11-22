@@ -41,6 +41,12 @@ def test_url_compatibility_switch_keeps_thumb_inside_track_without_importing(
     page.locator("#new-button:visible, #compact-new-button:visible").click()
     page.get_by_role("button", name="Upload from URL", exact=True).click()
     dialog = page.get_by_role("dialog", name="Upload from URL", exact=True)
+    expect(dialog).to_contain_text("Save to My Files")
+    invalid = dialog.get_by_label("Direct File URL", exact=True)
+    invalid.fill("incomplete-link")
+    dialog.get_by_role("button", name="Start Import", exact=True).click()
+    expect(dialog.get_by_role("alert")).to_contain_text("Enter a direct HTTP")
+    expect(invalid).to_have_value("incomplete-link")
     dialog.get_by_label("Direct File URL", exact=True).fill(
         "https://example.invalid/switch-check.bin"
     )
@@ -225,7 +231,13 @@ def test_multi_file_torrent_waits_for_a_file_choice(
     picker = page.get_by_role("form", name="Choose files from Album", exact=True)
     expect(picker).to_be_visible()
     assert starts[0]["select_files"] is True
+    all_files = picker.get_by_role("checkbox", name="All files", exact=True)
+    expect(all_files).to_be_checked()
+    all_files.uncheck()
+    expect(picker.get_by_role("button", name="Import 0 files · 0 B")).to_be_disabled()
+    all_files.check()
     picker.get_by_role("checkbox", name="Disc/b.bin").uncheck()
+    expect(all_files).to_have_js_property("indeterminate", True)
     submit = picker.get_by_role("button", name="Import 2 files · 8 B", exact=True)
     page.screenshot(path=ARTIFACTS / "torrent-file-choice.png")
     submit.click()

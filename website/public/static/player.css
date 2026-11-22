@@ -185,6 +185,7 @@ h1 {
     font-size: clamp(23px, 3vw, 32px);
     line-height: 1.2;
     letter-spacing: -0.035em;
+    overflow-wrap: anywhere;
 }
 
 #player-status {
@@ -249,13 +250,30 @@ h1 {
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
 }
 
-.clipboard-helper {
-    position: fixed;
-    top: -1000px;
-    left: -1000px;
-    width: 1px;
-    height: 1px;
-    opacity: 0;
+.player-copy-fallback {
+    padding: 0 clamp(20px, 3vw, 28px) 20px;
+}
+
+.player-copy-fallback label {
+    display: block;
+    margin-block-end: 6px;
+    font-weight: 650;
+}
+
+.player-copy-fallback input {
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+}
+
+.player-copy-fallback p {
+    margin: 8px 0 0;
+    color: var(--muted);
 }
 
 @media (max-width: 720px) {

@@ -15,7 +15,6 @@ import {
     type ChangeDetails,
 } from "@ui-sdk/core";
 import { usePrimitive } from "@ui-sdk/react/primitive";
-import { flushSync } from "react-dom";
 import { useMediaQuery } from "@mantine/hooks";
 import {
     Select,
@@ -227,7 +226,7 @@ const fileSelection = definePrimitive({
     slots: (slot) => ({ root: slot({}) }),
 });
 
-function filterGroup(item: DriveItem): FileFilter {
+export function filterGroup(item: DriveItem): FileFilter {
     const kind = fileKind(item.name, item.type === "folder");
     if (kind === "folder") return "folder";
     if (kind === "image" || kind === "video") return "media";
@@ -267,16 +266,6 @@ function MobileFileMetadata({
     );
 }
 
-function withViewTransition(update: () => void) {
-    const start = (
-        document as Document & {
-            startViewTransition?: (callback: () => void) => unknown;
-        }
-    ).startViewTransition;
-    if (!start || matchMedia("(prefers-reduced-motion: reduce)").matches)
-        return update();
-    start.call(document, () => flushSync(update));
-}
 function hideItemMenus() {
     document
         .querySelectorAll<HTMLDetailsElement>(".item-actions[open]")
@@ -291,6 +280,10 @@ export default function FileBrowser({
     shareRefreshKey,
     highlightId = "",
     loading,
+    typePending = false,
+    staleTypeRows = false,
+    typeError = "",
+    onRetryType,
     refreshing = false,
     error,
     isPublic,
@@ -322,6 +315,10 @@ export default function FileBrowser({
     shareRefreshKey: string;
     highlightId?: string;
     loading: boolean;
+    typePending?: boolean;
+    staleTypeRows?: boolean;
+    typeError?: string;
+    onRetryType?: () => void;
     refreshing?: boolean;
     error: string;
     isPublic: boolean;
@@ -364,7 +361,7 @@ export default function FileBrowser({
         filter: FileFilter;
         onSort: (sort: FileSort, order: SortOrder) => void;
         onFilter: (filter: FileFilter) => void;
-        onPage: (page: number) => void;
+        onPage?: (page: number) => void;
     };
 }) {
     const [activeShares, setActiveShares] = useState<Share[]>([]);
@@ -416,6 +413,8 @@ export default function FileBrowser({
     const [selectionMode, setSelectionMode] = useState<
         "manual" | "shortcut" | null
     >(null);
+    const selectButton = useRef<HTMLButtonElement>(null);
+    const doneSelectingButton = useRef<HTMLButtonElement>(null);
     const pointerKind = useRef("");
     const touchHold = useRef<{
         id: number;
@@ -523,11 +522,7 @@ export default function FileBrowser({
             // Selection checkboxes disappear on Escape. Return keyboard focus to a
             // surviving control instead of letting the browser focus the whole scroller.
             requestAnimationFrame(() => {
-                const target = item?.isConnected
-                    ? item
-                    : document.querySelector<HTMLButtonElement>(
-                          ".file-selection-toggle",
-                      );
+                const target = item?.isConnected ? item : selectButton.current;
                 target?.focus({ preventScroll: true });
             });
         };
@@ -655,11 +650,21 @@ export default function FileBrowser({
                 chipCounts.has(value) ||
                 value === filter),
     );
-    const changeFilter = (value: FileFilter) =>
-        withViewTransition(() => {
-            setFilter(value);
-            setPage(0);
-        });
+    const changeFilter = (value: FileFilter) => {
+        if (value === filter) return;
+        hideItemMenus();
+        setSelected(new Set());
+        setSelectionMode(null);
+        setFilter(value);
+        setPage(0);
+    };
+    const [showTypeProgress, setShowTypeProgress] = useState(false);
+    useEffect(() => {
+        setShowTypeProgress(false);
+        if (!typePending || typeError) return;
+        const timer = window.setTimeout(() => setShowTypeProgress(true), 200);
+        return () => window.clearTimeout(timer);
+    }, [filter, typePending, typeError]);
     const filteredItems =
         paging || filter === "all"
             ? allItems
@@ -1007,7 +1012,11 @@ export default function FileBrowser({
                 {header}
                 <div className="file-toolbar-controls">
                     {selectionMode && !isPublic ? (
-                        <>
+                        <div
+                            className="file-selection-bar"
+                            role="group"
+                            aria-label="Selection actions"
+                        >
                             {layout === "grid" && (
                                 <label className="grid-select-all file-checkbox-target">
                                     <input
@@ -1048,17 +1057,17 @@ export default function FileBrowser({
                                 {chosen.length} selected
                             </span>
                             <button
+                                ref={doneSelectingButton}
+                                type="button"
                                 className="text-button"
                                 onClick={() => {
                                     setSelected(new Set());
                                     setSelectionMode(null);
-                                    requestAnimationFrame(() => {
-                                        document
-                                            .querySelector<HTMLButtonElement>(
-                                                ".file-selection-toggle",
-                                            )
-                                            ?.focus({ preventScroll: true });
-                                    });
+                                    requestAnimationFrame(() =>
+                                        selectButton.current?.focus({
+                                            preventScroll: true,
+                                        }),
+                                    );
                                 }}
                             >
                                 Done
@@ -1144,7 +1153,7 @@ export default function FileBrowser({
                                     </button>
                                 </>
                             )}
-                        </>
+                        </div>
                     ) : (
                         <>
                             {!narrow && (
@@ -1154,30 +1163,37 @@ export default function FileBrowser({
                                 </span>
                             )}
                             <div className="file-toolbar-actions">
-                                {!isPublic && (
-                                    <button
-                                        type="button"
-                                        className="text-button file-selection-toggle"
-                                        title={
-                                            compact
-                                                ? "Select files and folders"
-                                                : "Shift-click for a range. Ctrl-click or Command-click to toggle an item."
-                                        }
-                                        aria-pressed={!!selectionMode}
-                                        onClick={() => {
-                                            setSelectionMode("manual");
-                                            setSelected(new Set());
-                                        }}
-                                    >
-                                        <SquareCheck
-                                            size={18}
-                                            aria-hidden="true"
-                                        />
-                                        <span>
-                                            {selectionMode ? "Done" : "Select"}
-                                        </span>
-                                    </button>
-                                )}
+                                {!isPublic &&
+                                    (loading || visibleItems.length > 0) && (
+                                        <button
+                                            ref={selectButton}
+                                            type="button"
+                                            className="text-button file-selection-toggle"
+                                            disabled={loading || staleTypeRows}
+                                            title={
+                                                compact
+                                                    ? "Select files and folders"
+                                                    : "Shift-click for a range. Ctrl-click or Command-click to toggle an item."
+                                            }
+                                            onClick={() => {
+                                                setSelectionMode("manual");
+                                                setSelected(new Set());
+                                                requestAnimationFrame(() =>
+                                                    doneSelectingButton.current?.focus(
+                                                        {
+                                                            preventScroll: true,
+                                                        },
+                                                    ),
+                                                );
+                                            }}
+                                        >
+                                            <SquareCheck
+                                                size={18}
+                                                aria-hidden="true"
+                                            />
+                                            <span>Select</span>
+                                        </button>
+                                    )}
                                 <SortMenu
                                     fixedSort={isRecent}
                                     value={sort}
@@ -1305,6 +1321,32 @@ export default function FileBrowser({
                     )}
                 </div>
             )}
+            {typeError ? (
+                <div className="file-type-status">
+                    <span role="alert">
+                        Could not load{" "}
+                        {FILE_FILTERS.find(
+                            ([value]) => value === filter,
+                        )?.[1].toLowerCase()}
+                        . {typeError}
+                    </span>
+                    <button className="text-button" onClick={onRetryType}>
+                        Retry
+                    </button>
+                    {filter !== "all" && (
+                        <button
+                            className="text-button"
+                            onClick={() => changeFilter("all")}
+                        >
+                            Clear filter
+                        </button>
+                    )}
+                </div>
+            ) : typePending && showTypeProgress ? (
+                <p className="file-type-status" role="status">
+                    Updating files…
+                </p>
+            ) : null}
             <div
                 className={
                     "file-list-scroll" +
@@ -1313,6 +1355,8 @@ export default function FileBrowser({
                 tabIndex={0}
                 role="region"
                 aria-label="File list"
+                aria-busy={typePending && !typeError}
+                inert={staleTypeRows}
             >
                 {error ? (
                     <div className="empty-state">
@@ -1341,7 +1385,7 @@ export default function FileBrowser({
                         <p role="alert">{paging.error}</p>
                         <button
                             className="secondary-button"
-                            onClick={() => paging.onPage(page)}
+                            onClick={() => paging.onPage?.(page)}
                         >
                             Try Again
                         </button>
@@ -1376,7 +1420,7 @@ export default function FileBrowser({
                             ),
                         )}
                     </div>
-                ) : paging && filter !== "all" && !paging.total ? (
+                ) : !staleTypeRows && filter !== "all" && !itemCount ? (
                     <div className="empty-state">
                         <Folder size={46} />
                         <h2>{EMPTY_FILTER_TITLES[filter]}</h2>
@@ -1385,6 +1429,12 @@ export default function FileBrowser({
                                 ? "Choose All to see every recent file."
                                 : "Choose All to see everything in this folder."}
                         </p>
+                        <button
+                            className="secondary-button"
+                            onClick={() => changeFilter("all")}
+                        >
+                            Clear filter
+                        </button>
                     </div>
                 ) : allItems.length === 0 ? (
                     <div className="empty-state">

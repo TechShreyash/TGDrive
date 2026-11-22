@@ -1,9 +1,10 @@
 import Preview from "../previews/Preview";
 import type { VideoProgressMode } from "../previews/video/videoWatchProgress";
 import { useEffect, useRef, useState } from "react";
-import { PasswordInput } from "@mantine/core";
+import { NativeSelect, PasswordInput } from "@mantine/core";
 import {
     Folder,
+    ArrowUp,
     ChevronRight,
     RefreshCw,
     Move,
@@ -13,7 +14,6 @@ import {
     AlertCircle,
     Code,
     FolderPlus,
-    FolderInput,
     Globe,
     Magnet,
     Pencil,
@@ -31,7 +31,7 @@ import {
     type DriveItem,
 } from "../../shared/types";
 import { transfers } from "../transfers/transfers";
-import { Modal, ErrorNotice, Spinner } from "../../shared/components";
+import { Modal, ErrorNotice, FileIcon, Spinner } from "../../shared/components";
 import { embedUrl } from "../shares/embedLinks";
 import { shareUrl } from "../shares/SharesView";
 import "./ActionDialog.css";
@@ -54,6 +54,7 @@ export type ActionDialogState =
 export default function ActionDialog({
     dialog,
     destination,
+    destinationName = "My Files",
     auth,
     videoProgressMode,
     onClose,
@@ -64,6 +65,7 @@ export default function ActionDialog({
 }: {
     dialog: ActionDialogState;
     destination: string;
+    destinationName?: string;
     auth: string;
     videoProgressMode?: VideoProgressMode;
     onClose: () => void;
@@ -84,9 +86,11 @@ export default function ActionDialog({
     const [name, setName] = useState(
         extension ? originalName.slice(0, -extension.length) : originalName,
     );
+    const renameFocused = useRef(false);
     const [url, setUrl] = useState("");
     const [compat, setCompat] = useState(false);
     const [busy, setBusy] = useState(false);
+    const running = useRef(false);
     const [error, setError] = useState("");
     const [expires, setExpires] = useState("7");
     const [shareLabel, setShareLabel] = useState("");
@@ -101,6 +105,8 @@ export default function ActionDialog({
         if (!busy) onClose();
     };
     const run = async (task: () => Promise<void>) => {
+        if (running.current) return;
+        running.current = true;
         setBusy(true);
         setError("");
         try {
@@ -108,6 +114,7 @@ export default function ActionDialog({
         } catch (error) {
             setError(errorMessage(error));
         } finally {
+            running.current = false;
             setBusy(false);
         }
     };
@@ -212,18 +219,28 @@ export default function ActionDialog({
                                     );
                                     onClose();
                                 } else {
-                                    const result = await request<{
-                                        url: string;
-                                        expires_at: string | null;
-                                    }>("/api/v1/download-links", {
-                                        path: itemPath(dialog.item),
-                                    });
-                                    setLink(result.url);
-                                    setExpiry(result.expires_at);
-                                    onChanged();
-                                    await navigator.clipboard.writeText(
-                                        result.url,
-                                    );
+                                    let downloadLink = link;
+                                    if (!downloadLink) {
+                                        const result = await request<{
+                                            url: string;
+                                            expires_at: string | null;
+                                        }>("/api/v1/download-links", {
+                                            path: itemPath(dialog.item),
+                                        });
+                                        downloadLink = result.url;
+                                        setLink(downloadLink);
+                                        setExpiry(result.expires_at);
+                                        onChanged();
+                                    }
+                                    try {
+                                        await navigator.clipboard.writeText(
+                                            downloadLink,
+                                        );
+                                    } catch {
+                                        throw new Error(
+                                            "Could not copy automatically. Select and copy the download link above.",
+                                        );
+                                    }
                                     onNotice("Download link copied.");
                                 }
                             })
@@ -232,7 +249,9 @@ export default function ActionDialog({
                         {busy ? <Spinner /> : null}
                         {dialog.type === "prepare"
                             ? "Preload file"
-                            : "Create or Copy Link"}
+                            : link
+                              ? "Copy Link"
+                              : "Create or Copy Link"}
                     </button>
                 </div>
             </Modal>
@@ -345,23 +364,37 @@ export default function ActionDialog({
                 </div>
             </Modal>
         );
-    if (dialog.type === "share")
+    if (dialog.type === "share") {
+        const item = dialog.item;
+        const isSharedFolder = item.type === "folder";
+        const copyLink = (url: string, embed = false) =>
+            void run(async () => {
+                if (!navigator.clipboard)
+                    throw new Error(
+                        embed
+                            ? "Clipboard access is unavailable. Select and copy the embed link above."
+                            : "Clipboard access is unavailable. Select and copy the link above.",
+                    );
+                await navigator.clipboard.writeText(url);
+                onNotice(embed ? "Embed Link copied." : "Share Link copied.");
+            });
+
         return (
             <Modal
-                title={"Share “" + dialog.item.name + "”"}
-                icon={<Link />}
-                tone="blue"
-                description={
-                    <>
-                        Recipients can{" "}
-                        {dialog.item.type === "folder"
-                            ? "view and download this folder’s current and future contents"
-                            : "view and download this file"}
-                        . They cannot edit your drive.
-                    </>
-                }
+                title={link ? "Share link ready" : "Share link"}
                 onClose={close}
             >
+                <div className="share-target">
+                    <FileIcon name={item.name} folder={isSharedFolder} />
+                    <div>
+                        <strong>{item.name}</strong>
+                        <p>
+                            {isSharedFolder
+                                ? "Recipients can view and download current and future files in this folder."
+                                : "Recipients can view and download this file."}
+                        </p>
+                    </div>
+                </div>
                 {!link ? (
                     <form
                         onSubmit={(event) => {
@@ -412,7 +445,7 @@ export default function ActionDialog({
                             }
                         />
                         <fieldset className="share-expiry-options">
-                            <legend>Link Expires</legend>
+                            <legend>Link expiry</legend>
                             <div>
                                 {[
                                     ["1", "1 day"],
@@ -431,10 +464,6 @@ export default function ActionDialog({
                                     </button>
                                 ))}
                             </div>
-                            <p className="muted">
-                                Each link has its own expiry. Existing links
-                                keep working.
-                            </p>
                         </fieldset>
                         {expires === "custom" && (
                             <>
@@ -469,91 +498,79 @@ export default function ActionDialog({
                     </form>
                 ) : (
                     <>
-                        <label htmlFor="share-link">Share Link</label>
-                        <input
-                            id="share-link"
-                            value={link}
-                            readOnly
-                            onFocus={(event) => event.target.select()}
-                        />
-                        {dialog.item.type === "folder" && (
-                            <>
-                                <label htmlFor="embed-link">Embed Link</label>
+                        <div className="share-result">
+                            <label htmlFor="share-link">Share Link</label>
+                            <div className="share-result-control">
                                 <input
-                                    id="embed-link"
-                                    value={embedUrl(link)}
+                                    id="share-link"
+                                    value={link}
                                     readOnly
+                                    autoFocus
                                     onFocus={(event) => event.target.select()}
                                 />
+                                <button
+                                    className="primary-button"
+                                    onClick={() => copyLink(link)}
+                                >
+                                    <Copy size={16} aria-hidden="true" /> Copy
+                                    Link
+                                </button>
+                            </div>
+                        </div>
+                        {isSharedFolder && (
+                            <div className="share-result">
+                                <label htmlFor="embed-link">Embed Link</label>
+                                <div className="share-result-control">
+                                    <input
+                                        id="embed-link"
+                                        value={embedUrl(link)}
+                                        readOnly
+                                        onFocus={(event) =>
+                                            event.target.select()
+                                        }
+                                    />
+                                    <button
+                                        className="secondary-button"
+                                        onClick={() =>
+                                            copyLink(embedUrl(link), true)
+                                        }
+                                    >
+                                        <Code size={16} aria-hidden="true" />{" "}
+                                        Copy Embed Link
+                                    </button>
+                                </div>
                                 <p className="muted">
-                                    Use the embed link as an iframe source on
-                                    your website. It has the same access and
-                                    expiry as this share link.
+                                    Use this link as an iframe source. It shares
+                                    the same access and expiry as the share
+                                    link.
                                 </p>
-                            </>
+                            </div>
                         )}
-                        {dialog.item.type === "file" && (
-                            <p className="muted">
-                                This link opens the file viewer and can also be
-                                used as an iframe source.
+                        {!isSharedFolder && (
+                            <p className="muted share-result-hint">
+                                This link also works as an iframe source.
                             </p>
                         )}
-                        <p className="muted">
+                        <p className="muted share-result-expiry">
                             {expiry
                                 ? "Expires " + formatTimestamp(expiry) + "."
                                 : "This link does not expire."}{" "}
                             Revoke access from Shared Links.
                         </p>
                         <ErrorNotice message={error} />
-                        <div className="dialog-actions share-dialog-actions">
+                        <div className="dialog-actions">
                             <button
                                 className="secondary-button"
                                 onClick={close}
                             >
                                 Done
                             </button>
-                            {dialog.item.type === "folder" && (
-                                <button
-                                    className="secondary-button"
-                                    onClick={() =>
-                                        void run(async () => {
-                                            if (!navigator.clipboard)
-                                                throw new Error(
-                                                    "Clipboard access is unavailable. Select and copy the embed link above.",
-                                                );
-                                            await navigator.clipboard.writeText(
-                                                embedUrl(link),
-                                            );
-                                            onNotice("Embed Link copied.");
-                                        })
-                                    }
-                                >
-                                    <Code size={16} aria-hidden="true" /> Copy
-                                    Embed Link
-                                </button>
-                            )}
-                            <button
-                                className="primary-button"
-                                onClick={() =>
-                                    void run(async () => {
-                                        if (!navigator.clipboard)
-                                            throw new Error(
-                                                "Clipboard access is unavailable. Select and copy the link above.",
-                                            );
-                                        await navigator.clipboard.writeText(
-                                            link,
-                                        );
-                                        onNotice("Share Link copied.");
-                                    })
-                                }
-                            >
-                                <Copy size={16} /> Copy Link
-                            </button>
                         </div>
                     </>
                 )}
             </Modal>
         );
+    }
     const isFolder = dialog.type === "folder";
     const isRename = dialog.type === "rename";
     const isTorrent = dialog.type === "torrent";
@@ -590,16 +607,17 @@ export default function ActionDialog({
             }
             description={
                 isFolder
-                    ? "Create a folder in the current location."
+                    ? "Create a folder in " + destinationName + "."
                     : isRename
                       ? dialog.item.name
                       : isTorrent
-                        ? "Paste a magnet link or a public .torrent URL. Every file is imported, with folders kept intact."
+                        ? "Paste a magnet link or a public .torrent URL. You can choose files after TGDrive reads the torrent."
                         : "Import a direct HTTP or HTTPS file link. The server downloads it and uploads the original bytes to Telegram."
             }
             onClose={close}
         >
             <form
+                noValidate={!isFolder && !isRename}
                 onSubmit={(event) => {
                     event.preventDefault();
                     void run(async () => {
@@ -646,6 +664,12 @@ export default function ActionDialog({
                                 required
                                 maxLength={255 - extension.length}
                                 value={name}
+                                onFocus={(event) => {
+                                    if (!isRename || renameFocused.current)
+                                        return;
+                                    renameFocused.current = true;
+                                    event.currentTarget.select();
+                                }}
                                 aria-describedby={
                                     extension ? "item-name-hint" : undefined
                                 }
@@ -670,6 +694,9 @@ export default function ActionDialog({
                     </>
                 ) : (
                     <>
+                        <p className="import-destination">
+                            Save to <strong>{destinationName}</strong>
+                        </p>
                         <label htmlFor="remote-url">
                             {isTorrent
                                 ? "Magnet link or torrent URL"
@@ -710,9 +737,8 @@ export default function ActionDialog({
                         </div>
                         {isTorrent ? (
                             <p id="torrent-import-hint" className="muted">
-                                Saves to the current folder. You can close this
-                                tab after the import starts; TGDrive must stay
-                                running.
+                                You can close this tab after the import starts.
+                                TGDrive must stay running.
                             </p>
                         ) : (
                             <label className="check-field option-row">
@@ -792,22 +818,34 @@ function MoveDialog({
     ]);
     const [loading, setLoading] = useState(true);
     const [listingFailed, setListingFailed] = useState(false);
+    const [destinationMissing, setDestinationMissing] = useState(false);
     const [listingAttempt, setListingAttempt] = useState(0);
-    const rootCrumb = useRef<HTMLButtonElement>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const [conflict, setConflict] = useState("keep_both");
     const [exposure, setExposure] = useState(false);
     const [allow, setAllow] = useState(false);
+    const parent = trail.at(-2);
+    const atSource = sameParent && initialPath === path;
+    const destinationCrumb = useRef<HTMLButtonElement>(null);
+    const focusDestination = useRef(false);
     const selectDestination = (next: typeof trail) => {
         setLoading(true);
         setFolders([]);
         setError("");
+        setAllow(false);
+        setExposure(false);
         const nextPath = next.at(-1)?.path ?? "/";
         if (nextPath === path) setListingAttempt((attempt) => attempt + 1);
+        else focusDestination.current = true;
         setPath(nextPath);
         setTrail(next);
     };
+    useEffect(() => {
+        if (!focusDestination.current) return;
+        focusDestination.current = false;
+        destinationCrumb.current?.focus({ preventScroll: true });
+    }, [path]);
     useEffect(() => {
         if (path !== initialPath || initialPath === "/") return;
         let ignore = false;
@@ -838,6 +876,7 @@ function MoveDialog({
     useEffect(() => {
         let ignore = false;
         setListingFailed(false);
+        setDestinationMissing(false);
         setExposure(false);
         setAllow(false);
         void api
@@ -862,8 +901,11 @@ function MoveDialog({
             .catch((error) => {
                 if (!ignore) {
                     setListingFailed(true);
+                    const missing =
+                        error instanceof ApiError && error.status === 404;
+                    setDestinationMissing(missing);
                     setError(
-                        error instanceof ApiError && error.status === 404
+                        missing
                             ? "This destination is no longer available."
                             : errorMessage(error),
                     );
@@ -919,6 +961,7 @@ function MoveDialog({
                         checkError.status === 404
                     ) {
                         setListingFailed(true);
+                        setDestinationMissing(true);
                         setFolders([]);
                         setExposure(false);
                         setAllow(false);
@@ -938,9 +981,7 @@ function MoveDialog({
                     ? "“" + items[0].name + "”"
                     : items.length + " items")
             }
-            icon={<FolderInput />}
-            tone="amber"
-            description="Existing files are never overwritten."
+            initialFocus=".move-up, .move-breadcrumbs [aria-current]"
             onClose={() => {
                 if (!busy) onClose();
             }}
@@ -957,7 +998,11 @@ function MoveDialog({
                 {trail.map((crumb, index) => (
                     <button
                         key={crumb.path}
-                        ref={index === 0 ? rootCrumb : undefined}
+                        ref={
+                            index === trail.length - 1
+                                ? destinationCrumb
+                                : undefined
+                        }
                         className="text-button"
                         aria-current={
                             index === trail.length - 1 ? "location" : undefined
@@ -975,9 +1020,27 @@ function MoveDialog({
                     </button>
                 ))}
             </nav>
+            {parent && (
+                <button
+                    type="button"
+                    className="text-button move-up"
+                    disabled={busy}
+                    onClick={() => selectDestination(trail.slice(0, -1))}
+                >
+                    <ArrowUp size={16} aria-hidden="true" />
+                    <span>Up to {parent.name}</span>
+                </button>
+            )}
+            {atSource && !loading && folders.length > 0 && (
+                <p className="move-folder-status muted">
+                    These items are already here. Choose another folder.
+                </p>
+            )}
             <div
                 className={
-                    listingFailed && !loading ? undefined : "folder-picker"
+                    folders.length || loading
+                        ? "folder-picker move-folders"
+                        : "move-folder-status"
                 }
                 aria-busy={loading}
             >
@@ -1008,34 +1071,30 @@ function MoveDialog({
                         </button>
                     ))
                 ) : (
-                    <p className="muted">No folders inside this destination.</p>
+                    <p className="muted">
+                        {atSource
+                            ? "These items are already here. Choose another folder."
+                            : "This folder has no subfolders."}
+                    </p>
                 )}
             </div>
             {!listingFailed && (
-                <fieldset className="dialog-choice-options">
-                    <legend>Name Conflicts</legend>
-                    <div>
-                        <button
-                            type="button"
-                            aria-pressed={conflict === "keep_both"}
-                            onClick={() => setConflict("keep_both")}
-                        >
-                            Keep Both
-                        </button>
-                        <button
-                            type="button"
-                            aria-pressed={conflict === "skip"}
-                            onClick={() => setConflict("skip")}
-                        >
-                            Skip Existing
-                        </button>
-                    </div>
-                    <p className="muted">
-                        {conflict === "keep_both"
-                            ? "Add a number to the moved item if its name is already used."
-                            : "Leave items with matching names in their original location."}
-                    </p>
-                </fieldset>
+                <NativeSelect
+                    className="move-conflict"
+                    label="If a name already exists"
+                    value={conflict}
+                    disabled={busy}
+                    data={[
+                        { value: "keep_both", label: "Keep both" },
+                        { value: "skip", label: "Skip existing" },
+                    ]}
+                    description={
+                        conflict === "keep_both"
+                            ? "Add a number to the moved item’s name."
+                            : "Leave matching items in their original folder."
+                    }
+                    onChange={(event) => setConflict(event.currentTarget.value)}
+                />
             )}
             {!listingFailed && <ErrorNotice message={error} />}
             {exposure && (
@@ -1063,20 +1122,22 @@ function MoveDialog({
                         type="button"
                         className="primary-button"
                         onClick={() => {
-                            selectDestination(trail.slice(0, 1));
-                            rootCrumb.current?.focus();
+                            selectDestination(
+                                destinationMissing ? trail.slice(0, 1) : trail,
+                            );
+                            if (!destinationMissing)
+                                destinationCrumb.current?.focus();
                         }}
                     >
-                        {path === "/" ? "Try again" : "Choose another folder"}
+                        {destinationMissing && path !== "/"
+                            ? "Choose another folder"
+                            : "Try again"}
                     </button>
                 ) : (
                     <button
                         className="primary-button"
                         disabled={
-                            busy ||
-                            loading ||
-                            (sameParent && initialPath === path) ||
-                            (exposure && !allow)
+                            busy || loading || atSource || (exposure && !allow)
                         }
                         onClick={() => void move()}
                     >

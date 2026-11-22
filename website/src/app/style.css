@@ -1369,6 +1369,9 @@ progress::-moz-progress-bar {
     top: 128px;
     left: 20px;
     z-index: 41;
+    max-height: calc(100dvh - 140px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 .menu-dismiss {
     position: fixed;
@@ -1611,9 +1614,24 @@ progress::-moz-progress-bar {
         text-align: start;
         font-size: 13px;
     }
-    .mobile-transfer-status > span {
+    .mobile-transfer-open {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 44px;
+        text-align: start;
+        color: inherit;
+    }
+    .mobile-transfer-open > span {
         flex: 1;
         min-width: 0;
+    }
+    .mobile-transfer-status .mobile-transfer-dismiss {
+        flex: 0 0 44px;
+        width: 44px;
+        height: 44px;
     }
     .new-menu {
         top: calc(52px + env(safe-area-inset-top));
@@ -1621,6 +1639,10 @@ progress::-moz-progress-bar {
         left: auto;
         right: 8px;
         max-width: calc(100vw - 16px);
+        max-height: calc(
+            100dvh - 64px - env(safe-area-inset-top) -
+                env(safe-area-inset-bottom)
+        );
     }
     .transfer-center {
         bottom: 80px;

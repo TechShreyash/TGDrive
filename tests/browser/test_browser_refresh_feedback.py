@@ -115,7 +115,7 @@ def test_manual_refresh_disables_and_confirms_only_after_success(
         else:
             held.append(route)
 
-    page.route("**" + endpoint, hold)
+    page.route("**" + endpoint + "{,?*}", hold)
     button.dblclick()
     assert_pending(page, button, held)
     held[0].fulfill(json=payload)

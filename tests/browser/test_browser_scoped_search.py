@@ -30,7 +30,7 @@ def test_slash_search_preserves_query_reload_back_and_clear(server, desktop):
     login(page, server.url)
     page.get_by_role("button", name="資料", exact=True).dblclick()
     origin = page.url
-    queries, folders = [], []
+    folders = []
     page.on(
         "request",
         lambda request: (
@@ -40,34 +40,36 @@ def test_slash_search_preserves_query_reload_back_and_clear(server, desktop):
         ),
     )
 
-    def search_results(route):
-        queries.append(parse_qs(urlsplit(route.request.url).query)["q"][0])
-        route.fulfill(json={"items": [], "total": 0, "offset": 0, "has_more": False})
+    def search_response(term):
+        def matches(response):
+            url = urlsplit(response.url)
+            query = parse_qs(url.query)
+            return url.path == "/api/v1/search" and query.get("q") == [term]
 
-    page.route("**/api/v1/search?**", search_results)
+        return page.expect_response(matches)
+
     search = page.get_by_role("searchbox", name="Search Files and Folders", exact=True)
+    results = page.get_by_role("heading", name="Search Results", exact=True)
     for index, term in enumerate(("2026/11", "資料/é?# + %")):
-        search.fill(term)
-        expect(
-            page.get_by_role("heading", name="Search Results", exact=True)
-        ).to_be_visible()
+        with search_response(term) as response:
+            search.fill(term)
+        assert response.value.ok
+        expect(results).to_be_visible()
         assert parse_qs(urlsplit(page.url).query)["path"] == ["/search_" + term]
-        assert queries[-1] == term
         expect(search).to_have_value(term)
         if index == 0:
-            page.reload()
+            with search_response(term) as response:
+                page.reload()
+            assert response.value.ok
             expect(search).to_have_value(term)
-            expect(
-                page.get_by_role("heading", name="Search Results", exact=True)
-            ).to_be_visible()
-            assert queries[-1] == term
+            expect(results).to_be_visible()
             page.go_back()
             expect(page).to_have_url(origin)
             expect(search).to_have_value("")
-            search.fill(term)
-            expect(
-                page.get_by_role("heading", name="Search Results", exact=True)
-            ).to_be_visible()
+            with search_response(term) as response:
+                search.fill(term)
+            assert response.value.ok
+            expect(results).to_be_visible()
         page.get_by_role("button", name="Clear Search", exact=True).click()
         expect(page).to_have_url(origin)
         expect(search).to_have_value("")
@@ -117,7 +119,9 @@ def test_context_switch_trash_shares_and_preloads_keep_search_scoped(server, des
         }
         for name in ("Movie.mp4", "Notes.pdf")
     ]
-    page.route("**/api/v1/shares", lambda route: route.fulfill(json={"shares": shares}))
+    page.route(
+        "**/api/v1/shares{,?*}", lambda route: route.fulfill(json={"shares": shares})
+    )
     page.get_by_role("link", name="Shared Links", exact=True).click()
     search = page.get_by_role("searchbox", name="Search Shared Links", exact=True)
     expect(search).to_have_value("")

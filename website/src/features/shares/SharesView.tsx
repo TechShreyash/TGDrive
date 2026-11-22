@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PasswordInput, Tooltip } from "@mantine/core";
 import {
     Link,
@@ -84,6 +84,7 @@ export default function SharesView({
     onError,
     onChange,
     onLocate,
+    onBrowseFiles,
     onNotice,
     query = "",
 }: {
@@ -91,6 +92,7 @@ export default function SharesView({
     onError: (message: string) => void;
     onChange: () => void;
     onLocate: (share: Share) => void;
+    onBrowseFiles: () => void;
     onNotice?: (message: string, error?: boolean) => void;
     query?: string;
 }) {
@@ -101,6 +103,14 @@ export default function SharesView({
         "active",
     );
     const generation = useRef(0);
+    const filterControls = useRef<HTMLDivElement>(null);
+    const getActiveFilter = useCallback(
+        () =>
+            filterControls.current?.querySelector<HTMLButtonElement>(
+                '[aria-pressed="true"]',
+            ) ?? null,
+        [],
+    );
     const { refreshing, run } = useManualRefresh(onNotice);
     const [busy, setBusy] = useState<{
         id: string;
@@ -127,9 +137,8 @@ export default function SharesView({
         const controller = new AbortController();
         const requestId = ++generation.current;
         setLoading(true);
-        void request<{ shares: Share[] }>("/api/v1/shares", undefined, {
-            signal: controller.signal,
-        })
+        void api
+            .shares(controller.signal)
             .then((result) => {
                 if (
                     !controller.signal.aborted &&
@@ -159,13 +168,7 @@ export default function SharesView({
         run(async (signal) => {
             const requestId = ++generation.current;
             try {
-                const result = await request<{ shares: Share[] }>(
-                    "/api/v1/shares",
-                    undefined,
-                    {
-                        signal,
-                    },
-                );
+                const result = await api.shares(signal);
                 if (signal.aborted || requestId !== generation.current)
                     return false;
                 setShares(result.shares);
@@ -184,12 +187,13 @@ export default function SharesView({
         const timer = setTimeout(() => setCopied(""), 2500);
         return () => clearTimeout(timer);
     }, [copied]);
-    const matching = shares.filter((share) =>
+    const normalizedQuery = query.normalize("NFC").toLocaleLowerCase();
+    const matchesQuery = (share: Share) =>
         ((share.name || "Shared Item") + " " + (share.label || ""))
             .normalize("NFC")
             .toLocaleLowerCase()
-            .includes(query.normalize("NFC").toLocaleLowerCase()),
-    );
+            .includes(normalizedQuery);
+    const matching = shares.filter(matchesQuery);
     const active = matching.filter((share) => !shareExpired(share));
     const expired = matching.filter(shareExpired);
     const visible = (
@@ -211,6 +215,10 @@ export default function SharesView({
         setRevokeError("");
         try {
             await api.revoke(share.path, share.id);
+            generation.current++;
+            setShares((current) =>
+                current.filter((row) => row.id !== share.id),
+            );
             setConfirm(null);
             onChange();
         } catch (cause) {
@@ -280,6 +288,7 @@ export default function SharesView({
             <div className="shares-toolbar">
                 <div
                     className="shares-filters"
+                    ref={filterControls}
                     role="group"
                     aria-label="Filter Shared Links"
                 >
@@ -375,6 +384,15 @@ export default function SharesView({
                               ? "Links that reach their expiry date will appear here."
                               : "Use an item’s Share Link action in My Files to share it."}
                     </p>
+                    {!query && filter !== "expired" && (
+                        <button
+                            className="secondary-button"
+                            type="button"
+                            onClick={onBrowseFiles}
+                        >
+                            Open My Files
+                        </button>
+                    )}
                 </div>
             ) : (
                 <>
@@ -787,6 +805,7 @@ export default function SharesView({
             </span>
             {confirm && (
                 <Modal
+                    getFallbackFocus={getActiveFilter}
                     title={
                         shareExpired(confirm)
                             ? "Remove Expired Link?"
@@ -832,8 +851,29 @@ export default function SharesView({
             {editing && (
                 <EditShare
                     share={editing}
+                    getFallbackFocus={getActiveFilter}
                     onClose={() => setEditing(null)}
-                    onSaved={() => {
+                    onSaved={(changes) => {
+                        const updated = {
+                            ...editing,
+                            label: changes.label ?? editing.label,
+                            expires_at:
+                                changes.expires_at === undefined
+                                    ? editing.expires_at
+                                    : changes.expires_at,
+                        };
+                        generation.current++;
+                        setShares((current) =>
+                            current.map((row) =>
+                                row.id === updated.id
+                                    ? {
+                                          ...row,
+                                          label: updated.label,
+                                          expires_at: updated.expires_at,
+                                      }
+                                    : row,
+                            ),
+                        );
                         setEditing(null);
                         onChange();
                     }}
@@ -883,12 +923,14 @@ function ShareIdentity({ share }: { share: Share }) {
 
 function EditShare({
     share,
+    getFallbackFocus,
     onClose,
     onSaved,
 }: {
     share: Share;
+    getFallbackFocus: () => HTMLElement | null;
     onClose: () => void;
-    onSaved: () => void;
+    onSaved: (changes: { label?: string; expires_at?: string | null }) => void;
 }) {
     const [label, setLabel] = useState(share.label || "");
     const localDate = formatDateTimeInput(share.expires_at);
@@ -915,7 +957,7 @@ function EditShare({
             if (removePassword) changes.password = null;
             else if (password) changes.password = password;
             await request("/api/v1/shares", changes, { method: "PATCH" });
-            onSaved();
+            onSaved(changes);
         } catch (cause) {
             setError(errorMessage(cause));
         } finally {
@@ -925,6 +967,7 @@ function EditShare({
     return (
         <Modal
             title="Edit share link"
+            getFallbackFocus={getFallbackFocus}
             onClose={() => {
                 if (!busy) onClose();
             }}

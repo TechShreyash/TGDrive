@@ -17,6 +17,28 @@ browser, desktop, server = fixtures.browser, fixtures.desktop, fixtures.server
 pytestmark = pytest.mark.e2e
 
 
+@pytest.mark.parametrize("motion", ["no-preference", "reduce"])
+def test_new_dialog_returns_focus_without_moving_controls(server, desktop, motion):
+    _, page = desktop
+    page.set_viewport_size({"width": 1536, "height": 695})
+    page.emulate_media(reduced_motion=motion)
+    login(page, server.url)
+    new = page.get_by_role("button", name="New", exact=True)
+    menu = page.get_by_role("group", name="New Item Actions")
+    dialog = page.get_by_role("dialog", name="New Folder", exact=True)
+    expected = "none" if motion == "reduce" else "refresh-fade"
+    for _ in range(2):
+        new.press("Enter")
+        expect(menu).to_have_css("animation-name", expected)
+        menu.get_by_role("button", name="New Folder", exact=True).press("Enter")
+        expect(dialog).to_have_css("animation-name", expected)
+        expect(dialog).to_have_css("transform", "none")
+        expect(dialog.get_by_label("Folder Name")).to_be_focused()
+        page.keyboard.press("Escape")
+        expect(dialog).to_have_count(0)
+        expect(new).to_be_focused()
+
+
 @pytest.mark.parametrize(
     "width,height,theme", [(320, 640, "light"), (390, 844, "dark"), (600, 800, "light")]
 )
@@ -123,6 +145,23 @@ def test_phone_browsing_drawer_and_upload_use_separate_surfaces(
     expect(page.locator(".transfer-page")).to_be_visible()
     expect(status).to_have_count(0)
     page.screenshot(path=ARTIFACTS / f"phone-transfers-{width}.png")
+    page.go_back()
+    expect(status).to_be_visible()
+    dismiss = page.get_by_role("button", name="Dismiss transfer notice", exact=True)
+    assert dismiss.bounding_box()["width"] >= 44
+    dismiss.click()
+    expect(status).to_have_count(0)
+    transfer_tab = page.get_by_role("navigation", name="Sections").get_by_role(
+        "button", name="Transfers", exact=False
+    )
+    expect(transfer_tab).to_be_focused()
+    expect(transfer_tab.locator(".mobile-tab-count")).to_have_text("1")
+    page.get_by_role("navigation", name="Sections").get_by_role(
+        "button", name="Files", exact=True
+    ).click()
+    expect(status).to_have_count(0)
+    upload(page, ["Another upload.txt"])
+    expect(status).to_have_text("2 uploads in progress")
 
 
 @pytest.mark.parametrize(

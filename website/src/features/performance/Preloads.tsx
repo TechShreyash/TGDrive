@@ -240,6 +240,7 @@ export default function Preloads({
         id?: string;
         name?: string;
     } | null>(null);
+    const [clearError, setClearError] = useState("");
     const [refresh, setRefresh] = useState(0);
     const [filter, setFilter] = useState<"all" | "ready" | "partial">("all");
     const latestLoad = useRef(0);
@@ -300,19 +301,25 @@ export default function Preloads({
         key: string,
         task: () => Promise<unknown>,
         message: string,
+        feedback?: {
+            success: () => void;
+            failure: (message: string) => void;
+        },
     ) => {
         setBusy(key);
         setError("");
         setNotice("");
         try {
             await task();
+            feedback?.success();
             if (onNotice) onNotice(message);
             else setNotice(message);
             setRefresh((value) => value + 1);
         } catch (cause) {
             const message = errorMessage(cause);
-            setError(message);
-            onError?.(message);
+            if (feedback) feedback.failure(message);
+            else if (onError) onError(message);
+            else setError(message);
         } finally {
             setBusy("");
         }
@@ -535,7 +542,10 @@ export default function Preloads({
                                         refreshing ||
                                         (!files.length && !hasActiveJobs)
                                     }
-                                    onClick={() => setClearing({})}
+                                    onClick={() => {
+                                        setClearError("");
+                                        setClearing({});
+                                    }}
                                     aria-label="Clear Cache"
                                     title="Clear all cached entries"
                                 >
@@ -645,14 +655,15 @@ export default function Preloads({
                                                             )
                                                         }
                                                         title="Clear cached bytes"
-                                                        onClick={() =>
+                                                        onClick={() => {
+                                                            setClearError("");
                                                             setClearing({
                                                                 id: file.id,
                                                                 name: cachedFileLabel(
                                                                     file,
                                                                 ),
-                                                            })
-                                                        }
+                                                            });
+                                                        }}
                                                     >
                                                         {busy ===
                                                         "file:" + file.id ? (
@@ -765,7 +776,9 @@ export default function Preloads({
                             ? "Clear cached entry?"
                             : "Clear all cached entries?"
                     }
-                    onClose={() => setClearing(null)}
+                    onClose={() => {
+                        if (!busy) setClearing(null);
+                    }}
                     initialFocus=".preload-keep-cache"
                 >
                     <p className="dialog-description">
@@ -775,10 +788,12 @@ export default function Preloads({
                         Originals stay in Telegram. Future playback or downloads
                         may need to fetch the data again.
                     </p>
+                    <ErrorNotice message={clearError} />
                     <div className="dialog-actions">
                         <button
                             type="button"
                             className="secondary-button preload-keep-cache"
+                            disabled={!!busy}
                             onClick={() => setClearing(null)}
                         >
                             Keep Cache
@@ -786,21 +801,31 @@ export default function Preloads({
                         <button
                             type="button"
                             className="danger-button"
+                            disabled={!!busy}
+                            aria-busy={!!busy}
                             onClick={() => {
-                                const target = clearing;
-                                setClearing(null);
+                                setClearError("");
                                 void act(
-                                    target.id ? "file:" + target.id : "clear",
-                                    () => performanceApi.clear(target.id),
-                                    target.id
+                                    clearing.id
+                                        ? "file:" + clearing.id
+                                        : "clear",
+                                    () => performanceApi.clear(clearing.id),
+                                    clearing.id
                                         ? "Cached bytes evicted. The original is unchanged."
                                         : "Cached bytes cleared. Originals remain in Telegram.",
+                                    {
+                                        success: () => setClearing(null),
+                                        failure: setClearError,
+                                    },
                                 );
                             }}
                         >
-                            {clearing.id
-                                ? "Clear Cached Entry"
-                                : "Clear All Cache"}
+                            {busy ? <Spinner /> : null}
+                            {busy
+                                ? "Clearing…"
+                                : clearing.id
+                                  ? "Clear Cached Entry"
+                                  : "Clear All Cache"}
                         </button>
                     </div>
                 </Modal>

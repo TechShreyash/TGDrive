@@ -6,6 +6,30 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
+it("follows a listing cursor and preserves the active search", async () => {
+    const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(
+            Response.json({
+                data: { contents: { first: { id: "first" } } },
+                next_cursor: "opaque+/=",
+            }),
+        )
+        .mockResolvedValueOnce(
+            Response.json({
+                data: { contents: { second: { id: "second" } } },
+                next_cursor: null,
+            }),
+        );
+    vi.stubGlobal("fetch", fetcher);
+
+    const list = await api.starred("café");
+    expect(Object.keys(list.data.contents)).toEqual(["first", "second"]);
+    const next = new URL(fetcher.mock.calls[1][0], "https://test.invalid");
+    expect(next.searchParams.get("cursor")).toBe("opaque+/=");
+    expect(next.searchParams.get("q")).toBe("café");
+});
+
 describe("request transport failures", () => {
     it.each(["headers", "body"])(
         "still times out stalled %s when a caller supplies a lifecycle signal",

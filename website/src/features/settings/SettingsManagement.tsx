@@ -132,7 +132,6 @@ export default function SettingsManagement({
                 requestId === generation.current &&
                 !signal?.aborted
             ) {
-                setSettings(null);
                 setError(errorMessage(cause));
             }
             if (manual) throw cause;
@@ -556,7 +555,7 @@ export default function SettingsManagement({
                     </div>
                 </div>
             )}
-            {error && (
+            {error && !settings && (
                 <div className="management-load-error">
                     <ErrorNotice message={error} />
                     <button
@@ -599,11 +598,13 @@ export default function SettingsManagement({
                     <div
                         className="connection-hero"
                         data-state={
-                            connectedClients === 0
-                                ? "danger"
-                                : connectedClients < settings.clients.length
-                                  ? "warning"
-                                  : "success"
+                            error
+                                ? "warning"
+                                : connectedClients === 0
+                                  ? "danger"
+                                  : connectedClients < settings.clients.length
+                                    ? "warning"
+                                    : "success"
                         }
                     >
                         <span className="connection-hero-icon">
@@ -611,16 +612,23 @@ export default function SettingsManagement({
                         </span>
                         <div className="connection-hero-copy">
                             <strong>
-                                {connectedClients === 0
-                                    ? "Telegram not connected"
-                                    : connectedClients < settings.clients.length
-                                      ? "Some storage clients need attention"
-                                      : "Telegram connected"}
+                                {error
+                                    ? "Connection status may be out of date"
+                                    : connectedClients === 0
+                                      ? "Telegram not connected"
+                                      : connectedClients <
+                                          settings.clients.length
+                                        ? "Some storage clients need attention"
+                                        : "Telegram connected"}
                             </strong>
                             <p className="connection-summary">
+                                {error && "Last known: "}
                                 {connectedClients} of {settings.clients.length}{" "}
                                 storage clients connected
                             </p>
+                            {error && (
+                                <p className="connection-row-error">{error}</p>
+                            )}
                         </div>
                         <button
                             type="button"
@@ -706,14 +714,18 @@ export default function SettingsManagement({
                                 </button>
                             </div>
                         </div>
-                        <div
-                            className="managed-client-columns"
-                            aria-hidden="true"
-                        >
-                            <span>Account</span>
-                            <span>Connection and activity</span>
-                            <span />
-                        </div>
+                        {settings.clients.length > 0 ? (
+                            <div
+                                className="managed-client-columns"
+                                aria-hidden="true"
+                            >
+                                <span>Account</span>
+                                <span>Connection and activity</span>
+                                <span />
+                            </div>
+                        ) : !draft && !premiumOpen ? (
+                            <p>No storage clients configured.</p>
+                        ) : null}
                         <ul
                             className="managed-client-list"
                             aria-label="Configured storage clients"

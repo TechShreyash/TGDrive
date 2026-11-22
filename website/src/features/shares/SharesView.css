@@ -33,6 +33,7 @@
     display: none;
     color: var(--muted);
     font-size: 12px;
+    font-weight: 600;
 }
 .shares-rows {
     list-style: none;
@@ -249,12 +250,12 @@
     gap: 8px;
     cursor: pointer;
 }
-@container (min-width: 700px) {
+@container (min-width: 880px) {
     .share-columns,
     .share-row {
         grid-template-columns:
             36px minmax(0, 1fr) minmax(140px, 190px)
-            104px 216px;
+            124px 216px;
         column-gap: 16px;
         padding-inline: 12px;
     }
@@ -266,8 +267,18 @@
     .share-columns > :first-child {
         grid-column: 2;
     }
-    .share-columns > :last-child {
-        text-align: right;
+    .share-columns > :not(:first-child),
+    .share-dates,
+    .share-opens {
+        text-align: center;
+    }
+    .share-dates {
+        align-items: center;
+    }
+    .share-expiry-tooltip {
+        left: 50%;
+        translate: -50% 0;
+        text-align: left;
     }
     .share-row {
         padding-block: var(--list-row-padding, 8px);
@@ -290,10 +301,19 @@
     .share-row-actions {
         grid-column: 5;
         grid-row: 1;
-        justify-content: flex-end;
+        justify-content: center;
     }
 }
-@container (max-width: 699px) {
+@container (560px <= width < 880px) {
+    .share-row {
+        grid-template-columns: 36px minmax(0, 1fr) auto;
+    }
+    .share-row-actions {
+        grid-column: 3;
+        grid-row: 1 / span 2;
+    }
+}
+@container (width < 880px) {
     .shares-filters button {
         min-height: 44px;
         padding-inline: 10px;

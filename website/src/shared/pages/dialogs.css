@@ -17,7 +17,7 @@
     width: 850px;
 }
 .modal[open] {
-    animation: dialog-in var(--dur-3) var(--ease-out);
+    animation: refresh-fade var(--dur-2) var(--ease-out);
 }
 .modal::backdrop {
     background: var(--scrim);
@@ -463,7 +463,7 @@ input.switch:checked::before {
 }
 .toast:popover-open,
 .toast:not([popover]) {
-    animation: toast-in var(--dur-3) var(--ease-spring);
+    animation: refresh-fade var(--dur-2) var(--ease-out);
 }
 .toast-icon {
     color: var(--success);
@@ -518,9 +518,6 @@ input.switch:checked::before {
         background: var(--line);
         translate: -50% 0;
     }
-    .modal[open] {
-        animation: sheet-in var(--dur-3) var(--ease-out);
-    }
     .modal-header {
         margin-bottom: 18px;
     }
@@ -569,27 +566,11 @@ input.switch:checked::before {
     }
 }
 
-@keyframes dialog-in {
-    from {
-        opacity: 0;
-        transform: translateY(8px) scale(0.97);
-    }
-}
-@keyframes sheet-in {
-    from {
-        transform: translateY(100%);
-    }
-}
-@keyframes toast-in {
-    from {
-        opacity: 0;
-        transform: translate(-50%, 16px);
-    }
-}
 @media (prefers-reduced-motion: reduce) {
     .modal[open],
     .modal[open]::backdrop,
-    .toast:popover-open {
+    .toast:popover-open,
+    .toast:not([popover]) {
         animation: none;
     }
 }
@@ -608,13 +589,9 @@ input.switch:checked::before {
 .modal .torrent-picker-actions {
     gap: 4px;
 }
-.modal .torrent-picker-actions .text-button {
-    min-height: 36px;
-    padding: 6px 10px;
-    border-radius: 10px;
-}
-.modal .torrent-picker-actions .text-button:hover {
-    background: var(--hover);
+.modal .torrent-picker-actions .check-field {
+    min-height: 44px;
+    margin: 0;
 }
 .modal .torrent-picker-count {
     font-size: 13px;

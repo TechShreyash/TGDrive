@@ -890,7 +890,8 @@ def test_move_folder_navigation_clears_failed_listing_and_recovers(
     expect(picker.get_by_role("button", name="資料", exact=True)).to_be_visible()
     expect(dialog.get_by_role("alert")).to_have_count(0)
     picker.get_by_role("button", name="資料", exact=True).click()
-    expect(picker).to_have_attribute("aria-busy", "false")
+    expect(dialog.get_by_text("This folder has no subfolders.")).to_be_visible()
+    expect(dialog.get_by_role("button", name="Move Here")).to_be_enabled()
     expect(dialog.get_by_role("alert")).to_have_count(0)
     dialog.get_by_role("button", name="Cancel", exact=True).click()
 
@@ -904,12 +905,22 @@ def test_login_failure_returns_to_password_for_correction(
     page.goto(server.url)
     form = page.locator("#login-dialog")
     password = form.get_by_label("Password", exact=True)
-    password.fill("wrong fixture password")
     submit = form.get_by_role("button", name="Log in", exact=True)
     expect(submit).to_be_in_viewport(ratio=1)
+    held = []
+    page.route("**/api/checkPassword", lambda route: held.append(route))
     submit.click()
+    assert not held
+    password.fill("wrong fixture password")
+    submit.click()
+    expect(form.get_by_role("button", name="Logging in…")).to_be_disabled()
+    password.press("Enter")
+    assert len(held) == 1
+    held[0].continue_()
+    page.unroute("**/api/checkPassword")
     expect(form.get_by_role("alert")).to_have_text("Invalid password")
     expect(password).to_be_focused()
+    expect(password).to_have_value("wrong fixture password")
     expect(password).to_have_accessible_description("Invalid password")
     expect(submit).to_be_in_viewport(ratio=1)
     page.screenshot(path=ARTIFACTS / f"login-retry-{width}x{height}.png")
@@ -1236,7 +1247,8 @@ def test_enhanced_mkv_real_audio_subtitles_and_local_assets(
         Path(result.value.path()).read_bytes()
         == (ROOT / "tests/fixtures/multitrack.mkv").read_bytes()
     )
-    page.screenshot(path=ARTIFACTS / "enhanced-desktop.png", full_page=False)
+    desktop_viewport = page.viewport_size
+    assert desktop_viewport is not None
     page.set_viewport_size({"width": 390, "height": 844})
     player.hover()
     settings_button = player.get_by_role("button", name="Settings", exact=True)
@@ -1276,7 +1288,10 @@ def test_enhanced_mkv_real_audio_subtitles_and_local_assets(
         for url in requests
         if url.startswith(("http://", "https://")) and not url.startswith(server.url)
     ]
-    page.screenshot(path=ARTIFACTS / "enhanced-mobile.png", full_page=False)
+    # WebKit screenshot preparation inserts an inline stylesheet.
+    page.screenshot(path=ARTIFACTS / "enhanced-mobile.png")
+    page.set_viewport_size(desktop_viewport)
+    page.screenshot(path=ARTIFACTS / "enhanced-desktop.png")
     page.get_by_role("button", name="Close Preview", exact=True).click()
     expect(player).to_have_count(0)
 
@@ -4289,7 +4304,7 @@ def test_shared_links_compact_views_copy_location_and_indicators(server, desktop
         copyable=False,
     )
     page.route(
-        "**/api/v1/shares",
+        "**/api/v1/shares{,?*}",
         lambda route: (
             route.fulfill(json={"shares": [current, expired, legacy]})
             if route.request.method == "GET"
@@ -4527,7 +4542,7 @@ def test_history_and_shares_failed_loads_have_retry_without_false_empty_state(
             route.fulfill(json={"shares": []})
 
     page.route("**/api/v1/transfers/history/tasks", history)
-    page.route("**/api/v1/shares", shares)
+    page.route("**/api/v1/shares{,?*}", shares)
     login(page, server.url)
     page.get_by_role("link", name="Transfers", exact=False).click()
     expect(page.get_by_role("button", name="Try Again", exact=True)).to_be_visible()
@@ -4579,7 +4594,7 @@ def test_revoke_failure_stays_in_dialog_and_management_drops_do_not_upload(
                 }
             )
 
-    page.route("**/api/v1/shares", share_route)
+    page.route("**/api/v1/shares{,?*}", share_route)
     login(page, server.url)
     page.get_by_role("link", name="Shared Links", exact=True).click()
     page.get_by_role("button", name="Revoke Link for A shared item", exact=True).click()

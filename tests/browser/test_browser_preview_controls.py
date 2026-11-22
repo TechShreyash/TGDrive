@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlencode
 
 import pytest
 
@@ -10,10 +11,54 @@ if os.environ.get("TGDRIVE_E2E") != "1":
     pytest.skip("Set TGDRIVE_E2E=1 for Chromium checks", allow_module_level=True)
 
 import tests.browser.test_browser_e2e as fixtures
-from tests.browser.test_browser_e2e import ARTIFACTS, CONTROL, expect, login
+from tests.browser.test_browser_e2e import (
+    ARTIFACTS,
+    CONTROL,
+    expect,
+    fixture_nodes,
+    login,
+)
 
 browser, desktop, server = fixtures.browser, fixtures.desktop, fixtures.server
 pytestmark = pytest.mark.e2e
+
+
+def test_standalone_video_shows_filename_and_selectable_link(server, desktop):
+    _, page = desktop
+    page.set_viewport_size({"width": 390, "height": 844})
+    login(page, server.url)
+    folder = next(
+        row for row in fixture_nodes(page, server, "/")
+        if row["name"] == "Preview samples"
+    )
+    parent = "/" + folder["id"]
+    video = next(
+        row for row in fixture_nodes(page, server, parent)
+        if row["name"] == "movtext-subtitles.mp4"
+    )
+    query = urlencode({"path": parent + "/" + video["id"]})
+    url = server.url + "/stream?" + query
+    page.goto(url)
+    expect(page.get_by_role("heading", name=video["name"], exact=True)).to_be_visible()
+    expect(page.get_by_role("link", name="Download original")).to_have_attribute(
+        "href", server.url + "/file?" + query + "&download=1"
+    )
+    page.evaluate("""() => {
+        navigator.clipboard.writeText = () => Promise.reject(
+            new DOMException("Clipboard permission denied", "NotAllowedError")
+        );
+    }""")
+    page.get_by_role("button", name="Copy stream link", exact=True).click()
+    fallback = page.get_by_label("Stream link to copy", exact=True)
+    expect(fallback).to_be_focused()
+    expect(fallback).to_have_value(url)
+    assert fallback.evaluate(
+        "input => input.selectionEnd - input.selectionStart"
+    ) == len(url)
+    page.get_by_role("button", name="Copy file link", exact=True).click()
+    expect(page.get_by_label("File link to copy", exact=True)).to_have_value(
+        server.url + "/file?" + query
+    )
 
 
 def choose_pdf_fit(page, name):
