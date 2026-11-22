@@ -468,8 +468,14 @@ def test_copy_download_link_is_explicit_public_capability_and_prepare_is_scoped(
         "Select and copy the download link above."
     )
     retries = []
-    page.on("request", lambda request: retries.append(request.url)
-            if request.url.endswith("/api/v1/download-links") else None)
+    page.on(
+        "request",
+        lambda request: (
+            retries.append(request.url)
+            if request.url.endswith("/api/v1/download-links")
+            else None
+        ),
+    )
     page.evaluate("() => delete navigator.clipboard.writeText")
     dialog.get_by_role("button", name="Copy Link", exact=True).click()
     expect(dialog.get_by_role("status")).to_have_text("Download link copied.")

@@ -28,12 +28,14 @@ def test_standalone_video_shows_filename_and_selectable_link(server, desktop):
     page.set_viewport_size({"width": 390, "height": 844})
     login(page, server.url)
     folder = next(
-        row for row in fixture_nodes(page, server, "/")
+        row
+        for row in fixture_nodes(page, server, "/")
         if row["name"] == "Preview samples"
     )
     parent = "/" + folder["id"]
     video = next(
-        row for row in fixture_nodes(page, server, parent)
+        row
+        for row in fixture_nodes(page, server, parent)
         if row["name"] == "movtext-subtitles.mp4"
     )
     query = urlencode({"path": parent + "/" + video["id"]})

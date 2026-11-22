@@ -460,8 +460,9 @@ def test_same_item_links_keep_their_copy_edit_and_revoke_scope(server, desktop, 
     dialog.get_by_role("button", name="Revoke Link", exact=True).click()
     expect(page.locator(".share-row")).to_have_count(1)
     expect(
-        page.get_by_role("group", name="Filter Shared Links")
-        .locator('button[aria-pressed="true"]')
+        page.get_by_role("group", name="Filter Shared Links").locator(
+            'button[aria-pressed="true"]'
+        )
     ).to_be_focused()
 
     for link, expected_status in [(links[0], 403), (links[1], 200)]:

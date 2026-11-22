@@ -757,7 +757,8 @@ def test_performance_views_keep_layout_and_measured_activity(
     page.get_by_role("tab", name="Server resources", exact=True).click()
     storage = page.get_by_role("tabpanel", name="Server resources", exact=True)
     expect(storage.get_by_text("RAM cache", exact=True)).to_be_visible()
-    assert storage.locator(".performance-resource-summary").evaluate("""(el, wide) => {
+    assert storage.locator(".performance-resource-summary").evaluate(
+        """(el, wide) => {
         const containerRight = el.getBoundingClientRect().right;
         const rowEnds = new Map();
         for (const meter of el.querySelectorAll('.performance-cache-meter-grid > *')) {
@@ -768,7 +769,9 @@ def test_performance_views_keep_layout_and_measured_activity(
         [...rowEnds.values()].every(right => {
             return containerRight - right <= 2;
         });
-    }""", width >= 1160)
+    }""",
+        width >= 1160,
+    )
     memory_detail = storage.locator(".performance-memory-details dd + dd").first
     expect(memory_detail).to_have_css("font-size", "13px")
     expect(storage.locator(".performance-facts > div > :not(dt, dd)")).to_have_count(0)
