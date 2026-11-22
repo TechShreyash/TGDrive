@@ -5,6 +5,10 @@ below cover the local dev checkout at `287862d`, including working-tree changes.
 The original first batch focused on bot intake recovery and pooled downloads
 (BUG-01 and BUG-02). Its results are retained below.
 
+The [frontend audit](frontend-audit.md) records the later verified same-channel
+restore for BUG-04, including the fix for concurrent bot session use. The
+reported historical backup burst remains unattributed.
+
 ## Backlog in execution order
 
 | ID | Expected behavior | Status | Smallest useful verification |

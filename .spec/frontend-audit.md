@@ -62,7 +62,7 @@ behavior.
 | UI-04 | Implemented, measured locally | The direct Docker server sent 1.11 MB JavaScript and 555 KB CSS uncompressed for two entry assets before login. Start by loading Performance, Connections, and Backups on first navigation. Measure deployment compression separately. | Measure matching cold login and My Files runs under the same network profile. Verify no admin chunks before navigation, correct direct links and reloads, and usable retry after a failed chunk. |
 | UI-05 | Implemented, focused checks passed | A single page of phone transfer history showed a full pagination row. Retain the count and show paging controls when another page exists. Give guests with a revoked or expired link a way to understand that they need a current link. Keep retry for transient failures. | Exercise zero, one, and multiple pages at 320px. Check active, expired, revoked, protected, and temporarily unreachable guest links without exposing private file data. |
 | UI-06 | Implemented, reviewed and verified locally | Use Settings as the spacing and field-feedback reference. Give the file priority in preview layouts. Keep Performance focused on attention, measured waits, and next actions, with library totals distinct from server capacity. Reuse Mantine and the existing UI SDK interactions. | Check long names and readings, focus return, touch targets, plus loading, empty, and error states in both themes. Close and reopen PDF and video in a fresh context. Check the rendered video position against its stored bookmark and measure frame delivery separately. |
-| UI-07 | Implemented, integrated verification running | Assert settled user-visible states instead of sampling immediate DOM counts or colors. Update the superseded four-column assertion. Diagnose the transfer-action timeout under parallel load. Guard tablet filter hit targets and advancing video frames with focused tests. | Repeat each affected test, then run the integrated suite. Record first-run failures and reruns separately. Preserve per-entry evidence and open gaps. |
+| UI-07 | Implemented, browser run and focused rerun verified | Assert settled user-visible states instead of sampling immediate DOM counts or colors. Update the superseded four-column assertion. Diagnose the transfer-action timeout under parallel load. Guard tablet filter hit targets and advancing video frames with focused tests. | Repeat each affected test, then run the integrated suite. Record first-run failures and reruns separately. Preserve per-entry evidence and open gaps. |
 
 Use `npm run build`, `npm test`, and the affected Playwright workflows before
 the integrated browser suite. For updates to reader behavior, also use the
@@ -181,14 +181,42 @@ backgrounds to settle. The Grid checks cover five columns at 1536px and
 1920px, in both themes.
 
 The production build, 824 frontend unit tests, and 12 focused browser
-checks passed. The integrated run collected 606 browser cases and is
-running. Record the result and any reruns here before requesting a push.
+checks passed. The integrated browser run passed 605 of 606 on the first
+attempt. The folder-upload case sampled pending routes before Playwright
+delivered the second device request. The corrected test waits for that
+callback and still verifies exactly one Telegram upload has started. All four
+upload-pipeline cases passed on rerun.
+
+The first broad Python run caught a missing fixture collection,
+an outdated automatic-retry expectation, and one missing setting in prebuilt
+Compose. All 78 affected recovery and deployment checks passed after the
+corrections.
+
+During the live isolated restore, Telegram verification also exposed a second
+client opening the same bot's SQLite session. Same-channel recovery now
+reuses the authenticated source client when the credentials match. A
+dedicated Telegram pin was verified and restored into a fresh local MongoDB
+database. TGDrive reopened the catalog after restart and rendered an original
+PDF from Telegram. See the [confirmed candidate](../cache/frontend-runtime-audit-1122/ui-07/live-restore-found.png)
+and [restored PDF](../cache/frontend-runtime-audit-1122/ui-07/live-restored-catalog.png).
+The restored drive accepted a new text upload, returned identical bytes on
+download, and revoked a guest link. Chromium and Firefox at 390px and 820px,
+and WebKit at 390px, each reopened PDF page 7 and returned focus after the
+navigation drawer closed.
+
+The backend rerun passed 3,162 tests and 36 subtests using a separate MongoDB
+replica set. The build from the current Dockerfile also passed the native PDF
+password test that was skipped on the WSL host. Ruff checks and formatting,
+Python type checking, and the 12 mobile browser cases passed after the final
+test cleanup. The packaged demo reopened the restored catalog and rendered
+the original PDF at [port 18786](http://127.0.0.1:18786/).
 
 ## What remains unverified
 
 Physical iOS and Android inputs, assistive technology, sustained playback of
-the originally reported production video, and a full disaster restore
-remain unverified. Archive authentication and download were checked.
+the originally reported production video, and compression behind the deployed
+proxy remain unverified. Archive validation, download, and a same-channel
+MongoDB restore were checked on the dedicated Telegram test channel.
 
 ## Feedback evidence by ID
 

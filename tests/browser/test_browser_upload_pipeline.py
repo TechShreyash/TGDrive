@@ -92,7 +92,13 @@ def test_device_receipts_finish_while_telegram_waits_and_survive_tab_close(
             upload(page, names)
         first = _wait_started(page, server, 1)
         assert len(first) == 1, "Telegram must start before the remaining receipts"
+        deadline = time.monotonic() + 10
+        while not held and time.monotonic() < deadline:
+            # The server can report the first receipt before Playwright delivers
+            # the next device request to the routing callback.
+            page.wait_for_timeout(50)
         assert held, "Other device receipts must still be in flight"
+        assert len(server.control()["started"]) == 1
         assert all(
             record["status"] != "completed"
             for record in server.control()["records"].values()

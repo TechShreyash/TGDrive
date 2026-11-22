@@ -707,7 +707,8 @@ async def test_initial_bot_failure_keeps_drive_ready_and_retries_bot_only(
     client = Mock(start=AsyncMock(side_effect=connect_bot), stop=AsyncMock())
     factory = Mock(return_value=client)
     runtime = Runtime(settings(tmp_path), pool=cast(ClientPool, pool))
-    runtime.backup = cast(MongoProtection, FakeBackup(store))
+    backup = FakeBackup(store)
+    runtime.backup = cast(MongoProtection, backup)
     runtime.remote = cast(RemoteClient, FakeRemote())
     monkeypatch.setattr(runtime_module, "build_bot_mode_client", factory)
     try:
@@ -721,7 +722,7 @@ async def test_initial_bot_failure_keeps_drive_ready_and_retries_bot_only(
         assert runtime.bot_mode is not None and runtime.bot_mode._started
         client.register_bot.assert_called_once_with(runtime.bot_mode)
         factory.assert_called_once_with(runtime.settings)
-        assert runtime.backup.backups == 1
+        assert backup.backups == 1
     finally:
         release.set()
         await runtime.stop()

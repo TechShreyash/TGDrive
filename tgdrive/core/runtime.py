@@ -663,7 +663,9 @@ class Runtime:
         self.replica = replica
         replica.start()
         if not self.backup_discovery_unconfirmed:
-            logger.warning("MongoDB is empty and a backup exists: opening Restore drive")
+            logger.warning(
+                "MongoDB is empty and a backup exists: opening Restore drive"
+            )
         return True
 
     def _prepare_runtime_directories(self) -> None:

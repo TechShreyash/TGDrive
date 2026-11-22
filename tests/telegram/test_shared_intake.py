@@ -138,7 +138,9 @@ async def test_unknown_dispatch_is_retained_and_never_copied_or_deleted_again(tm
 async def test_known_copy_timeout_exposes_retry_after_cleanup(tmp_path, monkeypatch):
     mode, manager, client, _, source, row, _ = await shared(tmp_path)
     cleanup_started, release_cleanup, cleaned = (
-        asyncio.Event(), asyncio.Event(), asyncio.Event()
+        asyncio.Event(),
+        asyncio.Event(),
+        asyncio.Event(),
     )
     intake = mode.intake
     assert intake is not None

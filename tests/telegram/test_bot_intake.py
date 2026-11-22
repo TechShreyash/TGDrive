@@ -347,6 +347,7 @@ async def test_bot_timeout_fails_with_manual_retry_message(tmp_path, during):
         await mode.start()
         assert record.status is TransferStatus.ERROR
         assert not client.downloads
+        assert mode.intake is not None
         assert not mode.intake.pending()
         assert not manager.store.list_directory("/")
 

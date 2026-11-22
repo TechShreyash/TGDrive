@@ -106,7 +106,7 @@ async def test_add_change_and_remove_password_keep_page_text_and_source(
         original = manager.store.get_file(original_path)
         assert ledger.messages[original["message_id"]].content == data
         before = manager.store.list_directory("/")
-        manager.settings.upload_limit = 128
+        monkeypatch.setattr(manager.settings, "upload_limit", 128)
         failed = await start_pdf_password(
             manager,
             original_path,

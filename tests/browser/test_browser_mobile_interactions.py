@@ -274,6 +274,7 @@ def test_phone_navigation_search_new_and_owner_controls_are_reachable(
         expect(page.get_by_role("dialog")).to_be_visible()
         assert_bounded(page, "dialog[open], dialog[open] input, dialog[open] button")
         page.keyboard.press("Escape")
+        status = page.get_by_role("button", name="Open transfer progress")
         if height < 400:
             with page.expect_response(
                 lambda response: (
@@ -285,7 +286,6 @@ def test_phone_navigation_search_new_and_owner_controls_are_reachable(
             ):
                 fixtures.upload(page, ["landscape.bin"])
             badge = page.locator(".mobile-tab-count")
-            status = page.get_by_role("button", name="Open transfer progress")
             expect(badge).to_have_text("1")
             expect(status).to_have_count(0)
             page.set_viewport_size({"width": height, "height": width})
