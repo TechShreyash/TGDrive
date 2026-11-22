@@ -146,7 +146,14 @@ def test_finished_history_cursor_pages_keep_live_sections_and_reset_filters(
     filters.get_by_role("button", name="Successful", exact=True).click()
     expect(finished).to_contain_text("recent-success.bin")
     expect(finished).not_to_contain_text("recent-failure.bin")
-    expect(pager.get_by_role("status")).to_have_text("Page 1 of 1 · 2 tasks")
+    page.set_viewport_size({"width": 320, "height": 640})
+    expect(history_region.get_by_text("2 tasks", exact=True)).to_be_visible()
+    expect(pager).to_have_count(0)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(
+        path=ARTIFACTS / "transfer-pagination-single-mobile.png", full_page=True
+    )
+    page.set_viewport_size({"width": 1440, "height": 900})
     filters.get_by_role("button", name="Failed", exact=True).click()
     expect(history_region.get_by_role("alert")).to_contain_text(
         "History temporarily unavailable"

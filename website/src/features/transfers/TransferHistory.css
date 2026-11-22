@@ -33,6 +33,10 @@
     border-top: 1px solid var(--line);
     margin-top: 16px;
 }
+.transfer-history-count {
+    margin: 12px 0 0;
+}
+.transfer-history-count,
 .transfer-history-pagination > span {
     color: var(--muted);
     font-size: 13px;

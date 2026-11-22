@@ -60,7 +60,7 @@ behavior.
 | UI-02 | Implemented, focused checks passed | At 820px the sidebar consumed 248px, search measured 146px, the heading wrapped, and the Other filter was clipped. Switch to the compact Type control based on available space, prioritize filenames over secondary metadata, and reuse the existing drawer where the full sidebar crowds the workspace. | At 768, 820, and 1024px, hit-test every filter and reach it with a keyboard. Check Name → Date Added and List → Grid toolbar stability. Recheck five columns at 1536px and touch selection at 390px. |
 | UI-03 | Implemented, focused checks passed | Backups calls local MongoDB **Cloud Database**. When Telegram is unreachable, recovery can imply a backup was found and show 0 / 0 files, bytes, and parts. Connections repeats the global disconnect banner above its diagnosis. Label MongoDB plainly, distinguish discovery from confirmed restoration, show totals when known, and give each problem one next action. | Compare healthy, unreachable, unconfirmed-pin, confirmed-backup, and restoring states. Verify which data is protected, which actions are paused, and what to do next at phone and desktop widths. |
 | UI-04 | Implemented, measured locally | The direct Docker server sent 1.11 MB JavaScript and 555 KB CSS uncompressed for two entry assets before login. Start by loading Performance, Connections, and Backups on first navigation. Measure deployment compression separately. | Measure matching cold login and My Files runs under the same network profile. Verify no admin chunks before navigation, correct direct links and reloads, and usable retry after a failed chunk. |
-| UI-05 | Reproduced | A single page of phone transfer history showed a full pagination row. Retain the count and show paging controls when another page exists. Give guests with a revoked or expired link a way to understand that they need a current link. Keep retry for transient failures. | Exercise zero, one, and multiple pages at 320px. Check active, expired, revoked, protected, and temporarily unreachable guest links without exposing private file data. |
+| UI-05 | Implemented, focused checks passed | A single page of phone transfer history showed a full pagination row. Retain the count and show paging controls when another page exists. Give guests with a revoked or expired link a way to understand that they need a current link. Keep retry for transient failures. | Exercise zero, one, and multiple pages at 320px. Check active, expired, revoked, protected, and temporarily unreachable guest links without exposing private file data. |
 | UI-06 | Review and focused refinements pending | Use Settings as the spacing and field-feedback reference. Give the file priority in preview layouts. Keep Performance focused on attention, measured waits, and next actions, with library totals distinct from server capacity. Reuse Mantine and the existing UI SDK interactions. | Check long names and readings, focus return, touch targets, plus loading, empty, and error states in both themes. Close and reopen PDF and video in a fresh context. Check the rendered video position against its stored bookmark and measure frame delivery separately. |
 | UI-07 | First-run failures recorded | Assert settled user-visible states instead of sampling immediate DOM counts or colors. Update the superseded four-column assertion. Diagnose the transfer-action timeout under parallel load. Guard tablet filter hit targets and advancing video frames with focused tests. | Repeat each affected test, then run the integrated suite. Record first-run failures and reruns separately. Preserve per-entry evidence and open gaps. |
 
@@ -136,6 +136,22 @@ The production build and 63 browser cases passed, including no owner-tool
 chunks on initial login or My Files, deep-link reload, and recovery from a
 blocked Connections chunk. See the [local measurements](../cache/frontend-runtime-audit-1122/ui-04/).
 Next is transfer history and unavailable share links.
+
+### UI-05 · Transfer history and guest links
+
+Transfers keeps the task count for a single page and adds paging controls for
+multiple pages. Public folder links and embeds now explain when to ask the
+owner for a new link. A temporary load problem still offers **Try Again**.
+The unavailable screen hides the item metadata and avoids displaying raw
+server messages.
+
+The production build passed. The combined share, embed, search and transfer
+suite passed 61 cases initially. Two new browser assertions needed test
+adjustments for the initial React replay and embedded item labels. Both
+passed in a focused rerun that includes a temporary 503, a simulated expired
+410, and actual revocation. The history test captured [a single page at
+320px](../cache/frontend-runtime-audit-1122/ui-05/traces/transfer-pagination-single-mobile.png).
+Next is preview and diagnostics polish.
 
 ## What remains unverified
 

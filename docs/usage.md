@@ -331,6 +331,10 @@ paths, URLs and access tokens.
 
 ## Share and revoke
 
+If a public link has expired or been revoked, ask the owner for a new link.
+Use **Try Again** when a temporary connection problem prevents the link from
+loading.
+
 1. Use the item's share action and optionally add a label.
 2. Choose an expiry: one, seven or 30 days, no expiry, or a custom date/time.
 3. Copy the link. Review, edit, copy or revoke it later in **Shared Links**.
@@ -414,8 +418,9 @@ only** in TGDrive's proxy; keep owner pages protected.
 
 ## Transfer history
 
-**Transfers** lists **Running** and **Queued**, then finished history. Filter by
-**All / Successful / Failed / Cancelled**, or search names across history pages.
+**Transfers** lists **Running** and **Queued**, then finished history. A single
+page shows the task count without page controls. Filter by **All / Successful /
+Failed / Cancelled**, or search names across history pages.
 Each page holds 20 tasks; a folder counts once and expands to its files.
 Completed files offer **Show in folder**; folder batches offer **Show folder**.
 **Cancel All** appears next to the first group when there is work you can

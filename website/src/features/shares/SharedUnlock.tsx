@@ -18,6 +18,19 @@ export function needsSharePassword(error: unknown) {
     );
 }
 
+export function shareLinkUnavailable(error: unknown) {
+    return (
+        error instanceof ApiError &&
+        !needsSharePassword(error) &&
+        [401, 403, 404, 410].includes(error.status)
+    );
+}
+
+export const SHARE_UNAVAILABLE_MESSAGE =
+    "This link has expired, was revoked, or is not valid. Ask the owner for a new link.";
+export const SHARE_LOAD_FAILED_MESSAGE =
+    "The shared item could not load. Check your connection and try again.";
+
 export default function SharedUnlock({
     auth,
     embed = false,

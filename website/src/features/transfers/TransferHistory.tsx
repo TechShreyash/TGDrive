@@ -413,6 +413,14 @@ export function HistoryPagination({
     loading: boolean;
     onPageChange: (page: number) => void;
 }) {
+    const taskCount = totalTasks === 1 ? "1 task" : totalTasks + " tasks";
+    if (totalPages <= 1)
+        return (
+            <p className="transfer-history-count" role="status">
+                {taskCount}
+                {loading ? " · Loading…" : ""}
+            </p>
+        );
     return (
         <nav
             className="transfer-history-pagination"
@@ -420,8 +428,7 @@ export function HistoryPagination({
             aria-busy={loading}
         >
             <span role="status" aria-live="polite" aria-atomic="true">
-                Page {page} of {totalPages} · {totalTasks}{" "}
-                {totalTasks === 1 ? "task" : "tasks"}
+                Page {page} of {totalPages} · {taskCount}
                 {loading ? " · Loading…" : ""}
             </span>
             <div className="transfer-history-page-controls">

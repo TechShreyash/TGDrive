@@ -333,7 +333,7 @@ export default function FileBrowser({
     onStar?: (item: DriveItem) => void;
     isSearch: boolean;
     auth: string;
-    onReload: () => void;
+    onReload?: () => void;
     onUpload: () => void;
     onOpen: (item: DriveItem) => void;
     onDialog: (dialog: ActionDialogState) => void;
@@ -1323,14 +1323,16 @@ export default function FileBrowser({
                                 : "Could Not Load Your Files"}
                         </h2>
                         <p role="alert">{error}</p>
-                        <button
-                            className="secondary-button"
-                            disabled={loading || refreshing}
-                            onClick={onReload}
-                        >
-                            {refreshing && <Spinner />}
-                            {refreshing ? "Refreshing…" : "Try Again"}
-                        </button>
+                        {onReload && (
+                            <button
+                                className="secondary-button"
+                                disabled={loading || refreshing}
+                                onClick={onReload}
+                            >
+                                {refreshing && <Spinner />}
+                                {refreshing ? "Refreshing…" : "Try Again"}
+                            </button>
+                        )}
                     </div>
                 ) : pageMissing && paging?.error ? (
                     <div className="empty-state">

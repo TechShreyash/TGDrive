@@ -839,7 +839,71 @@ def test_cross_origin_embed_renders_and_rejects_invalid_or_revoked_links(
         expect(
             frame.get_by_role("heading", name="Shared Item Unavailable", exact=True)
         ).to_be_visible()
-        expect(frame.get_by_role("alert")).to_contain_text("Invalid share link")
+        expect(frame.get_by_role("alert")).to_contain_text(
+            "Ask the owner for a new link."
+        )
+        expect(frame.get_by_role("button", name="Try Again", exact=True)).to_have_count(
+            0
+        )
         expect(
             frame.locator(".sidebar, #login-dialog, .preview-surface")
         ).to_have_count(0)
+
+
+@pytest.mark.parametrize("surface", ["/", "/embed"], ids=["folder", "embed"])
+def test_guest_retries_temporary_failure_and_requests_replacement_after_revocation(
+    server, desktop, browser, surface
+):
+    _, owner = desktop
+    login(owner, server.url)
+    seed = server.control()["seed"]
+    path = seed["folder"]
+    response = owner.request.post(server.url + "/api/v1/shares", data={"path": path})
+    assert response.ok, response.text()
+    share = response.json()
+    url = (
+        server.url
+        + surface
+        + "?"
+        + urlencode(
+            {"path": "/share_" + path.rsplit("/", 1)[-1], "auth": share["auth"]}
+        )
+    )
+    with browser.new_context(viewport={"width": 390, "height": 844}) as guest:
+        page = guest.new_page()
+        page.route(
+            "**/api/v1/shared/nodes?*",
+            lambda route: route.fulfill(status=503, json={"detail": "private data"}),
+        )
+        page.goto(url)
+        retry = page.get_by_role("button", name="Try Again", exact=True)
+        expect(retry).to_be_visible()
+        expect(page.get_by_role("alert")).not_to_contain_text("private data")
+        page.unroute("**/api/v1/shared/nodes?*")
+        retry.click()
+        item = page.get_by_role("button", name=re.compile(r"^résumé #1[.]txt"))
+        expect(item).to_be_visible()
+
+        page.route(
+            "**/api/v1/shared/nodes?*",
+            lambda route: route.fulfill(status=410, json={"detail": "private data"}),
+        )
+        page.reload()
+        expect(page.get_by_role("alert")).to_contain_text(
+            "Ask the owner for a new link."
+        )
+        expect(page.get_by_role("alert")).not_to_contain_text("private data")
+        expect(retry).to_have_count(0)
+        expect(item).to_have_count(0)
+        page.unroute("**/api/v1/shared/nodes?*")
+
+        revoked = owner.request.delete(
+            server.url + "/api/v1/shares", data={"share_id": share["id"]}
+        )
+        assert revoked.ok
+        page.reload()
+        expect(page.get_by_role("alert")).to_contain_text(
+            "Ask the owner for a new link."
+        )
+        expect(retry).to_have_count(0)
+        expect(item).to_have_count(0)

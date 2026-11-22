@@ -50,6 +50,9 @@ import { api, ApiError, errorMessage } from "../shared/api";
 import { useShareOpen } from "../features/shares/useShareOpen";
 import SharedUnlock, {
     needsSharePassword,
+    shareLinkUnavailable,
+    SHARE_LOAD_FAILED_MESSAGE,
+    SHARE_UNAVAILABLE_MESSAGE,
 } from "../features/shares/SharedUnlock";
 import {
     itemLink,
@@ -328,7 +331,10 @@ export default function App() {
         filter: FileFilter;
     }>({ path: "", filter: "all" });
     const [loading, setLoading] = useState(true);
-    const [loadError, setLoadError] = useState("");
+    const [loadFailure, setLoadFailure] = useState<{
+        message: string;
+        unavailable?: boolean;
+    } | null>(null);
     const [lockedShare, setLockedShare] = useState("");
     const [refresh, setRefresh] = useState(0);
     const [metadataRefresh, setMetadataRefresh] = useState(0);
@@ -590,7 +596,7 @@ export default function App() {
             view === "files" &&
             !listingPending &&
             !loading &&
-            !loadError &&
+            !loadFailure &&
             lockedShare !== location.auth,
         location.auth,
         currentPath,
@@ -925,7 +931,7 @@ export default function App() {
             const background = loadedListing.current === listingKey;
             if (!background) loadedListing.current = null;
             setLoading(!background);
-            setLoadError("");
+            setLoadFailure(null);
             setPageError("");
             if (isPaged) {
                 pageSource.current = background ? pageSource.current : null;
@@ -1101,11 +1107,15 @@ export default function App() {
                     setSearchCapped(false);
                     setNextSearchOffset(null);
                 }
-                setLoadError(
-                    isPublic && (error.status === 401 || error.status === 403)
-                        ? "This link has expired, was revoked, or is not valid. Ask the owner for a new link."
-                        : errorMessage(error),
-                );
+                const unavailable = isPublic && shareLinkUnavailable(error);
+                setLoadFailure({
+                    unavailable,
+                    message: !isPublic
+                        ? errorMessage(error)
+                        : unavailable
+                          ? SHARE_UNAVAILABLE_MESSAGE
+                          : SHARE_LOAD_FAILED_MESSAGE,
+                });
                 setDirectory({ contents: {} });
                 pagesRef.current = emptyFolderPages;
                 setPages(emptyFolderPages);
@@ -2278,7 +2288,9 @@ export default function App() {
                             highlightId={location.highlightId}
                             loading={loading || listingPending}
                             refreshing={listingRefreshAction.refreshing}
-                            error={listingPending ? "" : loadError}
+                            error={
+                                listingPending ? "" : loadFailure?.message || ""
+                            }
                             isPublic={isPublic}
                             progressMode={
                                 isPublic
@@ -2324,21 +2336,24 @@ export default function App() {
                             }}
                             isSearch={isSearch}
                             auth={location.auth}
-                            onReload={() =>
-                                void listingRefreshAction.run(
-                                    async () => {
-                                        invalidateMetadata();
-                                        return (
-                                            listingRefresh.current?.request() ??
-                                            false
-                                        );
-                                    },
-                                    view === "trash"
-                                        ? "Trash refreshed."
-                                        : view === "starred"
-                                          ? "Starred files refreshed."
-                                          : "Files refreshed.",
-                                )
+                            onReload={
+                                loadFailure?.unavailable
+                                    ? undefined
+                                    : () =>
+                                          void listingRefreshAction.run(
+                                              async () => {
+                                                  invalidateMetadata();
+                                                  return (
+                                                      listingRefresh.current?.request() ??
+                                                      false
+                                                  );
+                                              },
+                                              view === "trash"
+                                                  ? "Trash refreshed."
+                                                  : view === "starred"
+                                                    ? "Starred files refreshed."
+                                                    : "Files refreshed.",
+                                          )
                             }
                             onUpload={pickFiles}
                             onOpen={open}

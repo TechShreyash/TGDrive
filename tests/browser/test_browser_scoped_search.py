@@ -220,7 +220,8 @@ def test_transfer_search_resets_cursor_and_filters_active_and_old_finished_names
     search.fill("Archive")
     finished = page.locator('[data-category="finished"]')
     expect(finished).to_contain_text("Archive video.mp4")
-    expect(pager.get_by_role("status")).to_have_text("Page 1 of 1 · 1 task")
+    expect(page.get_by_text("1 task", exact=True)).to_be_visible()
+    expect(pager).to_have_count(0)
     expect(finished.locator(".transfer-item-name")).to_have_count(1)
     assert seen[-1]["q"] == "Archive" and seen[-1]["offset"] == 0
     expect(page.locator('[data-category="running"]')).to_have_count(0)
@@ -345,9 +346,12 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
     if width < 700:
         page.get_by_role("button", name="Toggle Navigation", exact=True).click()
         sidebar = page.locator(".sidebar")
-        assert sidebar.locator(".sidebar-scroll").evaluate(
-            "node => getComputedStyle(node).overflowY"
-        ) == "auto"
+        assert (
+            sidebar.locator(".sidebar-scroll").evaluate(
+                "node => getComputedStyle(node).overflowY"
+            )
+            == "auto"
+        )
         logout = page.get_by_role("button", name="Log Out", exact=True)
         logout.scroll_into_view_if_needed()
         expect(logout).to_be_in_viewport()
@@ -356,6 +360,4 @@ def test_compact_fixed_directory_controls_leave_room_for_files(
         expect(documentation).to_be_in_viewport()
         open_admin(page)
         page.get_by_role("link", name="Backups", exact=True).focus()
-        expect(
-            page.get_by_role("link", name="Backups", exact=True)
-        ).to_be_in_viewport()
+        expect(page.get_by_role("link", name="Backups", exact=True)).to_be_in_viewport()

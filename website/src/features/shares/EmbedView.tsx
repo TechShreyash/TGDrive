@@ -6,7 +6,7 @@ import {
     useState,
 } from "react";
 import { ChevronRight, Download, RefreshCw } from "lucide-react";
-import { api, errorMessage, request } from "../../shared/api";
+import { api, ApiError, request } from "../../shared/api";
 import { ErrorNotice, FileIcon, Spinner } from "../../shared/components";
 import {
     fileUrl,
@@ -16,7 +16,12 @@ import {
     type NodePage,
 } from "../../shared/types";
 import Preview from "../previews/Preview";
-import SharedUnlock, { needsSharePassword } from "./SharedUnlock";
+import SharedUnlock, {
+    needsSharePassword,
+    shareLinkUnavailable,
+    SHARE_LOAD_FAILED_MESSAGE,
+    SHARE_UNAVAILABLE_MESSAGE,
+} from "./SharedUnlock";
 import { useShareOpen } from "./useShareOpen";
 import "./EmbedView.css";
 
@@ -26,8 +31,9 @@ export async function loadEmbeddedShare(
     signal: AbortSignal,
 ) {
     if (!path || !auth)
-        throw new Error(
+        throw new ApiError(
             "This embed link is incomplete. Ask the owner for a new link.",
+            404,
         );
     if (path.startsWith("/share_")) {
         const id = path.slice(7).split("/").filter(Boolean).at(-1) || "";
@@ -59,7 +65,10 @@ export default function EmbedView() {
     const [more, setMore] = useState<"idle" | "loading" | "error">("idle");
     const [preview, setPreview] = useState<DriveItem | null>(null);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState("");
+    const [error, setError] = useState<"unavailable" | "unreachable" | null>(
+        null,
+    );
+    const unavailable = error === "unavailable";
     const [locked, setLocked] = useState(false);
     const [needsTopLevel, setNeedsTopLevel] = useState(false);
     const checkingUnlock = useRef(false);
@@ -91,7 +100,7 @@ export default function EmbedView() {
         const controller = new AbortController();
         activeLoad.current = controller;
         setLoading(true);
-        setError("");
+        setError(null);
         setListing(null);
         setMore("idle");
         setPreview(null);
@@ -123,7 +132,12 @@ export default function EmbedView() {
                             checkingUnlock.current && window.parent !== window,
                         );
                         setLocked(true);
-                    } else setError(errorMessage(cause));
+                    } else if (shareLinkUnavailable(cause)) {
+                        document.title = "Shared Item Unavailable · TGDrive";
+                        setError("unavailable");
+                    } else {
+                        setError("unreachable");
+                    }
                     checkingUnlock.current = false;
                 }
             })
@@ -201,8 +215,17 @@ export default function EmbedView() {
                 !controller.signal.aborted &&
                 activeLoad.current === controller
             ) {
-                if (needsSharePassword(cause)) setLocked(true);
-                else setMore("error");
+                if (needsSharePassword(cause)) {
+                    setLocked(true);
+                } else if (shareLinkUnavailable(cause)) {
+                    setListing(null);
+                    setPreview(null);
+                    document.title = "Shared Item Unavailable · TGDrive";
+                    setError("unavailable");
+                    setMore("idle");
+                } else {
+                    setMore("error");
+                }
             }
         }
     };
@@ -226,7 +249,7 @@ export default function EmbedView() {
             id="main-content"
             tabIndex={-1}
         >
-            {folder && (
+            {folder && !unavailable && (
                 <header className="embed-header">
                     <nav aria-label="Shared folder path">
                         <ol>
@@ -290,17 +313,21 @@ export default function EmbedView() {
             ) : error ? (
                 <div className="embed-message">
                     <h1>Shared Item Unavailable</h1>
-                    <ErrorNotice message={error} />
-                    <p>
-                        The link may have expired, been revoked, or the item may
-                        be unavailable.
-                    </p>
-                    <button
-                        className="secondary-button"
-                        onClick={() => setAttempt(attempt + 1)}
-                    >
-                        <RefreshCw size={16} aria-hidden="true" /> Try Again
-                    </button>
+                    <ErrorNotice
+                        message={
+                            unavailable
+                                ? SHARE_UNAVAILABLE_MESSAGE
+                                : SHARE_LOAD_FAILED_MESSAGE
+                        }
+                    />
+                    {!unavailable && (
+                        <button
+                            className="secondary-button"
+                            onClick={() => setAttempt(attempt + 1)}
+                        >
+                            <RefreshCw size={16} aria-hidden="true" /> Try Again
+                        </button>
+                    )}
                 </div>
             ) : folder && !items.length ? (
                 <p className="embed-message">This folder is empty.</p>
