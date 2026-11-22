@@ -23,6 +23,12 @@ Do **not** invoke for routine query authoring unless the user has requested help
 
 ## High Level Workflow
 
+For TGDrive, start with the query and index definitions in the checkout. Run
+approved integration checks against the disposable database documented in the
+[development guide](../../../docs/development.md#validation-commands). Use live
+MongoDB tools only for a live investigation the user requested and a deployment
+you can identify.
+
 ### General Performance Help
 
 If the user wants to examine slow queries, or is looking for general performance suggestions (not regarding any particular query):

@@ -6,8 +6,7 @@
 2. [Performance Metrics](#performance-metrics)
 3. [Performance Budgets](#performance-budgets)
 4. [Lighthouse Integration](#lighthouse-integration)
-5. [Performance Fixtures](#performance-fixtures)
-6. [CI Performance Monitoring](#ci-performance-monitoring)
+5. [CI Performance Monitoring](#ci-performance-monitoring)
 
 ## Core Web Vitals
 

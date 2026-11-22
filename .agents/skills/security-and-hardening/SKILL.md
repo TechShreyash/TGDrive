@@ -5,6 +5,10 @@ description: Hardens code against vulnerabilities. Use when auditing an input ha
 
 # Security and Hardening
 
+Use TGDrive's existing authorization and request boundaries as the starting
+point. Follow [SECURITY.md](../../../SECURITY.md) for private reporting and the
+[owner approval rules](../../../AGENTS.md#owner-approval-rules) before running checks.
+
 ## Overview
 
 Security-first development practices for web applications. Treat every external input as hostile, every secret as sacred, and every authorization check as mandatory. Security isn't a phase — it's a constraint on every line of code that touches user data, authentication, or external systems.

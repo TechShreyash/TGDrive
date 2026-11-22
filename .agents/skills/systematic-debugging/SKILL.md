@@ -5,6 +5,10 @@ description: Use when encountering any bug, test failure, or unexpected behavior
 
 # Systematic Debugging
 
+Follow TGDrive's [owner approval rules](../../../AGENTS.md#owner-approval-rules)
+before reproducing a bug through tests or browser checks. While approval is
+pending, trace the failing path in source and inspect existing evidence.
+
 ## Overview
 
 **Core principle:** ALWAYS find root cause before attempting fixes. Symptom fixes are failure.

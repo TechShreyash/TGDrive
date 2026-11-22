@@ -34,6 +34,11 @@ Built on [Uizze's](https://uizze.com) anti-ui-slop workflow. Focused design play
 
 ## Work from the product
 
+For TGDrive, read [PRODUCT.md](../../../PRODUCT.md) and inspect the existing
+Mantine components, CSS, and relevant screenshots. Follow the
+[owner approval rules](../../../AGENTS.md#owner-approval-rules) before building
+or opening the local app for visual checks.
+
 Read the brief, existing UI, components, tokens, assets, and any PRODUCT.md or DESIGN.md before designing. The user's request and project constraints outrank this skill. Preserve an established visual system for extensions and polish; replace it only for an approved redesign. A new project does not require those files.
 
 Identify the audience, primary task, important states, and intended result. Ask only about missing choices that would materially change the work. A precise request is enough to proceed; do not turn a small fix into a discovery workshop.

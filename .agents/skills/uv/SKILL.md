@@ -12,6 +12,10 @@ pip-tools, pipx, pyenv, virtualenv, poetry, etc.
 
 ## When to use uv
 
+In TGDrive, use the Python version and frozen lockfile commands in the
+[development guide](../../../docs/development.md#install-the-development-environment).
+Follow the [owner approval rules](../../../AGENTS.md#owner-approval-rules) for checks.
+
 **Always use uv for Python work**, especially if you see:
 
 - The `uv.lock` file

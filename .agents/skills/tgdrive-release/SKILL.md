@@ -9,8 +9,8 @@ description: Prepare a TGDrive release or version bump. Use when choosing the ne
 
 ## Approval gates
 
-- Do not run checks, builds or CI without approval for that specific run (AGENTS.md).
-- Do not push commits, branches or tags without approval for that specific push. Name the remote and branch, then wait.
+Follow the [owner approval rules](../../../AGENTS.md#owner-approval-rules) for
+checks and pushes. Get explicit authorization before publishing a GitHub release.
 
 ## Steps
 
@@ -33,7 +33,8 @@ python3 scripts/build_release.py --check-version --tag vX.Y.Z
 git tag -a vX.Y.Z -m "Release TGDrive X.Y.Z"
 ```
 
-7. With push approval, push the tag and create the GitHub release linking the PR, the commit and the compare view against the previous tag.
+7. When authorized, push the tag and follow the release guide for the GitHub
+   release. Link the PR, exact commit and comparison with the previous tag.
 
 ## Never
 

@@ -9,6 +9,10 @@ metadata:
 
 # Vercel React Best Practices
 
+TGDrive uses React with Vite. Apply the client-side React rules that fit the
+existing code. Next.js routing, server components, and server-action examples
+apply only to projects using those APIs.
+
 Comprehensive performance optimization guide for React and Next.js applications, maintained by Vercel. Contains 70 rules across 8 categories, prioritized by impact to guide automated refactoring and code generation.
 
 ## When to Apply

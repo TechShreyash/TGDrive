@@ -7,6 +7,11 @@ description: FastAPI best practices and conventions. Use when working with FastA
 
 Official FastAPI skill to write code with best practices, keeping up to date with new versions and features.
 
+TGDrive already has an application factory and Vite asset mounts in
+`tgdrive/web/app.py`. Follow [Run while editing](../../../docs/development.md#run-while-editing)
+for the Uvicorn command and single-owner rules. The CLI and frontend-mount
+examples below apply when setting up a different application.
+
 ## Quick Reference
 
 * Serve frontend apps: use `app.frontend()` or `router.frontend()` for built frontend assets; see [Serve Frontend Apps](#serve-frontend-apps).

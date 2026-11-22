@@ -11,6 +11,10 @@ metadata:
 
 This skill provides comprehensive guidance for all aspects of Playwright test development, from writing new tests to debugging and maintaining existing test suites.
 
+TGDrive uses Python Playwright with pytest in `tests/browser/`. Reuse the
+fixtures in `tests/browser/test_browser_e2e.py` and translate any relevant
+TypeScript examples below to Python.
+
 ## Activity-Based Reference Guide
 
 Consult these references based on what you're doing:
@@ -292,12 +296,9 @@ What are you doing?
 
 ## Test Validation Loop
 
-After writing or modifying tests:
-
-1. **Run tests**: `npx playwright test --reporter=list`
-2. **If tests fail**:
-   - Review error output and trace (`npx playwright show-trace`)
-   - Fix locators, waits, or assertions
-   - Re-run tests
-3. **Only proceed when all tests pass**
-4. **Run multiple times** for critical tests: `npx playwright test --repeat-each=5`
+With [owner approval](../../../AGENTS.md#owner-approval-rules), prepare the
+frontend and Chromium using the [development guide](../../../docs/development.md#validation-commands).
+Run the affected test file or node ID with
+`TGDRIVE_E2E=1 uv run --frozen --group e2e python -m pytest -q <node-id>`.
+For failures, inspect pytest output and retained traces. Open a trace with
+`uv run --frozen --group e2e playwright show-trace <trace.zip>`.
