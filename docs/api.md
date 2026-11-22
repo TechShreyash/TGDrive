@@ -467,9 +467,11 @@ committed upload.
 ## Torrent imports
 
 `POST /api/startTorrentDownload` (**Owner**) takes
-`{"url": "magnet:?…" or a public .torrent URL, "path", "client_request_id"}` and
-returns a job `id`. Use the [job routes](#jobs) for progress, file choice,
-cancel and retry. The source link is never shown in snapshots.
+`{"url", "path", "select_files", "client_request_id"}` and returns a job
+`id`. Accepts a magnet link or a public .torrent URL. `select_files` defaults
+to `false`. Reusing a request ID with a different `select_files` value
+returns HTTP 409. Use the [job routes](#jobs) for progress, file choice,
+cancel and retry. Job snapshots omit the source link.
 
 | Policy | Value |
 | --- | --- |

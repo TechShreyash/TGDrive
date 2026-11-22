@@ -989,7 +989,8 @@ def create_app(
         entry: TransferStart | None = None
         if payload.client_request_id:
             entry, created = starts.claim(
-                payload.client_request_id, ("torrent", payload.path, payload.url)
+                payload.client_request_id,
+                ("torrent", payload.path, payload.url, str(payload.select_files)),
             )
             if not created:
                 snapshot = entry.snapshot()

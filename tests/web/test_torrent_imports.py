@@ -30,6 +30,14 @@ def test_torrent_start_requires_owner_and_deduplicates_requests(app_client):
     )
     changed = payload | {"url": SOURCE.replace("a", "b")}
     assert client.post(endpoint, json=changed).status_code == 409
+    assert (
+        client.post(endpoint, json=payload | {"select_files": True}).status_code == 409
+    )
+    assert (
+        client.post(endpoint, json=payload | {"select_files": False}).json()["id"]
+        == first.json()["id"]
+    )
+    assert runtime.transfers.start_torrent.await_count == 1
     lookup = client.post(
         "/api/getTransferByRequest",
         json={"client_request_id": payload["client_request_id"]},
