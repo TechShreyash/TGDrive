@@ -362,6 +362,7 @@ class Backend:
                 for name in (
                     "nodes",
                     "shares",
+                    "share_open_events",
                     "catalog",
                     "operations",
                     "deletions",

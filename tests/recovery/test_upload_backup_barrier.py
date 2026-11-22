@@ -341,7 +341,7 @@ async def test_insufficient_checkpoint_keeps_staging_and_retryable_phase(
         await pool.stop()
 
 
-async def test_shutdown_during_checkpoint_recovers_protection_without_media_resend(
+async def test_shutdown_during_checkpoint_waits_for_retry_without_media_resend(
     tmp_path,
 ):
     client = MediaClient()
@@ -375,7 +375,14 @@ async def test_shutdown_during_checkpoint_recovers_protection_without_media_rese
     )
     try:
         await recovered.recover()
-        resumed = recovered.registry.get(record.id)
+        await recovered.recover()
+        interrupted = recovered.registry.get(record.id)
+        assert interrupted.status == TransferStatus.ERROR
+        assert interrupted.task is None
+        confirmed.assert_not_awaited()
+        assert len(client.sent) == 1
+
+        resumed = await recovered.retry_job(record.id)
         assert resumed.task is not None
         await resumed.task
         assert resumed.status == TransferStatus.COMPLETED
