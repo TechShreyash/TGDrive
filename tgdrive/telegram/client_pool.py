@@ -1018,7 +1018,7 @@ class ClientPool:
             self._leases.notify_all()
 
     def has_fast_download_alternative(self, current, elapsed: float) -> bool:
-        """Check for a spare proven lane without taking a lease or bypassing admission."""
+        """Check for a proven spare lane without reserving capacity."""
         now, wall = time.monotonic(), time.time()
         for slot in self._slots:
             if (
