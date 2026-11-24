@@ -297,6 +297,7 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
         "compose.override.yaml",
         "compose.prebuilt.yaml",
         "compose.server.yaml",
+        "compose.source.yaml",
     ):
         shutil.copyfile(root / name, tmp_path / name)
     fixture = {
@@ -314,7 +315,8 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
         "".join(f"{key}={value}\n" for key, value in fixture.items())
     )
     image = "ghcr.io/example/tgdrive-deployment@sha256:" + "a" * 64
-    environment = {**os.environ, **fixture, "TGDRIVE_IMAGE": image}
+    environment = {**os.environ, **fixture}
+    environment.pop("TGDRIVE_IMAGE", None)
     environment.pop("BOT_TOKENS", None)
     environment.pop("COMPOSE_FILE", None)
     environment.pop("BIND_ADDRESS", None)
@@ -345,13 +347,18 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     assert hosted["environment"]["SESSION_SECRET"] == fixture["SESSION_SECRET"]
     assert hosted["environment"]["COOKIE_SECURE"] == "true"
     assert hosted["restart"] == "unless-stopped"
+    assert hosted["image"] == "ghcr.io/techshreyash/tgdrive:latest"
+    assert hosted["pull_policy"] == "always"
+    assert "build" not in hosted
+    environment["TGDRIVE_IMAGE"] = image
     prebuilt = config("compose.prebuilt.yaml")
     assert prebuilt["image"] == image
     assert "build" not in prebuilt
-    assert {key: value for key, value in prebuilt.items() if key != "image"} == {
-        key: value for key, value in hosted.items() if key != "build"
-    }
+    assert prebuilt == config("compose.yaml")
+    environment["TGDRIVE_IMAGE"] = "ghcr.io/example/tgdrive-deployment:dev"
     local = config()
+    assert local["image"] == environment["TGDRIVE_IMAGE"]
+    assert "build" not in local
     assert local["ports"][0]["host_ip"] == "127.0.0.1"
     assert str(local["ports"][0]["published"]) == "8000"
     assert local["environment"]["SESSION_SECRET"] == fixture["SESSION_SECRET"]
@@ -363,7 +370,13 @@ def test_hosted_and_local_compose_resolve_without_real_credentials(tmp_path):
     assert server["environment"]["COOKIE_SECURE"] == "true"
     assert server["environment"]["TGDRIVE_PROXY_HOSTS"] == ""
     assert server["restart"] == "unless-stopped"
-    for deployment in (hosted, prebuilt, local, server):
+    assert "build" not in server
+    source = config("compose.yaml", "compose.override.yaml", "compose.source.yaml")
+    assert source["image"] == "tgdrive:local"
+    assert source["pull_policy"] == "build"
+    assert source["build"]["dockerfile"] == "Dockerfile"
+    assert source["volumes"] == local["volumes"]
+    for deployment in (hosted, prebuilt, local, server, source):
         assert deployment["environment"]["MAIN_BOT_TOKEN"] == fixture["MAIN_BOT_TOKEN"]
         assert deployment["environment"]["TELEGRAM_ADMIN_IDS"] == "12345"
         assert "BOT_TOKENS" not in deployment["environment"]

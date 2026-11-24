@@ -1,0 +1,8 @@
+# Use with compose.yaml and either compose.override.yaml or compose.server.yaml.
+services:
+    app:
+        image: tgdrive:local
+        pull_policy: build
+        build:
+            context: .
+            dockerfile: Dockerfile

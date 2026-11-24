@@ -1,10 +1,10 @@
-# Opt-in Coolify deployment: select /compose.prebuilt.yaml and set TGDRIVE_IMAGE.
-# Use this file alone; merging compose.yaml would retain its build definition.
+# Compatibility entry point for existing Coolify deployments.
 name: tgdrive
 
 services:
     app:
-        image: ${TGDRIVE_IMAGE:?Set TGDRIVE_IMAGE to a published image digest}
+        image: ${TGDRIVE_IMAGE:-ghcr.io/techshreyash/tgdrive:latest}
+        pull_policy: always
         restart: ${TGDRIVE_RESTART_POLICY:-unless-stopped}
         init: true
         expose:

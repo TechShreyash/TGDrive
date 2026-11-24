@@ -1,0 +1,196 @@
+name: Build and publish TGDrive image
+
+on:
+    workflow_call:
+        inputs:
+            image:
+                type: string
+                required: true
+            revision:
+                type: string
+                required: true
+            tag:
+                type: string
+                required: true
+            aliases:
+                type: string
+                default: ""
+
+permissions:
+    contents: read
+
+defaults:
+    run:
+        shell: bash
+
+env:
+    IMAGE: ${{ inputs.image }}
+    REVISION: ${{ inputs.revision }}
+    TAG: ${{ inputs.tag }}
+
+jobs:
+    existing:
+        name: Check for the exact image
+        runs-on: ubuntu-24.04
+        timeout-minutes: 5
+        permissions:
+            contents: read
+            packages: read
+        outputs:
+            digest: ${{ steps.lookup.outputs.digest }}
+        steps:
+            - name: Log in to GHCR
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+            - name: Reuse a completed build of this revision
+              id: lookup
+              run: |
+                  ref="$IMAGE:$TAG"
+                  if manifest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' 2>inspect.err); then
+                    jq -e --arg sha "$REVISION" '
+                      .annotations["org.opencontainers.image.revision"] == $sha
+                      and ([.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort) == ["amd64", "arm64"]
+                      and (.digest | test("^sha256:[0-9a-f]{64}$"))
+                    ' <<<"$manifest" >/dev/null
+                    echo "digest=$(jq -r .digest <<<"$manifest")" >> "$GITHUB_OUTPUT"
+                  # A new GHCR package can deny reads until its first upload.
+                  elif ! grep -Eiq 'not found|manifest unknown|name unknown|denied|unauthorized|403 forbidden' inspect.err; then
+                    cat inspect.err >&2
+                    exit 1
+                  fi
+
+    build:
+        name: Build and smoke-check ${{ matrix.arch }}
+        needs: existing
+        if: needs.existing.outputs.digest == ''
+        strategy:
+            matrix:
+                include:
+                    - arch: amd64
+                      runner: ubuntu-24.04
+                    - arch: arm64
+                      runner: ubuntu-24.04-arm
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 40
+        permissions:
+            contents: read
+            packages: write
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  ref: ${{ inputs.revision }}
+                  persist-credentials: false
+            - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+            - name: Log in to GHCR
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+            - name: Build and push untagged image
+              id: build
+              uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+              with:
+                  context: .
+                  platforms: linux/${{ matrix.arch }}
+                  provenance: mode=max
+                  sbom: true
+                  labels: |
+                      org.opencontainers.image.revision=${{ inputs.revision }}
+                      org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+                  outputs: type=image,name=${{ inputs.image }},push-by-digest=true,name-canonical=true,push=true
+                  cache-from: type=gha,scope=tgdrive-image-${{ matrix.arch }}
+                  cache-to: type=gha,mode=max,scope=tgdrive-image-${{ matrix.arch }},timeout=2m,ignore-error=true
+            - name: Verify the exact image on native hardware
+              env:
+                  DIGEST: ${{ steps.build.outputs.digest }}
+              run: |
+                  ref="$IMAGE@$DIGEST"
+                  docker pull "$ref"
+                  test "$(docker image inspect "$ref" --format '{{.Config.User}}')" = "10001:10001"
+                  docker run --rm --network none --entrypoint python "$ref" -c '
+                  import os, shutil, ssl
+                  from pathlib import Path
+                  import tgdrive.web.app, telethon, cryptg, argon2, libarchive
+                  assert Path("/app/website/dist/index.html").is_file()
+                  assert all(os.access(path, os.W_OK) for path in ("/app/data", "/app/cache"))
+                  assert all(shutil.which(tool) for tool in ("ffmpeg", "ffprobe", "pdftoppm", "qpdf", "prlimit", "aria2c"))
+                  assert "emSign ECC Root CA - G3" not in str(ssl.create_default_context().get_ca_certs())
+                  '
+                  printf '%s\n' "$DIGEST" > digest.txt
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: image-digest-${{ matrix.arch }}
+                  path: digest.txt
+                  if-no-files-found: error
+                  retention-days: 1
+
+    manifest:
+        name: Publish image tags
+        needs: [existing, build]
+        if: >-
+            !cancelled() && needs.existing.result == 'success' &&
+            (needs.build.result == 'success' || needs.existing.outputs.digest != '')
+        runs-on: ubuntu-24.04
+        timeout-minutes: 5
+        permissions:
+            contents: read
+            packages: write
+        steps:
+            - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+              if: needs.existing.outputs.digest == ''
+              with:
+                  path: digests
+                  pattern: image-digest-*
+            - name: Log in to GHCR
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+            - name: Publish a verified multi-architecture manifest
+              env:
+                  EXISTING_DIGEST: ${{ needs.existing.outputs.digest }}
+                  ALIASES: ${{ inputs.aliases }}
+              run: |
+                  if [ -n "$EXISTING_DIGEST" ]; then
+                    digest="$EXISTING_DIGEST"
+                  else
+                    # Digest uploads have created the package, so exact tag reads
+                    # must now report a missing tag before a new exact tag is written.
+                    if docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>inspect.err; then
+                      echo "The exact tag already exists. Re-run to validate and reuse it." >&2
+                      exit 1
+                    elif ! grep -Eiq 'not found|manifest unknown|name unknown' inspect.err; then
+                      cat inspect.err >&2
+                      exit 1
+                    fi
+                    amd64=$(cat digests/image-digest-amd64/digest.txt)
+                    arm64=$(cat digests/image-digest-arm64/digest.txt)
+                    options=(
+                      --annotation "index:org.opencontainers.image.revision=$REVISION"
+                      -t "$IMAGE:$TAG"
+                      "$IMAGE@$amd64"
+                      "$IMAGE@$arm64"
+                    )
+                    docker buildx imagetools create --dry-run "${options[@]}" | jq -e '
+                      ([.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort)
+                      == ["amd64", "arm64"]
+                    ' >/dev/null
+                    docker buildx imagetools create "${options[@]}"
+                    digest=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')
+                  fi
+                  read -r -a aliases <<< "$ALIASES"
+                  tags=()
+                  for alias in "${aliases[@]}"; do
+                    tags+=(-t "$IMAGE:$alias")
+                  done
+                  if ((${#tags[@]})); then
+                    docker buildx imagetools create "${tags[@]}" "$IMAGE@$digest"
+                  fi
+                  {
+                    echo '### Published TGDrive image'
+                    echo
+                    for alias in "${aliases[@]}"; do
+                      printf -- '- Update with \x60TGDRIVE_IMAGE=%s:%s\x60\n' "$IMAGE" "$alias"
+                    done
+                    printf -- '- Exact tag: \x60%s:%s\x60\n' "$IMAGE" "$TAG"
+                    printf -- '- Pinned digest: \x60%s@%s\x60\n' "$IMAGE" "$digest"
+                  } >> "$GITHUB_STEP_SUMMARY"

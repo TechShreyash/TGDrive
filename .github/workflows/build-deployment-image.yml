@@ -1,68 +1,67 @@
 name: Build deployment image
 
-# Opt-in only: publishing an image never updates a running deployment.
 on:
     workflow_dispatch:
+        inputs:
+            redeploy:
+                description: Redeploy the dev application in Coolify after publishing
+                type: boolean
+                default: false
 
 permissions:
     contents: read
 
 concurrency:
     group: build-deployment-image-${{ github.ref }}
-    cancel-in-progress: false
+    cancel-in-progress: true
 
 jobs:
-    build:
-        name: Build AMD64 deployment image
+    prepare:
+        name: Select the dev image package
+        if: github.ref == 'refs/heads/dev'
         runs-on: ubuntu-24.04
-        timeout-minutes: 40
+        timeout-minutes: 5
+        outputs:
+            image: ${{ steps.image.outputs.name }}
+        steps:
+            - id: image
+              run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}-deployment" >> "$GITHUB_OUTPUT"
+
+    publish:
+        needs: prepare
+        uses: ./.github/workflows/container-image.yml
         permissions:
             contents: read
             packages: write
+        with:
+            image: ${{ needs.prepare.outputs.image }}
+            revision: ${{ github.sha }}
+            tag: ${{ github.sha }}
+            aliases: dev
+
+    redeploy:
+        name: Queue the Coolify dev deployment
+        needs: publish
+        if: inputs.redeploy
+        runs-on: ubuntu-24.04
+        timeout-minutes: 5
+        environment: tgdrive-dev
+        permissions: {}
         steps:
-            - name: Check out selected revision
-              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-              with:
-                  persist-credentials: false
-
-            - name: Choose a separate deployment package
-              id: image
-              run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}-deployment" >> "$GITHUB_OUTPUT"
-
-            - name: Set up Docker Buildx
-              uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-            - name: Log in to GHCR
+            - name: Request a redeploy
               env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-
-            - name: Build and publish
-              id: build
-              uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-              with:
-                  context: .
-                  platforms: linux/amd64
-                  push: true
-                  tags: ${{ steps.image.outputs.name }}:${{ github.sha }}
-                  labels: |
-                      org.opencontainers.image.source=https://github.com/${{ github.repository }}
-                      org.opencontainers.image.revision=${{ github.sha }}
-                  provenance: mode=max
-                  sbom: true
-                  cache-from: type=gha,scope=deployment-amd64
-                  cache-to: type=gha,mode=max,scope=deployment-amd64
-
-            - name: Show the image to deploy manually
-              env:
-                  IMAGE: ${{ steps.image.outputs.name }}
-                  DIGEST: ${{ steps.build.outputs.digest }}
+                  WEBHOOK: ${{ secrets.COOLIFY_DEV_DEPLOY_WEBHOOK }}
+                  TOKEN: ${{ secrets.COOLIFY_DEV_API_TOKEN }}
               run: |
-                  {
-                    echo 'Set this runtime variable in Coolify, then deploy manually:'
-                    echo '```text'
-                    echo "TGDRIVE_IMAGE=$IMAGE@$DIGEST"
-                    echo '```'
-                    echo 'Compose file: /compose.prebuilt.yaml'
-                    echo "Source commit: $GITHUB_SHA"
-                  } >> "$GITHUB_STEP_SUMMARY"
+                  if [ -z "$TOKEN" ] || [[ "$WEBHOOK" != https://* ]]; then
+                    echo 'Configure the Coolify deploy URL and token in the tgdrive-dev environment.' >&2
+                    exit 1
+                  fi
+                  status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+                    --proto '=https' --connect-timeout 5 --max-time 20 --request POST \
+                    --header "Authorization: Bearer $TOKEN" -- "$WEBHOOK")
+                  if [[ "$status" != 2[0-9][0-9] ]]; then
+                    echo "Coolify returned HTTP $status." >&2
+                    exit 1
+                  fi
+                  echo 'Coolify accepted the dev redeploy request. Check the application deployment log for health.' >> "$GITHUB_STEP_SUMMARY"

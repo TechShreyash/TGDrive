@@ -4,10 +4,8 @@ name: tgdrive
 
 services:
     app:
-        # Build the checked-out branch, release tag or local application edits.
-        build:
-            context: .
-            dockerfile: Dockerfile
+        image: ${TGDRIVE_IMAGE:-ghcr.io/techshreyash/tgdrive:latest}
+        pull_policy: always
         restart: ${TGDRIVE_RESTART_POLICY:-unless-stopped}
         init: true
         expose:

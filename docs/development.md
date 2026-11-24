@@ -11,6 +11,7 @@ through [Setup](setup.md). How to propose changes: [CONTRIBUTING.md](../CONTRIBU
 | Task | Start here |
 | --- | --- |
 | Edit the app | [Install](#install-the-development-environment) · [Run](#run-while-editing) · [Sample content](#preview-with-sample-content) |
+| Deploy code you changed | [Build from your checkout](setup.md#build-from-the-repository-dev-or-local-edits) · [Deploy a custom image](setup.md#deploy-your-custom-image-to-another-machine) |
 | Choose checks | [Validation commands](#validation-commands) · [Live Telegram](#live-telegram-testing) |
 | Find the code | [Repository/test map](#repository-map-and-test-map) · [Code conventions](#code-conventions) |
 | Preserve behavior | [Frontend](#frontend-contracts) · [Channel backups](#independent-channel-backup-contracts) · [Readers](#selective-pdf-resources) |
@@ -291,7 +292,9 @@ The [CI workflow](../.github/workflows/ci.yml) keeps routine pushes focused:
 | --- | --- |
 | Push to `main` or `dev` | Quality/security, frontend and backend tests with isolated MongoDB and coverage |
 | Pull request | Core checks and production-frontend Chromium tests; Docker/runtime dependency changes also build and smoke-check the AMD64 container |
-| Manual run | Core checks, plus the selected additional suite |
+| Manual CI run | Core checks, plus the selected additional suite |
+| Manual Build deployment image on dev | Native AMD64 and ARM64 test images, with optional Coolify redeploy |
+| Successful application version tag CI | Verified release image publication |
 
 All Python jobs use **3.14.8**, the sole supported runtime pinned in
 `.python-version` and the Docker image. There is no older-version test matrix.

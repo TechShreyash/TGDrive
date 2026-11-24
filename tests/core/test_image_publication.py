@@ -54,6 +54,7 @@ def test_successful_tag_ci_binds_version_sha_and_lowercase_image(source):
     assert result == {
         "sha": event["workflow_run"]["head_sha"],
         "version": "2.3.0",
+        "minor": "2.3",
         "image": "ghcr.io/owner/tgdrive",
         "promote_latest": "true",
         "promote_minor": "true",

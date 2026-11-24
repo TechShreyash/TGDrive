@@ -20,7 +20,8 @@ Run these from the installation folder.
 
 | Action | Local Docker command |
 | --- | --- |
-| Start | `docker compose up -d` |
+| Start the existing container | `docker compose start app` |
+| Pull and apply an update | `docker compose up -d` |
 | Stop safely | `docker compose stop` |
 | Restart | `docker compose restart app` |
 | Recent logs | `docker compose logs --tail=100 app` |
@@ -189,7 +190,7 @@ bytes still need their originals.
 
    ```bash
    docker compose config --quiet
-   docker compose up -d --build
+   docker compose up -d
    ```
 
 5. Sign in with the existing password. Check Connections, files, a representative download and unfinished transfers.
@@ -334,44 +335,24 @@ Login password resets do not change `ENCRYPTION_KEY` or affect backups.
 
 ## Upgrade and rollback
 
-Use a published release tag for a fixed version, or `main` for stable source
-updates. `dev` contains ongoing work and may be unstable. Follow
-[Get the source](setup.md#get-the-source) when choosing the next version.
+Stable installs follow `ghcr.io/techshreyash/tgdrive:latest` by default.
+Choose a version tag or digest in `TGDRIVE_IMAGE` for a pinned installation.
 
-1. Finish work, save a confirmed backup off-host, then stop safely.
+1. Finish active work and save a confirmed backup off-host. Record the currently
+   deployed image digest and review the new version's requirements.
+2. For a 2.0–2.2 installation, add `ENCRYPTION_KEY` before its first 2.3 start.
+   Keep the same MongoDB, Telegram channel and volumes. See
+   [what the 2.2 upgrade changes](#upgrade-from-22-or-earlier).
+3. If the current Compose file builds from source, replace it with the release
+   Compose file and carry over local overrides. Keep the same project name,
+   `.env`, keys and volumes.
+4. Run `docker compose up -d` with the usual Compose file arguments, or use
+   **Redeploy** in Coolify. Check database status, Connections and a
+   representative file.
 
-> [!IMPORTANT]
-> **Upgrading from 2.0–2.2:** add `ENCRYPTION_KEY` to `.env` first; 2.2 had none.
-> Keep the same MongoDB, channel and volumes. On first start, 2.3 upgrades the
-> drive in place: see [what the 2.2 upgrade changes](#upgrade-from-22-or-earlier).
-2. Record the running version and source commit; review the new version's requirements.
-3. Update the source and Compose files to the selected branch or release tag,
-   preserving your local edits and deployment changes. Build that checkout with
-   `docker compose up -d --build`, keeping server `-f` arguments, or redeploy
-   the selected revision in Coolify. Preserve volumes and start only one
-   instance. Check database status, Connections and a representative file.
-
-**Release archive:** [Verify and extract](release.md#verify-a-downloaded-source-archive)
-into a separate folder. Copy your private `.env` and reviewed Compose changes.
-Keep the **same Compose project name**, including any `-p` argument, to reuse
-existing volumes. Retain the old folder for rollback. Never replace your real
-configuration with `.env.example`.
-
-**Git checkout:** Record `git rev-parse HEAD`. On `main`, use `git switch main`,
-then `git pull --ff-only origin main`. To use the latest potentially unstable
-source, use `git switch dev` and `git pull --ff-only origin dev` if that branch
-is available locally. For a pinned version, use
-`git fetch origin --tags`, then `git switch --detach vX.Y.Z`, substituting the
-selected published application tag. If Git refuses, preserve local changes
-before continuing.
-
-**Coolify:** Select `main`, `dev` or a published tag, retaining private variables
-and mounts; redeploy builds that revision. Unpushed local edits are not available
-to a remote Git deployment.
-
-Native installs need `aria2c` for torrent imports; Docker includes it.
-
-Do not run an older app against an incompatible database format. Restore a compatible backup into a separate empty database for a data rollback.
+To roll back a compatible app update, set `TGDRIVE_IMAGE` to the earlier version
+or recorded digest and repeat step 4. If the database format changed, restore a
+compatible backup into a separate empty database for the rollback.
 
 ### Upgrade from 2.2 or earlier
 

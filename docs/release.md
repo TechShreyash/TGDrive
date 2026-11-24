@@ -64,25 +64,20 @@ immutable: fix a release with a new version instead of moving its tag.
 User-facing GitHub documentation links point to `main`; release download links
 pin the corresponding tag. Reserve `dev` links for contributor instructions.
 
-Pushing the tag starts CI on it. Source releases and the documented source-build
-installation do not depend on container-image or registry publication.
+Pushing the tag starts release CI. **Publish image** accepts successful
+same-repository tag-push CI when the annotated application tag identifies the
+tested SHA in main history and matches the application version.
 
-<details>
-<summary>Optional container-image publisher</summary>
+The publisher builds on native AMD64 and ARM64 runners, smoke-checks both
+images by digest and publishes `ghcr.io/techshreyash/tgdrive:X.Y.Z`. It advances
+eligible `:latest` and minor-version tags after both checks pass. The first
+release needs the `tgdrive` registry package set to **Public**. Confirm an
+anonymous manifest read and both architectures before announcing installation.
+Re-running a completed publish reuses the verified exact image.
 
-**Publish image** accepts successful same-repository tag-push CI only when the
-annotated application tag identifies the tested SHA in `main` history and
-matches its application version. It verifies these conditions from trusted
-`main` policy before privileged builds.
-
-The workflow defines native amd64 and arm64 builds with provenance and an SBOM,
-publishing `ghcr.io/techshreyash/tgdrive:X.Y.Z`; moving tags advance only for the
-newest eligible versions. Before announcing this optional artifact, verify the
-publisher result, package visibility, both manifest architectures and the
-image's source revision. The first time, set package visibility to **Public**
-under GitHub → Packages → tgdrive → Package settings.
-
-</details>
+Normal dev pushes run CI. Use **Build deployment image** on dev when a test
+checkpoint is needed. It updates `tgdrive-deployment:dev` and supports optional
+Coolify redeploy. [Testing deployments](setup.md#coolify-with-a-manually-built-image).
 
 The GitHub release must link its PR, exact commit and (after the first release)
 comparison with the previous tag, and explain upgrade requirements and known

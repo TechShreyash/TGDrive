@@ -5,8 +5,9 @@
 Choose [where to install](#choose-your-installation), then follow its path below.
 For self-hosting or setup help, ask in the [support group](https://t.me/TechZBots_Support).
 
-Docker Compose supplies Python, the website and preview/import tools. You do not
-need to install Python or Node separately. For a **new v2 drive**, use an empty
+Docker Compose downloads a prebuilt TGDrive image with Python, the website
+and preview and import tools. Published release images support Linux AMD64
+and ARM64, including Docker Desktop running Linux containers. For a **new v2 drive**, use an empty
 MongoDB database and a new private Telegram channel; v1 catalogs are not imported.
 **Already running 2.0–2.2?** Don't start over: add `ENCRYPTION_KEY` and follow
 [upgrade from 2.0–2.2](operations.md#upgrade-from-22-or-earlier).
@@ -16,12 +17,13 @@ MongoDB database and a new private Telegram channel; v1 catalogs are not importe
 
 - [Choose your installation](#choose-your-installation)
 - [Before you start](#before-you-start)
-  - [Get the source](#get-the-source)
+  - [Get the Compose files](#get-the-source)
 - [1. Prepare MongoDB](#1-prepare-mongodb)
 - [2. Prepare Telegram](#2-prepare-telegram)
 - [3. Configure your drive](#3-configure-your-drive)
 - [4. Start locally](#4-start-locally)
   - [Build from the repository, dev or local edits](#build-from-the-repository-dev-or-local-edits)
+    - [Deploy your custom image to another machine](#deploy-your-custom-image-to-another-machine)
 - [5. Open your drive](#5-open-your-drive)
 - [Apply updates to an existing drive](#apply-updates-to-an-existing-drive)
 - [If setup stops](#if-setup-stops)
@@ -51,9 +53,7 @@ a server for access while your computer is off.
 
 ## Before you start
 
-Install Docker with **Compose 2.24 or newer** and Docker Buildx, then start it.
-Docker Desktop includes Buildx; on Linux, install the Docker Buildx plugin along
-with Docker Engine and the Compose plugin:
+Install Docker with **Compose 2.24 or newer**, then start it:
 
 | System | Install | Terminal |
 | --- | --- | --- |
@@ -74,7 +74,9 @@ Windows users can stay in PowerShell. If you choose WSL, enable
 [Docker's WSL integration](https://docs.docker.com/desktop/features/wsl/) and keep
 the project in Ubuntu's filesystem; use the same terminal/folder consistently.
 
-### Get the source
+<a id="get-the-source"></a>
+
+### Get the Compose files
 
 This guide describes **2.3**. Use the setup guide and Compose files bundled with
 your chosen revision. For v2.2.0, follow its
@@ -89,26 +91,18 @@ git clone --branch main --depth 1 https://github.com/TechShreyash/TGDrive.git
 cd TGDrive
 ~~~
 
-Run the commands below from this folder as your normal user. **`main` is the
-stable released source; `dev` is the latest source and may be unstable.** To
-start from `dev`, substitute `dev` for `main` in the clone command. Without Git,
-extract the [stable source ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/heads/main.zip)
+Run the commands below from this folder as your normal user. The Compose file
+pulls the stable release image. Without Git, extract the [stable repository ZIP](https://github.com/TechShreyash/TGDrive/archive/refs/heads/main.zip)
 and open a terminal in `TGDrive-main`.
 
 <details>
 <summary>Pin an installation to a fixed release</summary>
 
-Choose a published application release from the
-[release list](https://github.com/TechShreyash/TGDrive/releases). Replace `vX.Y.Z`
-below with its exact tag; viewer-package tags are not TGDrive releases.
-
-~~~bash
-git clone --branch vX.Y.Z --depth 1 https://github.com/TechShreyash/TGDrive.git
-cd TGDrive
-~~~
-
-Use that revision's bundled setup guide and Compose files.
-For optional custom archives/checksums, see [release verification](release.md#verify-a-downloaded-source-archive).
+Choose a published application version from the
+[release list](https://github.com/TechShreyash/TGDrive/releases). In your private
+`.env`, set `TGDRIVE_IMAGE=ghcr.io/techshreyash/tgdrive:X.Y.Z` using the published
+image version. A registry digest pins the exact image bytes. Review the guide
+for the chosen version before downgrading an existing drive.
 
 </details>
 
@@ -223,12 +217,11 @@ Run **one active installation and one worker per drive**. From the configured
 project folder, on any supported system:
 
 ~~~bash
-docker compose up -d --build
+docker compose up -d
 ~~~
 
-Compose builds the backend and website from the source in this folder, including
-local uncommitted edits. The first build can take time and needs Docker Buildx,
-which is included in Docker Desktop.
+Compose checks the registry and downloads missing image layers. The first pull
+needs internet access. The default image is `ghcr.io/techshreyash/tgdrive:latest`.
 
 TGDrive initializes a new empty database or reopens an existing drive. Database
 connection/authentication failures stop startup; correct access and try again.
@@ -239,7 +232,8 @@ containers do not restart automatically by default.
 
 | Later action | Command |
 | --- | --- |
-| Start | `docker compose up -d` |
+| Start the existing container | `docker compose start app` |
+| Pull and apply an update | `docker compose up -d` |
 | Stop | `docker compose stop` |
 | Restart | `docker compose restart app` |
 | Apply edited `.env` | `docker compose up -d app` |
@@ -255,21 +249,56 @@ after Docker starts, set `TGDRIVE_RESTART_POLICY=unless-stopped` and recreate.
 
 ### Build from the repository, dev or local edits
 
-The default Compose service builds the checked-out source. Use `main` for stable
-released code, `dev` for the latest potentially unstable code, or a published
-application tag for a fixed version. A fork or local edits are built from the
-checkout on the machine running Docker; those edits need not be committed.
+If you've changed the code and want to run it on the machine with your checkout,
+start Docker and run these commands from the repository root with your
+[configured .env](#3-configure-your-drive). The source override builds the
+current working tree, including saved edits, into `tgdrive:local`. Docker
+Buildx uses the repository's Dockerfile to package the backend and website.
 
-After preparing `.env`, use `docker compose up -d --build` from that checkout.
+~~~bash
+docker compose -f compose.yaml -f compose.override.yaml -f compose.source.yaml up -d --build
+docker compose -f compose.yaml -f compose.override.yaml -f compose.source.yaml ps
+~~~
 
-On a server, keep both `-f compose.yaml -f compose.server.yaml` arguments in
-every command. Preserve `.env`, keys, volumes and the Compose project name
-when updating an existing drive, and run only one instance per drive.
+Repeat the build command after editing the code. Docker reuses eligible cached
+layers and Compose recreates the `app` container when the image changes. If
+startup fails, use the same files with `logs --tail=100 app`. Open the drive
+and check the behavior you changed.
 
-For a Git-based Coolify deployment, choose the desired repository and branch or
-tag in [Coolify setup](#coolify), then redeploy to build that revision. A
-remote Git deployment cannot see uncommitted or unpushed local edits; put the
-source on the build machine or push it to the branch that machine builds.
+For a checkout on a server behind your own HTTPS proxy, use
+`compose.server.yaml` in place of `compose.override.yaml` in both commands.
+When updating an existing drive, keep its Compose project name, volumes, database,
+Telegram channel and original `ENCRYPTION_KEY`. If you run a second instance
+for testing, give it a separate project, port, database and Telegram channel.
+
+#### Deploy your custom image to another machine
+
+Build on a development machine or CI so the deployment server only needs to
+pull the finished image. Use a registry and repository you can publish to.
+Choose the deployment server's platform, commonly `linux/amd64` or
+`linux/arm64`, and give each build a distinct tag so you can roll back.
+
+~~~bash
+docker login registry.example.com
+docker buildx build --platform linux/amd64 \
+  --tag registry.example.com/myteam/tgdrive:custom-1 --push .
+~~~
+
+Set `TGDRIVE_IMAGE=registry.example.com/myteam/tgdrive:custom-1` in the
+deployment's environment. For a private image, configure pull credentials on
+the deployment host. In Coolify, use `/compose.yaml` and choose **Redeploy**.
+For a server with its own HTTPS proxy, run
+
+~~~bash
+docker compose -f compose.yaml -f compose.server.yaml up -d
+docker compose -f compose.yaml -f compose.server.yaml ps
+~~~
+
+Open the drive through its normal URL and confirm your change. To roll back,
+set `TGDRIVE_IMAGE` to the previous tag and run the same redeploy step.
+If you publish test builds from GitHub's `dev` branch, the
+[manual dev workflow](#coolify-with-a-manually-built-image) provides a stable
+test tag that you can reuse across builds.
 
 ## 5. Open your drive
 
@@ -296,13 +325,13 @@ whole-process memory or all disk writes. [Resource scope](configuration.md#cap-t
 
 ## Apply updates to an existing drive
 
-Follow [upgrade and rollback](operations.md#upgrade-and-rollback). Preserve the
-database, channel, `.env`, project name and volumes. Coming from 2.0–2.2, add
-`ENCRYPTION_KEY` to `.env` first; 2.3 upgrades the drive on its first start
-([steps](operations.md#upgrade-from-22-or-earlier)). Use stable `main` or a
-published release tag, or `dev` for the latest potentially unstable source;
-update Compose files to that same revision while preserving local deployment
-changes.
+Review the [upgrade and rollback steps](operations.md#upgrade-and-rollback).
+Use `docker compose up -d` from the configured folder, or **Redeploy** in
+Coolify. The same image tag picks up the latest published version. Keep the
+database, Telegram channel, original `ENCRYPTION_KEY`, project and volumes.
+For a local source build, [repeat the build command with the source override](#build-from-the-repository-dev-or-local-edits).
+When moving from the old source-building setup, update the Compose file once.
+Versions 2.0–2.2 also need the [backup-key upgrade](operations.md#upgrade-from-22-or-earlier).
 
 ## If setup stops
 
@@ -347,83 +376,57 @@ preparation above. For deployment choices, see [Self-hosting](hosting.md).
 
 ### Coolify
 
-[Install self-hosted Coolify](https://coolify.io/docs/start-with-self-hosted)
-on your Docker server. Its self-hosted edition is free; infrastructure costs remain.
+1. Create a public Git application from `https://github.com/TechShreyash/TGDrive`
+   on **main**. Under **General → Build pipeline**, choose **Docker Compose**,
+   **Base Directory** `/` and **Docker Compose Location** `/compose.yaml`.
+2. Enter the [required variables](#3-configure-your-drive) in **Environment Variables**.
+   Choose **Literal** for values containing `$`. Set `TGDRIVE_IMAGE` only to
+   override the stable image.
+3. Under **Domains**, add an HTTPS domain for **app**, including its internal
+   port, such as `https://drive.example.com:8000`. Point DNS at the server.
+4. Choose **Deploy**, confirm the container is healthy, then complete
+   [first login and backup](#5-open-your-drive).
 
-1. Create a public Git application from `https://github.com/TechShreyash/TGDrive`.
-   Select **`main`** for stable released source, **`dev`** for the latest
-   potentially unstable source, or a published application tag for a fixed
-   version. Use the selected revision's setup guide; v2.2 uses the
-   [older source-build procedure](https://github.com/TechShreyash/TGDrive/blob/v2.2.0/docs/setup.md#coolify).
-2. Under **General → Build pipeline**, choose **Compose**, **Base Directory** `/`
-   and **Docker Compose Location** `/compose.yaml`.
-3. Enter the [required variables](#3-configure-your-drive) in **Environment Variables**.
-   Choose **Literal** for `$` values. Keep secrets unavailable during build,
-   available at runtime. [Coolify environment guide](https://coolify.io/docs/applications/configuration/environment-variables).
-4. Point your domain's DNS at the server. Under **Domains**, add an HTTPS domain
-   for **`app`**, including its internal port: `https://drive.example.com:8000`.
-   Visitors use normal HTTPS.
-5. **Deploy**, wait for `app` to become healthy, then complete
-   [first login and backup](#5-open-your-drive) at your domain.
-
-Redeploy builds the selected repository revision. A remote Git deployment
-cannot use unpushed local edits; see
-[building from the repository](#build-from-the-repository-dev-or-local-edits).
-
-Use a domain with a valid HTTPS certificate; the default HTTP `sslip.io` address
-does not meet TGDrive's [remote browser requirements](operations.md#can-tgdrive-run-over-http).
-Compose configures proxy access and secure cookies. Preserve its **`/app/data`**
-and **`/app/cache`** volumes when redeploying.
+Use **Redeploy** to pull the newest image under your configured tag. Turn off
+Git auto-deploy to update on your own schedule. Preserve the existing Coolify
+application, variables and volumes when switching to the image-based Compose
+file. Older installations using `/compose.prebuilt.yaml` can keep that path.
 [Coolify Compose guide](https://coolify.io/docs/applications/builds/docker-compose).
 
 ### Coolify with a manually built image
 
-Use this optional path when the deployment server cannot comfortably build the
-application. The normal `/compose.yaml` path above still builds directly from
-the repository. The separate `/compose.prebuilt.yaml` has no build step and keeps
-the same service, environment, volume names and proxy configuration.
+Set this variable **once** in a separate test deployment. Use its own database,
+Telegram channel and persistent volumes.
 
-1. Disable **Auto Deploy** on the existing Coolify application. Leave the source
-   build cancelled while preparing the image.
-2. In GitHub, open **Actions → Build deployment image → Run workflow**. Select
-   the branch to build; `main` is stable and `dev` may be unstable.
-   The workflow must exist on the repository's default branch for the manual
-   button to appear, and on the selected revision to run. It runs only when
-   dispatched manually, not on pushes, pull requests or releases.
-3. Wait for the run to succeed. It builds on a GitHub-hosted AMD64 runner and
-   publishes `ghcr.io/<owner>/<repository>-deployment:<commit-sha>`. This is a
-   separate package from the release publisher's `tgdrive` package. No Telegram,
-   MongoDB or application secrets belong in the build; GitHub supplies the
-   registry token.
-4. For a public repository, open the new package's **Package settings** and set
-   its visibility to **Public** so the deployment server can pull anonymously.
-   Keep private application code private: for a private package, configure GHCR
-   pull credentials on the deployment server instead.
-5. Copy the `TGDRIVE_IMAGE=ghcr.io/...@sha256:...` value from the successful
-   workflow's summary into the application's Coolify environment variables.
-   The digest pins the exact image built by that run. This workflow currently
-   builds **AMD64/x86-64 only**, matching B1s and B2ats v2, not ARM64 B2pts v2.
-6. In the **same Coolify application**, keep Docker Compose and Base Directory
-   `/`, then change Docker Compose Location to `/compose.prebuilt.yaml`. Save
-   and reload its configuration. Use this file alone; merging it with
-   `compose.yaml` retains the source build. Keep the repository revision aligned
-   with the image's source commit so configuration and application agree.
-7. Preserve all existing credentials, the original `ENCRYPTION_KEY`, domain,
-   service name `app` and volumes. Keep the HTTPS domain routed to internal port
-   `8000`. **Deploy** manually, then [verify the drive](#5-open-your-drive).
+~~~dotenv
+TGDRIVE_IMAGE=ghcr.io/techshreyash/tgdrive-deployment:dev
+~~~
 
-For later updates, run the workflow again, wait for success, update
-`TGDRIVE_IMAGE` from its summary and deploy manually. Building or publishing an
-image never updates Coolify. Keep Auto Deploy off for this path. Returning to
-`/compose.yaml` restores source builds; keep the same application and volumes.
-Never run both deployments against the same drive at once.
+1. Turn off **Auto Deploy** for this application.
+2. In GitHub, go to **Actions → Build deployment image → Run workflow** and select
+   **dev**. The workflow must be available on the default branch and on dev.
+   Run it only when you want a testing checkpoint. It publishes the same
+   `:dev` tag and also records the exact commit tag and digest for rollback.
+3. After the build succeeds, choose **Redeploy**. The server pulls the image
+   published under `:dev`. Forks use their own `ghcr.io/<owner>/<repo>-deployment:dev`
+   package. Set package visibility to **Public** for anonymous pulls, or sign in
+   to the private registry on the deployment server. For a local test drive,
+   `docker compose up -d` applies the same image tag.
+
+For one-click deployment from the same run, create a GitHub environment called
+`tgdrive-dev` restricted to the dev branch. Store the test application's
+authenticated deploy hook as `COOLIFY_DEV_DEPLOY_WEBHOOK` and a Coolify
+deploy-only API token as `COOLIFY_DEV_API_TOKEN`. Select **Redeploy the dev
+application in Coolify after publishing**. Check Coolify's deployment log
+after it accepts the request.
+[Coolify deploy webhooks](https://coolify.io/docs/core/automation/deploy-webhooks).
 
 ### Docker Compose on a server
 
 Prepare `.env` as above. Name **both files explicitly** to avoid the laptop override:
 
 ~~~bash
-docker compose -f compose.yaml -f compose.server.yaml up -d --build
+docker compose -f compose.yaml -f compose.server.yaml up -d
 ~~~
 
 1. Forward HTTPS to host `127.0.0.1:8000`, preserving Host and forwarding the
@@ -436,7 +439,7 @@ docker compose -f compose.yaml -f compose.server.yaml up -d --build
 
 This setup keeps secure cookies on, publishes loopback only and restarts unless
 stopped. Preserve project name/volumes and use the same `-f` arguments for
-`stop`, `restart app` and `up -d --build`.
+`stop`, `restart app` and `up -d`.
 
 ### Other hosting
 

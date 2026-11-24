@@ -44,8 +44,8 @@ action. Remaining live validation:
 - [ ] Prolonged multi-account outages and interrupted Telegram sends.
 - [ ] Actual Premium speed, broader devices/codecs, ARM and hosting platforms.
 - [ ] Verify the private vulnerability-reporting entry point before announcing a
-  release. If offering a container image, verify its architectures and source
-  revision before announcing that optional artifact.
+  release. Confirm the published image's architectures, source revision and
+  public registry access.
 
 ## Known correctness and recovery gaps
 

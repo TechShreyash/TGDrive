@@ -62,6 +62,7 @@ def verify_release(event, repository: str, *, root=Path(".")):
     return {
         "sha": sha,
         "version": tag[1:],
+        "minor": tag[1:].rsplit(".", 1)[0],
         "image": "ghcr.io/" + repository.split("/", 1)[0].lower() + "/tgdrive",
         "promote_latest": str(current == max(versions)).lower(),
         "promote_minor": str(

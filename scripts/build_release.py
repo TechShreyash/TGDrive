@@ -28,6 +28,7 @@ ROOT_FILES = (
     "compose.override.yaml",
     "compose.prebuilt.yaml",
     "compose.server.yaml",
+    "compose.source.yaml",
     "pyproject.toml",
     "uv.lock",
     "website/package.json",
