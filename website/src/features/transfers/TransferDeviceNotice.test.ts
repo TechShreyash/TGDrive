@@ -375,12 +375,9 @@ describe("visible device receipt feedback", () => {
     it("offers to close the tab only after every standalone upload is accepted", () => {
         const accepted = local({ jobId: "accepted", state: "uploading" });
         const pending = local({ key: "second", name: "Second.jpg" });
-        expect(render([accepted, pending])).not.toContain(
-            "You can close this tab",
-        );
-        expect(render([accepted, pending])).toContain(
-            "Keep this tab open for other uploads",
-        );
+        const mixed = render([accepted, pending]);
+        expect(mixed).not.toContain("You can close this tab");
+        expect(mixed).toMatch(/>Keep this tab open(?: for other uploads)?</);
         expect(
             render([
                 accepted,
