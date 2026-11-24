@@ -26,7 +26,10 @@ class _Flight:
 _FLIGHTS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
-async def get_message(client: Any, channel: int, message_id: int) -> Any:
+async def get_message(
+    client: Any, channel: int, message_id: int, *, playback=False
+) -> Any:
+    inherited = "playback" if playback else media_priority.get()
     loop = asyncio.get_running_loop()
     flights = _FLIGHTS.setdefault(loop, {})
     key = (id(client), channel, message_id)
@@ -41,7 +44,6 @@ async def get_message(client: Any, channel: int, message_id: int) -> Any:
         maximum = getattr(pool, "_max_media_queue", 256)
         if len(flights) >= maximum:
             raise MediaQueueFull(retry_after=1)
-        inherited = media_priority.get()
         priority = (
             inherited
             if isinstance(inherited, MediaPriorityScope)
@@ -65,8 +67,7 @@ async def get_message(client: Any, channel: int, message_id: int) -> Any:
         task.add_done_callback(completed)
     flight.waiters += 1
     try:
-        if effective_priority(media_priority.get()) == "demand":
-            await flight.priority.promote()
+        await flight.priority.promote(effective_priority(inherited))
         return await asyncio.shield(flight.task)
     finally:
         flight.waiters -= 1

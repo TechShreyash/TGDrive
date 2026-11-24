@@ -70,7 +70,7 @@ def measure(
     cache_probe_directory=None,
     data_probe_directory=None,
 ) -> dict:
-    limit, available = memory()
+    mem = memory_snapshot(stream_headroom=True)
     disk = measure_capacity(directory, probe_directory=cache_probe_directory)
     media_directory = Path(media_directory)
     # The disposable media cache need not exist before the first read.
@@ -78,8 +78,9 @@ def measure(
         media_directory = media_directory.parent
     media_disk = measure_capacity(media_directory, probe_directory=data_probe_directory)
     return dict(
-        memory_limit=limit,
-        memory_available=available,
+        memory_limit=mem["limit_bytes"],
+        memory_available=mem["available_bytes"],
+        stream_memory_available=mem["stream_available_bytes"],
         cpus=cpus(),
         disk_total=disk.effective_total_bytes or 0,
         disk_free=disk.filesystem.free if disk.filesystem else None,

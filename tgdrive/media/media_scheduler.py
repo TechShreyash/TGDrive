@@ -15,7 +15,35 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Literal
 
-MediaPriority = Literal["demand", "preload"]
+MediaPriority = Literal["playback", "demand", "ahead", "preload"]
+_PRIORITY_ORDER = {"playback": 0, "demand": 1, "ahead": 2, "preload": 3}
+
+
+class ReassignMediaRead(TimeoutError):
+    """One ordered block may retry on another eligible account."""
+
+
+# Only the first pooled attempt may hand back a stalled native read. Independent
+# callers and fallback attempts retain their normal provider progress deadline.
+read_alternative: ContextVar[Callable[[object, float], bool] | None] = ContextVar(
+    "read_alternative", default=None
+)
+
+
+class MediaAdmissionTurns:
+    """Give playback first turn while keeping other foreground work moving."""
+
+    def __init__(self):
+        self.playback_streak = 0
+
+    def rank(self, priority: MediaPriority) -> int:
+        if priority in ("ahead", "preload"):
+            return _PRIORITY_ORDER[priority]
+        prefer_playback = self.playback_streak < 8
+        return int((priority == "playback") != prefer_playback)
+
+    def admitted(self, priority: MediaPriority):
+        self.playback_streak = self.playback_streak + 1 if priority == "playback" else 0
 
 
 class MediaPriorityScope:
@@ -38,10 +66,10 @@ class MediaPriorityScope:
 
         return unsubscribe
 
-    async def promote(self):
-        if self.priority == "demand":
+    async def promote(self, priority: MediaPriority = "demand"):
+        if _PRIORITY_ORDER[self.priority] <= _PRIORITY_ORDER[priority]:
             return
-        self.priority = "demand"
+        self.priority = priority
         for update in self._updates:
             update()
         for condition in set(self._conditions):
@@ -110,6 +138,7 @@ class MediaScheduler:
         self._condition = asyncio.Condition()
         self._waiting: list[_Request] = []
         self._active_groups = Counter()
+        self._turns = MediaAdmissionTurns()
         self._last_group = object()
         self._next_request = 0.0
         self._cooldown = 0.0
@@ -117,6 +146,13 @@ class MediaScheduler:
         self._history: deque[dict] = deque(maxlen=120)
         self._last_sample = 0.0
         self._successes = 0
+
+    def has_spare_capacity(self, now: float) -> bool:
+        return (
+            self.active < self.effective_limit
+            and not self._waiting
+            and max(self._cooldown, self._next_request) <= now
+        )
 
     def configure(self, *, limit: int, rate: float) -> None:
         if type(limit) is not int or limit < 1:
@@ -174,6 +210,7 @@ class MediaScheduler:
                         and deadline <= now
                     ):
                         self._waiting.remove(ticket)
+                        self._turns.admitted(effective_priority(ticket.priority))
                         self.active += 1
                         self._active_groups[ticket.fair_group] += 1
                         self._last_group = ticket.fair_group
@@ -230,7 +267,7 @@ class MediaScheduler:
         return sorted(
             self._waiting,
             key=lambda item: (
-                effective_priority(item.priority) == "preload",
+                self._turns.rank(effective_priority(item.priority)),
                 self._active_groups[item.fair_group],
                 ranks[item.fair_group],
                 item.number,

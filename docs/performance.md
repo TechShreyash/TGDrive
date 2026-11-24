@@ -124,10 +124,15 @@ retained cache. Compare its current effective limit with waiting streams; a
 configured ceiling is not a measurement of free physical RAM. Neither this
 budget nor retained-cache bytes include all process, transport or container
 memory. Unused cache or stream capacity alone does not establish a throughput
-problem; interpret it alongside the workload and observed waits. Growth requires
-foreground memory waits after reclaiming speculative buffers and measured
-headroom. Growth is at most 32 MiB per five-second sizing sample, within the
-saved ceiling and measured-headroom allowance. Memory pressure, an idle interval
+problem; interpret it alongside the workload and observed waits. Growth requires measured headroom and either a waiting foreground head or a
+cold download that can drain a larger window than its current scratch share. Growth is at most 32 MiB per five-second sizing sample, within the
+saved ceiling and measured-headroom allowance. On Linux cgroup v2, stream sizing can
+credit half of the local inactive disk cache after subtracting mapped, dirty and
+writeback bytes and excluding shared memory. Host availability, ancestor limits
+and configured memory throttles still cap the estimate. Other resource budgets
+use their existing measurements. [Linux memory counters](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)
+
+Memory pressure, an idle interval
 or unknown memory can reduce the limit; unknown memory does not trigger growth. Existing owned reservations
 drain safely after a reduction. Fill reservations overlap stream reservations;
 do not add them as separate process memory.
@@ -185,9 +190,14 @@ this policy change.
 <details>
 <summary>Playback qualification and preparation thresholds</summary>
 
-In-response reads begin with a head and one probe. Delivery, backpressure and
-remote-block latency adjust the window within account capacity, 32 blocks,
-remaining requested blocks and fair transient-budget share. Beyond-response
+Each response begins with the requested block and one following block.
+A normal download measures the time spent sending bytes to the consumer
+separately from waits on Telegram. A fast consumer can grow its pipeline
+through uneven origin delivery. A slow or paused consumer releases look-ahead.
+A download can borrow unused scratch from other responses, up to 160 one-MiB
+blocks per response. Playback and other previews can look ahead up to 64 blocks.
+Account capacity, the remaining HTTP range, competing readers and the effective
+stream-memory budget can all reduce these windows. Beyond-response
 warming requires `preview=1` or an audio/video fetch destination.
 
 Valid Telegram duration supplies average media byte rate; otherwise sustained
@@ -223,13 +233,23 @@ cleanup cannot change a newly opened viewer's preparation.
 
 </details>
 
-The first cold block prefers the account that validated the file when eligible
-accounts have equal capacity in use. Subsequent blocks can use the other bots.
+For a cold read, TGDrive ranks eligible accounts by recent native 512 KiB
+service time and current download load. The account that validated the file
+breaks a tie for the first block. Idle accounts without a recent sample can
+take work, and observations expire after a minute. The response delivers
+completed blocks in file order. More healthy bots can contribute to one
+ordinary download without a segmented download client.
 Each native 512 KiB read has a progress deadline starting at five seconds. It
 adapts to recent read latency and backs off after a timeout, up to one minute.
 If a read stalls, the pooled reader releases the account and retries the missing
 block through the existing bounded failover path. Scheduler admission, configured
 bandwidth pacing and waiting for the browser are outside the native deadline.
+During the first attempt at a needed HTTP block, TGDrive checks a stalled native
+read every second. If another eligible account has spare pool and RPC capacity
+and a recent native part time under one fifth of the elapsed wait, TGDrive closes
+the stalled read and retries the block through normal admission. This handoff
+can happen once per block and uses the existing retry budget. Queued waits,
+paced HTTP sends and distant read-ahead do not trigger it.
 A coalesced media metadata lookup has its own eight-second provider deadline.
 
 Independent blocks can use different healthy clients and shared in-flight
@@ -263,6 +283,15 @@ Warm bytes avoid Telegram payload work and have no fixed four-viewer gate, but
 still need authentication, server bandwidth, sockets, memory and proxy capacity.
 Cold misses share bounded account media/request admission and origin queues;
 uploads compete within the same account budget. Demand precedes background work.
+
+Playback gets priority for the current and next **1 MiB block** of an inline
+video or audio response, including a new seek. This applies at both the account
+pool and the native RPC queue. A player joining a queued fill promotes the
+existing work. After eight playback admissions, the next eligible ordinary
+foreground operation gets a turn. Both precede in-response look-ahead, followed
+by background preloads. The bounded origin queue leaves space for foreground
+work when its capacity permits. An ahead block declined under load can retry
+once when its download reaches that offset.
 
 Requested payloads take turns in **1 MiB blocks**. For file responses, queued
 foreground reads and transient-buffer heads also share turns by verified session

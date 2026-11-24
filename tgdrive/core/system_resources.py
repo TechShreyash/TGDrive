@@ -72,8 +72,34 @@ def cgroup_v1_directories(
     return None
 
 
+def _stream_cache_credit(directory: Path) -> int:
+    """Credit half of clean, unmapped, inactive file pages in the local v2 group."""
+    counters = {}
+    for row in _text(directory / "memory.stat").splitlines():
+        fields = row.split()
+        if len(fields) == 2:
+            counters[fields[0]] = _integer(fields[1])
+    keys = (
+        "inactive_file",
+        "file",
+        "shmem",
+        "file_dirty",
+        "file_writeback",
+        "file_mapped",
+    )
+    if any(counters.get(key) is None for key in keys):
+        return 0
+    disk = min(counters["inactive_file"], counters["file"] - counters["shmem"])
+    busy = counters["file_dirty"] + counters["file_writeback"] + counters["file_mapped"]
+    return max(0, disk - busy) // 2
+
+
 def memory_snapshot(
-    *, cgroup=Path("/sys/fs/cgroup"), proc=Path("/proc"), meminfo=None
+    *,
+    cgroup=Path("/sys/fs/cgroup"),
+    proc=Path("/proc"),
+    meminfo=None,
+    stream_headroom=False,
 ) -> dict:
     host = {}
     for row in _text(
@@ -88,11 +114,13 @@ def memory_snapshot(
     total, available = host.get("MemTotal"), host.get("MemAvailable")
     if total is not None and available is not None:
         available = min(total, available)
+    host_available = available
     cgroup, proc = Path(cgroup), Path(proc)
     legacy = cgroup_v1_directories(cgroup, proc, "memory")
     directories = legacy if legacy is not None else cgroup_directories(cgroup, proc)
     source = "cgroup_v1" if legacy is not None else "cgroup_v2"
     limits = []
+    high_headrooms = []
     leaf_current = None
     observed = legacy is not None
     unknown = legacy == []
@@ -119,6 +147,12 @@ def memory_snapshot(
             leaf_current = current
         if limit is not None:
             limits.append((limit, current))
+        if stream_headroom and legacy is None:
+            high = _integer(_text(directory / "memory.high").strip())
+            if high is not None:
+                high_headrooms.append(
+                    max(0, high - current) if current is not None else 0
+                )
     group_limit = None
     used = leaf_current
     if limits:
@@ -143,7 +177,7 @@ def memory_snapshot(
         source = "proc_meminfo" if total is not None else "unavailable"
         if total is not None and available is not None:
             used = total - available
-    return {
+    result = {
         "scope": scope,
         "source": source,
         "limit_bytes": limit,
@@ -153,6 +187,26 @@ def memory_snapshot(
         "environment_total_bytes": total,
         "limit_source": limit_source,
     }
+    if stream_headroom:
+        stream_available = available
+        if (
+            available is not None
+            and host_available is not None
+            and limits
+            and legacy is None
+        ):
+            # Credit only pages in this process's group. A sibling's cache is
+            # never needed to satisfy our budget. Every ancestor and host still
+            # bounds the estimate, including any lower memory.high throttle.
+            credit = _stream_cache_credit(directories[0])
+            stream_available = min(
+                host_available,
+                *(max(0, cap - use + min(credit, use)) for cap, use in limits),
+            )
+        if stream_available is not None and high_headrooms:
+            stream_available = min(stream_available, *high_headrooms)
+        result["stream_available_bytes"] = stream_available
+    return result
 
 
 def cpu_snapshot(*, cgroup=Path("/sys/fs/cgroup"), proc=Path("/proc")) -> dict:

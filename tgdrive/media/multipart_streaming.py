@@ -21,6 +21,7 @@ from tgdrive.media.streaming import (
     _observe_media_request,
     _prime_response,
     _request_range,
+    _response_transfer,
     media_etag,
 )
 from tgdrive.storage.file_parts import validate_parts
@@ -73,9 +74,19 @@ async def stream_multipart_file(
         and expected_size > PDF_PREVIEW_BYTES
     ):
         return Response(status_code=413, content="PDF preview limit is 256 MiB")
+    transfer = (
+        _response_transfer(file_name, mime_type, download=download, preview=preview)
+        if request.method == "GET"
+        else None
+    )
     spans = part_ranges(manifest, selected)
     first = await PartLease(
-        pool, channel_id, spans[0][0], authorize=authorize, request_id=request_id
+        pool,
+        channel_id,
+        spans[0][0],
+        authorize=authorize,
+        request_id=request_id,
+        transfer=transfer,
     ).open()
     activity = _observe_media_request(
         pool,
@@ -146,6 +157,7 @@ async def stream_multipart_file(
                         part,
                         authorize=authorize,
                         request_id=request_id,
+                        transfer=transfer,
                     ).open()
                 )
                 iterator = lease.read(interval)

@@ -38,7 +38,10 @@ from tgdrive.core.config import Settings
 from tgdrive.media.media_scheduler import (
     MediaPriorityScope,
     MediaScheduler,
+    ReassignMediaRead,
+    effective_priority,
     media_priority,
+    read_alternative,
 )
 from tgdrive.telegram.client_identity import IdentityCache, account_identity
 from tgdrive.telegram.client_pool import ClientPool
@@ -448,7 +451,9 @@ class Client:
     """Adapt one Telegram account to the pool's transfer and media operations."""
 
     _download_block_cache: _BlockCache
+    download_part_sample: tuple[float, float] | None = None
     _download_timeout_floor = 5.0
+    _download_reassignment_interval = 1.0
     _download_part_timeout = 0.0
 
     def __init__(
@@ -1422,16 +1427,55 @@ class Client:
         # and the HTTP consumer may legitimately wait much longer.
         timeout = max(self._download_timeout_floor, self._download_part_timeout)
         started = time.monotonic()
+        deadline = asyncio.timeout(timeout)
+        alternative = read_alternative.get()
+        interval = self._download_reassignment_interval
+        loop = asyncio.get_running_loop()
+        timer = None
+        reassign = False
+
+        def check_progress():
+            nonlocal timer, reassign
+            elapsed = time.monotonic() - started
+            if deadline.expired():
+                return
+            if effective_priority(media_priority.get()) in (
+                "demand",
+                "playback",
+            ) and alternative(self, elapsed):
+                reassign = True
+                deadline.reschedule(loop.time())
+            elif elapsed + interval < timeout:
+                timer = loop.call_later(interval, check_progress)
+
         try:
-            async with asyncio.timeout(timeout):
+            async with deadline:
+                if alternative is not None and interval < timeout:
+                    timer = loop.call_later(interval, check_progress)
                 part = await anext(iterator, None)
         except TimeoutError:
+            if reassign:
+                now = time.monotonic()
+                self.download_part_sample = (now, now - started)
+                raise ReassignMediaRead from None
             self._download_part_timeout = min(
                 60.0, max(self._download_part_timeout, 2 * timeout)
             )
             raise
+        finally:
+            if timer is not None:
+                timer.cancel()
         if part is not None:
-            elapsed = time.monotonic() - started
+            now = time.monotonic()
+            elapsed = now - started
+            if len(part) == _DOWNLOAD_REQUEST:
+                previous = self.download_part_sample
+                mean = (
+                    elapsed
+                    if previous is None or now - previous[0] >= 60
+                    else (previous[1] * 0.75 + elapsed * 0.25)
+                )
+                self.download_part_sample = (now, max(0.001, mean))
             self._download_part_timeout = min(
                 60.0, max(self._download_part_timeout * 0.95, elapsed * 4)
             )

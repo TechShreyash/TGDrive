@@ -53,9 +53,11 @@ class PartLease:
         authorize=None,
         request_id=None,
         background=False,
+        transfer=None,
     ):
         self.pool, self.channel, self.part = pool, channel, part
         self.authorize, self.request_id = authorize, request_id
+        self.transfer = transfer
         self.background = background
         self.lease: Any = None
         self.client: Any = None
@@ -66,7 +68,10 @@ class PartLease:
         if self.authorize is not None:
             await self.authorize()
         self.message = await get_message(
-            self.client, self.channel, self.part["message_id"]
+            self.client,
+            self.channel,
+            self.part["message_id"],
+            playback=self.transfer == "playback",
         )
         media = _media_from_message(self.message)
         if (
@@ -163,6 +168,7 @@ class PartLease:
             authorize=authorize or self.authorize,
             request_id=request_id or self.request_id,
             background=self.background,
+            transfer=self.transfer,
         )
         emitted = 0
         count = 0

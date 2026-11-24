@@ -215,3 +215,31 @@ def test_governor_missing_linux_metrics_retains_unknown_memory(tmp_path):
         None,
         None,
     )
+
+
+def test_stream_headroom_credits_only_clean_leaf_cache_under_every_limit(tmp_path):
+    proc, cgroup = environment(tmp_path)
+    leaf = cgroup / "worker"
+    leaf.mkdir()
+    (proc / "self/cgroup").write_text("0::/worker\n")
+    for directory, limit, current in ((leaf, 100000, 95000), (cgroup, 200000, 199000)):
+        (directory / "memory.max").write_text(str(limit))
+        (directory / "memory.current").write_text(str(current))
+    stat = leaf / "memory.stat"
+    stat.write_text(
+        "inactive_file 70000\nfile 80000\nshmem 20000\n"
+        "file_dirty 10000\nfile_writeback 10000\nfile_mapped 10000\n"
+    )
+
+    def sample():
+        return memory_snapshot(proc=proc, cgroup=cgroup, stream_headroom=True)
+
+    assert sample()["available_bytes"] == 1000
+    assert sample()["stream_available_bytes"] == 16000
+    (cgroup / "memory.high").write_text("199500")
+    assert sample()["stream_available_bytes"] == 500
+    (cgroup / "memory.high").write_text("max")
+    stat.write_text("inactive_file 80000\nfile 80000")
+    assert sample()["stream_available_bytes"] == 1000
+    (leaf / "memory.current").unlink()
+    assert sample()["stream_available_bytes"] is None

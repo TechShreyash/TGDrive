@@ -31,6 +31,7 @@ from tgdrive.media.compatibility_worker import (
     duration,
 )
 from tgdrive.media.generated_thumbnails import _finish_owned, _owned_task
+from tgdrive.media.media_scheduler import media_priority
 from tgdrive.web.file_bandwidth import paced_body
 
 BLOCK_BYTES = 1024**2
@@ -293,14 +294,15 @@ def register_compatibility_routes(app, settings, runtime, authorized_file):
                 raise HTTPException(409, "The video changed. Reopen it.")
 
         async def fetch(start, count):
-            return await books.read_range(
-                runtime(request).pool,
-                settings.storage_channel,
-                data,
-                start,
-                count,
-                authorize,
-            )
+            with media_priority.set("playback"):
+                return await books.read_range(
+                    runtime(request).pool,
+                    settings.storage_channel,
+                    data,
+                    start,
+                    count,
+                    authorize,
+                )
 
         return PlaybackSource(data, fetch, authorize), suffix, version
 

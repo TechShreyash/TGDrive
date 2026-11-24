@@ -28,9 +28,15 @@ from tgdrive.media.media_policy import (
     merge_ranges,
 )
 from tgdrive.media.media_scheduler import (
+    MediaAdmissionTurns,
+    MediaPriority,
     MediaPriorityScope,
+    ReassignMediaRead,
     current_fair_group,
+    effective_priority,
     fair_group_ranks,
+    media_priority,
+    read_alternative,
 )
 from tgdrive.storage import pacing
 from tgdrive.storage.capacity import (
@@ -42,7 +48,6 @@ from tgdrive.telegram.clients import _block_identity, _BlockCache
 from tgdrive.transfers.tasks import _journalled
 
 BLOCK = 1024**2
-READ_AHEAD = 32  # MiB per response, including currently requested windows.
 HEAD_WAIT_SECONDS = 30
 logger = logging.getLogger(__name__)
 
@@ -81,6 +86,8 @@ class _AdaptiveReadAhead:
         self._sample_bytes = 0
         self._rate = None
         self._latency = None
+        self.bulk = False
+        self._drain_seconds = 0.0
 
     def observe_fetch(self, elapsed):
         elapsed = max(0.001, elapsed)
@@ -94,10 +101,15 @@ class _AdaptiveReadAhead:
         if consumer_seconds is None:
             consumer_seconds = now - self._last_consumed_at
         self._last_consumed_at = now
+        self._drain_seconds += consumer_seconds
         elapsed = now - self._sample_at
         if elapsed < 0.1:
             return
         rate = self._sample_bytes / elapsed
+        if self.bulk and self._latency is not None:
+            # Origin stalls leave the HTTP consumer idle. Only time actually
+            # spent yielding bytes is evidence that the downstream link is full.
+            rate = self._sample_bytes / max(0.001, self._drain_seconds)
         if consumer_seconds >= 0.1:
             # A paused send must not inherit the fast bytes accumulated just
             # before it. Source waits are measured separately by the caller.
@@ -113,6 +125,7 @@ class _AdaptiveReadAhead:
         target = min(self.maximum, max(2, 1 + math.ceil(self._rate * horizon / BLOCK)))
         self.window = min(target, max(2, self.window * 2))
         self._sample_bytes = 0
+        self._drain_seconds = 0.0
         self._sample_at = now
 
     @property
@@ -124,6 +137,7 @@ class _AdaptiveReadAhead:
         # neighbours are disposable; a later advancement starts a fresh probe.
         self.window = 1
         self._rate = None
+        self._drain_seconds = 0.0
         self._sample_at = self.clock()
         self._last_consumed_at = self._sample_at
         self._sample_bytes = 0
@@ -142,6 +156,7 @@ class _ScratchBudget:
         self.used = self.peak = self.waiters = 0
         self.foreground_waiters = 0
         self.changed = asyncio.Event()
+        self._turns = MediaAdmissionTurns()
         self._heads = []
         self._head_groups = {}
         self._last_group = object()
@@ -154,12 +169,12 @@ class _ScratchBudget:
         self.peak = max(self.peak, self.used)
         return True
 
-    async def acquire(self, *, foreground=True):
+    async def acquire(self, *, foreground=True, playback=False):
         ticket = object()
         self._heads.append(ticket)
         self._head_groups[ticket] = (
             current_fair_group() if foreground else None,
-            foreground,
+            "playback" if playback else "demand" if foreground else "preload",
         )
         self.waiters += 1
         self.foreground_waiters += int(foreground)
@@ -173,7 +188,7 @@ class _ScratchBudget:
                 first = min(
                     self._heads,
                     key=lambda item: (
-                        not self._head_groups[item][1],
+                        self._turns.rank(self._head_groups[item][1]),
                         ranks[self._head_groups[item][0]],
                     ),
                 )
@@ -190,6 +205,7 @@ class _ScratchBudget:
                             if stream.reclaim_one():
                                 break
                     if self.used < self.limit:
+                        self._turns.admitted(self._head_groups[ticket][1])
                         self._last_group = self._head_groups[ticket][0]
                         self.used += 1
                         self.peak = max(self.peak, self.used)
@@ -222,6 +238,8 @@ class _StreamFrames:
         self.scratch, self.read = scratch, read
         self.frames = {}
         self.retiring = set()
+        self.wanted = 1
+        self.origin_limited_by_scratch = False
         scratch._streams.add(self)
 
     @property
@@ -526,7 +544,9 @@ class MediaReadCache:
         self._stream_sample_monotonic = now
         self._stream_sampled_at = measurements.get("sampled_at")
         available, limit = (
-            measurements.get("memory_available"),
+            measurements.get(
+                "stream_memory_available", measurements.get("memory_available")
+            ),
             measurements.get("memory_limit"),
         )
         current = self.scratch.limit * BLOCK
@@ -537,7 +557,12 @@ class MediaReadCache:
             and self.scratch.used >= self.scratch.limit
             and not any(stream.speculative_count for stream in self.scratch._streams)
         )
-        if waiting:
+        pipeline_wait = any(
+            stream.origin_limited_by_scratch for stream in self.scratch._streams
+        )
+        holding_extra = self._active_streams and self.scratch.used * BLOCK > baseline
+        restoring = bool(self._active_streams) and current < baseline
+        if waiting or pipeline_wait or holding_extra:
             self._stream_last_pressure = now
         target = min(current, ceiling)
         reason = "owner_ceiling" if current > ceiling else self._stream_reason
@@ -548,7 +573,7 @@ class MediaReadCache:
             reason = "memory_pressure"
         elif (
             current <= ceiling
-            and waiting
+            and (waiting or pipeline_wait or restoring)
             and (
                 self._stream_last_growth is None or now - self._stream_last_growth >= 5
             )
@@ -560,7 +585,12 @@ class MediaReadCache:
                 current + STREAM_MEMORY_BASELINE_BYTES,
                 current + available // (12 * BLOCK) * BLOCK,
             )
-            reason = "foreground_wait"
+            if waiting:
+                reason = "foreground_wait"
+            elif pipeline_wait:
+                reason = "download_window"
+            else:
+                target, reason = min(target, baseline), "recover_baseline"
         elif now - self._stream_last_pressure >= 30 and target > baseline:
             target, reason = baseline, "idle_baseline"
         if target > current:
@@ -939,7 +969,16 @@ class MediaReadCache:
         }
         self._index_dirty = True
 
-    async def get(self, key, expected, remote, *, background=False, retain_hot=False):
+    async def get(
+        self,
+        key,
+        expected,
+        remote,
+        *,
+        background=False,
+        retain_hot=False,
+        priority: MediaPriority = "demand",
+    ):
         self._refresh_capacity()
         bound = (
             self.memory.max_entries
@@ -968,8 +1007,10 @@ class MediaReadCache:
         self._active_keys[key] = self._active_keys.get(key, 0) + 1
         if retain_hot:
             self._hot_keys.add(key)
+        if background:
+            priority = "preload"
         priority_scope = self._fill_priorities.setdefault(
-            key, MediaPriorityScope("preload" if background else "demand")
+            key, MediaPriorityScope(priority)
         )
         if not background:
             self._foreground[key] = self._foreground.get(key, 0) + 1
@@ -1026,7 +1067,7 @@ class MediaReadCache:
         generation = self._generation
         try:
             if not background:
-                await priority_scope.promote()
+                await priority_scope.promote(priority)
             if self.memory._hit(key) is not None or key in self._pending:
                 self._hits += 1
             else:
@@ -1330,6 +1371,7 @@ async def stream_pooled_media(
     authorize=None,
     request_id: str | None = None,
     retain_hot: bool = False,
+    transfer: str | None = None,
 ) -> AsyncGenerator[bytes]:
     """Authorization and initial message validation precede every cache read.
 
@@ -1337,6 +1379,8 @@ async def stream_pooled_media(
     include channel, message, immutable document/rendition, size and block index.
     Cached payloads are shared across clients; Telegram access hashes are not.
     """
+    from tgdrive.telegram.client_pool import MediaQueueFull
+
     if limit <= 0:
         return
     if authorize is not None:
@@ -1353,6 +1397,12 @@ async def stream_pooled_media(
             await iterator.aclose()
         return
 
+    if (
+        transfer is None
+        and not background
+        and effective_priority(media_priority.get()) == "playback"
+    ):
+        transfer = "playback"
     request_id = request_id or f"read-{secrets.token_urlsafe(12)}"
     media_cache_for(pool)
     cache = pool._media_read_cache
@@ -1380,8 +1430,12 @@ async def stream_pooled_media(
             return bindings[key]
 
     async def fetch_remote(index):
-        from tgdrive.media.media_scheduler import media_priority
-
+        previous = None
+        probe = (
+            getattr(pool, "has_fast_download_alternative", None)
+            if transfer and not background
+            else None
+        )
         for attempt in range(3):
             kwargs = {
                 "download": True,
@@ -1391,6 +1445,8 @@ async def stream_pooled_media(
             }
             # On a cold head the validated account already owns this reference.
             # A hint only breaks ties between equally available eligible slots.
+            if previous is not None:
+                kwargs["previous_download_client"] = previous
             if index == offset and attempt == 0:
                 kwargs["preferred_download_client"] = client
             if request_id is not None:
@@ -1404,7 +1460,8 @@ async def stream_pooled_media(
                     iterator = account.stream_media(bound, **options)
                     started = controller.clock()
                     try:
-                        data = await anext(iterator, b"")
+                        with read_alternative.set(probe if attempt == 0 else None):
+                            data = await anext(iterator, b"")
                         block = _block_identity(bound, index)
                         if block is None or len(data) != block[1]:
                             # Validate inside account failover, before the cache
@@ -1416,6 +1473,12 @@ async def stream_pooled_media(
                         return data
                     finally:
                         await iterator.aclose()
+                except ReassignMediaRead:
+                    # The iterator has closed before this lease is released. Keep
+                    # useful work on a slow healthy bot eligible for other reads.
+                    previous = account
+                    if attempt != 0:
+                        raise
                 except (FloodWaitError, FloodPremiumWaitError) as error:
                     await pool.defer_client(
                         account.name, time.time() + max(1, error.seconds)
@@ -1434,8 +1497,6 @@ async def stream_pooled_media(
         raise OSError("No Telegram account could read this block")
 
     async def remote(index):
-        from tgdrive.media.media_scheduler import media_priority
-
         block = _block_identity(message, index)
         scope = cache._fill_priorities.get(block[0]) if block is not None else None
         token = media_priority.set(scope or ("preload" if background else "demand"))
@@ -1443,6 +1504,13 @@ async def stream_pooled_media(
             return await fetch_remote(index)
         finally:
             media_priority.reset(token)
+
+    def priority_for(index) -> MediaPriority:
+        if transfer == "playback" and index <= head_index + 1:
+            return "playback"
+        if transfer and index > head_index:
+            return "ahead"
+        return "demand"
 
     async def read(index):
         block = _block_identity(message, index)
@@ -1455,6 +1523,7 @@ async def stream_pooled_media(
             lambda: remote(index),
             background=background,
             retain_hot=retain_hot,
+            priority=priority_for(index),
         )
 
     end = offset + limit
@@ -1462,6 +1531,10 @@ async def stream_pooled_media(
     maximum = (
         cache.policy.background_blocks if background else cache.policy.read_ahead_blocks
     )
+    # Long attachments can occupy the healthy account lanes on a large pool.
+    # Keep ordinary preview speculation bounded independently of pool size.
+    if transfer != "download":
+        maximum = min(maximum, 64)
     controller = _AdaptiveReadAhead(
         min(
             maximum,
@@ -1469,11 +1542,25 @@ async def stream_pooled_media(
             limit,
         )
     )
+    controller.bulk = transfer == "download" and not background
+    head_index = offset
     frames = _StreamFrames(scratch, read)
 
     def refill(index):
-        quota = min(
-            controller.window, max(1, scratch.limit // max(1, cache._active_streams))
+        share = max(1, scratch.limit // max(1, cache._active_streams))
+        frames.wanted = min(controller.window, end - index)
+        quota = min(frames.wanted, share)
+        if transfer and not background and frames.wanted > share:
+            reserved = sum(
+                min(share, peer.wanted)
+                for peer in scratch._streams
+                if peer is not frames
+            )
+            quota = min(frames.wanted, max(share, scratch.limit - reserved))
+        frames.origin_limited_by_scratch = (
+            controller.bulk
+            and controller._latency is not None
+            and frames.wanted > quota
         )
         frames.trim(index, quota)
         for following in range(index + 1, min(end, index + quota)):
@@ -1491,27 +1578,50 @@ async def stream_pooled_media(
 
     def idle(index):
         controller.idle()
+        frames.wanted = 1
+        frames.origin_limited_by_scratch = False
         frames.trim(index, 1)
 
     try:
         for index in range(offset, end):
+            head_index = index
+            if transfer and not background:
+                # A speculative/shared fill may already be queued at either
+                # admission gate. Wake it as the next two blocks become urgent.
+                near = 2 if transfer == "playback" else 1
+                for upcoming in range(index, min(index + near, end)):
+                    pending = frames.frames.get(upcoming)
+                    if pending is not None and not pending.task.done():
+                        key, _ = _block_identity(message, upcoming)
+                        scope = cache._fill_priorities.get(key)
+                        if scope is not None:
+                            await scope.promote(priority_for(upcoming))
             frame = frames.frames.get(index)
+            was_ahead = frame is not None
             if frame is None:
                 try:
                     # Stalled consumers each pin one yielded head; never wait on
                     # them forever. A retryable 503 or aborted range lets the
                     # client resume once memory frees up.
                     async with asyncio.timeout(HEAD_WAIT_SECONDS):
-                        await scratch.acquire(foreground=not background)
+                        await scratch.acquire(
+                            foreground=not background, playback=transfer == "playback"
+                        )
                 except TimeoutError:
-                    from tgdrive.telegram.client_pool import MediaQueueFull
-
                     raise MediaQueueFull(retry_after=2) from None
                 frame = frames.schedule(index, head=True)
             else:
                 frame.head = True
             refill(index)
-            data = await frame.task
+            try:
+                data = await frame.task
+            except MediaQueueFull:
+                if not was_ahead or background:
+                    raise
+                # An ahead read may have been declined to preserve queue space.
+                # Retry this offset once as the awaited head, in the same frame.
+                frame.task = asyncio.create_task(read(index))
+                data = await frame.task
             if authorize is not None:
                 await authorize()
             idle_timer = asyncio.get_running_loop().call_later(

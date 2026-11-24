@@ -14,6 +14,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from tgdrive.media.media_scheduler import (
+    MediaAdmissionTurns,
     MediaPriority,
     MediaPriorityScope,
     current_fair_group,
@@ -219,6 +220,7 @@ class ClientPool:
         self._origin_waiters: list[dict[str, Any]] = []
         self._origin_active: dict[object, dict[str, Any]] = {}
         self._origin_sequence = 0
+        self._origin_turns = MediaAdmissionTurns()
         self._origin_last_group = object()
         self._origin_durations: deque[float] = deque(maxlen=128)
         self._load_history: deque[dict[str, Any]] = deque(maxlen=120)
@@ -631,6 +633,7 @@ class ClientPool:
         prefer_premium: bool = False,
         client_name: str | None = None,
         preferred_download_client: TelegramClientLifecycle | None = None,
+        previous_download_client: TelegramClientLifecycle | None = None,
         media: bool = False,
         allow_users: bool = False,
         download: bool = False,
@@ -648,7 +651,12 @@ class ClientPool:
         premium-required documents remain restricted to user accounts.
         """
 
-        if effective_priority(priority) not in ("demand", "preload"):
+        if effective_priority(priority) not in (
+            "playback",
+            "demand",
+            "ahead",
+            "preload",
+        ):
             raise ValueError("Unknown media priority")
         if premium_required is not None:
             premium = premium_required
@@ -658,7 +666,11 @@ class ClientPool:
             ticket = object()
             unsubscribe = None
             if media or download:
-                if len(self._origin_waiters) >= self._max_media_queue:
+                queue_limit = self._max_media_queue
+                if effective_priority(priority) in ("ahead", "preload"):
+                    # Leave admission space for new seeks and awaited heads.
+                    queue_limit = max(1, queue_limit - min(8, (queue_limit + 7) // 8))
+                if len(self._origin_waiters) >= queue_limit:
                     mean = (
                         sum(self._origin_durations) / len(self._origin_durations)
                         if self._origin_durations
@@ -684,7 +696,7 @@ class ClientPool:
                     def promote_waiter():
                         # Its demand arrival is now, not when background work
                         # originally queued. Keep existing demand ahead of it.
-                        own["priority"] = "demand"
+                        own["priority"] = priority.priority
                         self._origin_waiters.remove(own)
                         self._origin_waiters.append(own)
 
@@ -775,55 +787,9 @@ class ClientPool:
                         )
                     now = time.time()
 
-                    def earlier_origin_for(candidate: _ClientSlot, now=now) -> bool:
-                        ready = []
-                        for queued in self._origin_waiters:
-                            if queued["kind"] not in (None, candidate.kind) or (
-                                queued["name"] is not None
-                                and queued["name"] != candidate.name
-                            ):
-                                continue
-                            # Preserve ready compatible lanes and account cooldowns.
-                            if queued["download"]:
-                                compatible = (
-                                    candidate.download_active < self._media_per_bot
-                                    and candidate.cooldown_until <= now
-                                )
-                            else:
-                                compatible = (
-                                    candidate.media_active
-                                    < (
-                                        self._uploads_per_bot
-                                        if candidate.kind == "bot"
-                                        else 1
-                                    )
-                                    and max(
-                                        candidate.cooldown_until,
-                                        self._channel_cooldown_until,
-                                    )
-                                    <= now
-                                )
-                            if compatible:
-                                ready.append(queued)
-                        if not ready:
-                            return False
-                        ranks = fair_group_ranks(
-                            (row["fair_group"] for row in ready),
-                            self._origin_last_group,
-                        )
-                        active = Counter(
-                            row["fair_group"] for row in self._origin_active.values()
-                        )
-                        first = min(
-                            ready,
-                            key=lambda row: (
-                                row["priority"] == "preload",
-                                active[row["fair_group"]],
-                                ranks[row["fair_group"]],
-                            ),
-                        )
-                        return first["ticket"] is not ticket
-
+                    earlier_origin_for = (
+                        self._origin_turn(ticket, now) if media or download else None
+                    )
                     eligible = [
                         slot
                         for slot in candidates
@@ -833,7 +799,10 @@ class ClientPool:
                             or (
                                 slot.media_active + slot.download_active
                                 < self._media_per_bot
-                                and not earlier_origin_for(slot)
+                                and (
+                                    earlier_origin_for is None
+                                    or not earlier_origin_for(slot)
+                                )
                             )
                         )
                         and (
@@ -853,20 +822,19 @@ class ClientPool:
                         )
                     ]
                     if eligible:
-                        slot = min(
+                        if previous_download_client is not None:
+                            eligible = [
+                                slot
+                                for slot in eligible
+                                if slot.client is not previous_download_client
+                            ] or eligible
+                        slot = self._select_slot(
                             eligible,
-                            key=lambda item: (
-                                prefer_premium and item.kind != "user",
-                                item.download_active
-                                if download
-                                else item.media_active
-                                if media
-                                else item.active,
-                                download
-                                and item.client is not preferred_download_client,
-                                item.selected_at,
-                                item.index,
-                            ),
+                            download,
+                            media,
+                            priority,
+                            prefer_premium,
+                            preferred_download_client,
                         )
                         self._selection_counter += 1
                         slot.selected_at = self._selection_counter
@@ -890,6 +858,7 @@ class ClientPool:
                                 operation="download" if download else "upload",
                                 started_at=time.monotonic(),
                             )
+                            self._origin_turns.admitted(own["priority"])
                             self._origin_last_group = own["fair_group"]
                             if download and own["fair_group"] is None:
                                 # Rotate read-ahead behind other waiting requests.
@@ -957,9 +926,116 @@ class ClientPool:
                 self._origin_durations.append(time.monotonic() - started)
             await asyncio.shield(self._notify_leases())
 
+    def _origin_turn(self, ticket, now):
+        """Cache the winner per interchangeable lane for this admission attempt."""
+        active_groups = Counter(
+            row["fair_group"] for row in self._origin_active.values()
+        )
+        named_waiters = any(row["name"] for row in self._origin_waiters)
+        first_by_lane = {}
+
+        def earlier_origin_for(candidate: _ClientSlot) -> bool:
+            if len(self._origin_waiters) <= 1:
+                return False
+            can_read = candidate.cooldown_until <= now
+            can_upload = (
+                candidate.media_active
+                < (self._uploads_per_bot if candidate.kind == "bot" else 1)
+                and max(candidate.cooldown_until, self._channel_cooldown_until) <= now
+            )
+            lane = (
+                candidate.kind,
+                candidate.name if named_waiters else None,
+                can_read,
+                can_upload,
+            )
+            if lane in first_by_lane:
+                return first_by_lane[lane] is not ticket
+            ready = [
+                row
+                for row in self._origin_waiters
+                if row["kind"] in (None, candidate.kind)
+                and row["name"] in (None, candidate.name)
+                and (can_read if row["download"] else can_upload)
+            ]
+            if not ready:
+                return False
+            ranks = fair_group_ranks(
+                (row["fair_group"] for row in ready),
+                self._origin_last_group,
+            )
+            first = min(
+                ready,
+                key=lambda row: (
+                    self._origin_turns.rank(row["priority"]),
+                    active_groups[row["fair_group"]],
+                    ranks[row["fair_group"]],
+                ),
+            )
+            first_by_lane[lane] = first["ticket"]
+            return first["ticket"] is not ticket
+
+        return earlier_origin_for
+
+    @staticmethod
+    def _select_slot(
+        eligible, download, media, priority, prefer_premium, preferred_download_client
+    ):
+        # Recent native half-block times exclude scheduler waits and
+        # client bandwidth pacing. Unmeasured or stale lanes get a
+        # probe. Prefer proven lanes when a player needs bytes now.
+        samples = {}
+        if download:
+            stamp = time.monotonic()
+            for item in eligible:
+                sample = getattr(item.client, "download_part_sample", None)
+                if sample is not None and stamp - sample[0] < 60:
+                    samples[item.index, item.kind] = sample[1]
+        best = min(samples.values(), default=1.0)
+        probe = best * (
+            3 if best > 0.01 and effective_priority(priority) == "playback" else 1
+        )
+
+        def load_score(item):
+            if download:
+                latency = samples.get((item.index, item.kind), probe)
+                return max(best, latency) * (1 + item.download_active)
+            return item.media_active if media else item.active
+
+        return min(
+            eligible,
+            key=lambda item: (
+                prefer_premium and item.kind != "user",
+                load_score(item),
+                download and item.client is not preferred_download_client,
+                item.selected_at,
+                item.index,
+            ),
+        )
+
     async def _notify_leases(self) -> None:
         async with self._leases:
             self._leases.notify_all()
+
+    def has_fast_download_alternative(self, current, elapsed: float) -> bool:
+        """Check for a spare proven lane without taking a lease or bypassing admission."""
+        now, wall = time.monotonic(), time.time()
+        for slot in self._slots:
+            if (
+                slot.client is current
+                or not slot.started
+                or not self._slot_is_healthy(slot)
+                or slot.cooldown_until > wall
+                or slot.download_active + slot.media_active >= self._media_per_bot
+            ):
+                continue
+            scheduler = getattr(slot.client, "_media_scheduler", None)
+            if scheduler is not None and not scheduler.has_spare_capacity(now):
+                continue
+            sample = getattr(slot.client, "download_part_sample", None)
+            if sample is not None and now - sample[0] < 60 and 5 * sample[1] < elapsed:
+                return True
+        return False
 
     async def download_capacity(self) -> int:
         """Potential read windows; upload/read admission shares the media ceiling."""
@@ -978,7 +1054,7 @@ class ClientPool:
         return sorted(
             self._origin_waiters,
             key=lambda row: (
-                row["priority"] == "preload",
+                self._origin_turns.rank(row["priority"]),
                 active[row["fair_group"]],
                 ranks[row["fair_group"]],
             ),

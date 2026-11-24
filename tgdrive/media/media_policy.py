@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 MIB = 1024**2
 STREAM_MEMORY_BASELINE_BYTES = 32 * MIB
 AUTO_STREAM_MEMORY_LIMIT_BYTES = 256 * MIB
+MAX_READ_AHEAD_BLOCKS = 160
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +24,7 @@ class MediaCachePolicy:
     protected_fraction: float = 0.75
     max_background_jobs: int = 2
     background_blocks: int = 2
-    read_ahead_blocks: int = 32
+    read_ahead_blocks: int = MAX_READ_AHEAD_BLOCKS
     scratch_max_bytes: int = 32 * MIB
     auto_preload: bool = False
 
@@ -45,7 +46,7 @@ class MediaCachePolicy:
         for name, ceiling in (
             ("max_background_jobs", 8),
             ("background_blocks", 8),
-            ("read_ahead_blocks", 64),
+            ("read_ahead_blocks", MAX_READ_AHEAD_BLOCKS),
         ):
             value = getattr(self, name)
             if type(value) is not int or not 1 <= value <= ceiling:

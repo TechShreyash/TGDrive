@@ -235,6 +235,21 @@ def _not_modified(request, etag):
     )
 
 
+def _response_transfer(file_name, mime_type, *, download, preview):
+    # The player also handles these containers on systems whose MIME database
+    # classifies them as text, a model, or an unknown binary attachment.
+    player_container = preview and file_name.lower().endswith(
+        (".ts", ".mts", ".m2ts", ".vob", ".weba", ".asf")
+    )
+    if not download and (
+        mime_type.startswith(("audio/", "video/")) or player_container
+    ):
+        return "playback"
+    if download or not preview:
+        return "download"
+    return None
+
+
 def _is_playback_request(request, mime_type, *, download=False, preview=False):
     """Only explicit player requests may warm beyond their HTTP byte range."""
     return (
@@ -432,6 +447,10 @@ async def stream_telegram_file(
     if authorize is not None:
         await authorize()
 
+    mime_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+    transfer = _response_transfer(
+        file_name, mime_type, download=download, preview=preview
+    )
     lease: AbstractAsyncContextManager[Any] = pool.lease(
         prefer_premium=True, respect_cooldown=True
     )
@@ -457,7 +476,12 @@ async def stream_telegram_file(
     try:
 
         async def fetch_media() -> tuple[Any, Any]:
-            message = await get_message(client, channel_id, message_id)
+            message = await get_message(
+                client,
+                channel_id,
+                message_id,
+                playback=request.method == "GET" and transfer == "playback",
+            )
             media = _media_from_message(message)
             if message is None or getattr(message, "empty", False) or media is None:
                 raise TelegramFileNotFound(
@@ -549,7 +573,6 @@ async def stream_telegram_file(
             )
 
         plan = plan_telegram_chunks(byte_range)
-        mime_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
         selected_mime = getattr(media, "mime_type", None)
         if (
             quality not in (None, "", "original")
@@ -558,6 +581,9 @@ async def stream_telegram_file(
             and re.fullmatch(r"(video|audio|image)/[a-zA-Z0-9.+-]+", selected_mime)
         ):
             mime_type = selected_mime
+            transfer = _response_transfer(
+                file_name, mime_type, download=download, preview=preview
+            )
         if (
             preview
             and not download
@@ -600,6 +626,7 @@ async def stream_telegram_file(
                 channel=channel_id,
                 limit=plan.part_count,
                 offset=plan.offset // plan.chunk_size,
+                transfer=transfer,
                 authorize=authorize,
                 request_id=request_id,
             )
