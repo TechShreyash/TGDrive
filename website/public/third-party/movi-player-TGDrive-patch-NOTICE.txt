@@ -68,3 +68,7 @@ cache without repositioning its active window. Source identity and complete byte
 coverage are required before reuse. New image operations have a bounded allowance
 for thumbnail range requests, including initialization and retries; cached reads
 remain available after the allowance is exhausted. The decoder WASM is unchanged.
+
+The November 2026 build overlay serializes operations on a single suspended
+demuxer, forwards native seek probe hints to the HTTP source and retains the
+muxed audio seek floor until the first eligible packet.

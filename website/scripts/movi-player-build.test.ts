@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { normalizePath } from "vite";
 import { moviPlayerBuild } from "./movi-player-build.ts";
 import { patchMoviSource, VERSION } from "./patch-movi-player.js";
+import { patchMoviSeeking } from "./movi-player-seeking.ts";
 import { patchDurationRescan } from "./movi-player-duration.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -26,7 +27,7 @@ const entry = normalizePath(
 );
 const installed = readFileSync(entry, "utf8");
 const historical = patchMoviSource(installed, VERSION);
-const patched = patchDurationRescan(historical)
+const patched = patchMoviSeeking(patchDurationRescan(historical))
     .replaceAll(
         "this.firstBufferMediaTime + Math.max(0, A2 * this._playbackRate)",
         "this.firstBufferMediaTime + Math.max(0, A2 * this._playbackRate - (this.preservePitch && this.signalsmith && this.signalsmithSampleRate > 0 && Math.abs(this._playbackRate - 1) > 0.01 ? (this.signalsmith.mod._movi_stretch_input_latency(this.signalsmith.handle) + this._playbackRate * this.signalsmith.mod._movi_stretch_output_latency(this.signalsmith.handle)) / this.signalsmithSampleRate : 0))",

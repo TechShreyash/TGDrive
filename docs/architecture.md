@@ -741,8 +741,9 @@ access to expired/deleted files.
 Video posters use a separate `CACHE_DIR/posters` cache with the same
 **128 MiB / 4,096-entry** bounds and free-space floor. A bounded RAM cache
 coalesces poster requests; each response rechecks current file/share access and
-verifies the saved image's size and SHA-256. A fresh player waits at most ten
-seconds for its optional poster lookup before trying the representative frame.
+verifies the saved image's size and SHA-256. A fresh player gives its optional poster lookup 350 ms. The fallback decodes
+the opening frame for large or unknown-size media. A file up to 4 MiB can
+use a midpoint frame within the initial range.
 Poster publication follows the original parts, with a **15-second attempt
 window**. Transfer byte progress counts the original file, so it can remain at
 100% while poster publication and metadata protection finish. A send that may

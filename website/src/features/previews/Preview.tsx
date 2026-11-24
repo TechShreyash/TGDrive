@@ -943,6 +943,7 @@ export default function Preview({
                                     }
                                     src={src}
                                     posterUrl={videoPosterUrl(path, auth)}
+                                    size={item.size ?? 0}
                                     name={item.name}
                                     playback={playback}
                                     qualityControl={

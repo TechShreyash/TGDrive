@@ -284,9 +284,9 @@ but saving progress alone does not trigger a backup or advance its revision.
 Older direct `/file` stream links use browser-native handling; shared viewer
 links use TGDrive's player. [PDF resume and reader limits](reading.md).
 
-Videos use a sharp saved poster before playback when available. Older
-files or unavailable posters use a representative frame from halfway through
-the video; loading can take time and the picture can still be black.
+Videos use a saved poster when available. Without one, videos up to 4 MiB
+can show a frame from the midpoint. Larger videos show the opening frame so
+playback can use the same bytes.
 [Poster storage, fallback and limits](thumbnails.md#video-posters).
 
 Loading/buffering can reflect Telegram waits, network speed or device decoding.

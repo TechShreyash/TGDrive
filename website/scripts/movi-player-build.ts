@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizePath, type Plugin } from "vite";
 import { patchMoviSource, VERSION } from "./patch-movi-player.js";
+import { patchMoviSeeking } from "./movi-player-seeking.ts";
 import { patchDurationRescan } from "./movi-player-duration.ts";
 
 const SLIM_MODULE = "movi-player/element/slim";
@@ -31,6 +32,10 @@ export function moviPlayerBuild() {
             return { optimizeDeps: { exclude: [SLIM_MODULE] } };
         },
         resolveId(id: string) {
+            if (id === "virtual:tgdrive-movi-demux-queue")
+                return fileURLToPath(
+                    new URL("./movi-demux-queue.js", import.meta.url),
+                );
             if (id === SLIM_MODULE) return entry;
             return null;
         },
@@ -58,7 +63,9 @@ export function moviPlayerBuild() {
                 throw new Error(
                     "The installed Movi slim source differs from the reviewed package. Run npm ci; review any viewer upgrade before building.",
                 );
-            const patched = patchDurationRescan(patchMoviSource(code, VERSION));
+            const patched = patchMoviSeeking(
+                patchDurationRescan(patchMoviSource(code, VERSION)),
+            );
             // A sparse picture can be decoded ahead of the playback clock.
             const audioSchedule =
                 "this.audioRenderer.getMaxScheduledMediaTime() < I3 - 0.1";

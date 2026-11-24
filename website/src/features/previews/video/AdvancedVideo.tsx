@@ -445,6 +445,7 @@ export default function AdvancedVideo({
     progressMode,
     src,
     posterUrl,
+    size,
     name,
     playback,
     qualityControl,
@@ -453,6 +454,7 @@ export default function AdvancedVideo({
     progressMode: VideoProgressMode | null;
     src: string;
     posterUrl: string;
+    size: number;
     name: string;
     playback: { current: { time: number; playing: boolean } | null };
     qualityControl?: VideoQualityControl;
@@ -1348,7 +1350,9 @@ export default function AdvancedVideo({
                     posterSource = URL.createObjectURL(poster);
                     player.setAttribute("poster", posterSource);
                     player.setAttribute("posterfit", "contain");
-                } else {
+                } else if (size > 0 && size <= 4 * 1024 * 1024) {
+                    // A small file fits the opening range. A remote midpoint
+                    // outside it can occupy the demuxer while the viewer plays.
                     representativePoster = true;
                     player.setAttribute("postertime", "50%");
                 }
@@ -1681,7 +1685,7 @@ export default function AdvancedVideo({
             }
             if (posterSource) URL.revokeObjectURL(posterSource);
         };
-    }, [fileId, src, posterUrl, name, playback, attempt, compatible]);
+    }, [fileId, src, posterUrl, size, name, playback, attempt, compatible]);
     useLayoutEffect(
         () => () => {
             // Capture before custom-element disconnection resets its clock to zero.

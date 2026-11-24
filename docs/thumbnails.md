@@ -48,8 +48,9 @@ requires fetching the saved JPEG again, not decoding the movie again.
 Restore poster-aware backups with a TGDrive version that supports posters;
 older versions can omit or reject these optional references.
 
-The player opens paused with the stored poster. Missing/unusable posters fall
-back to a frame halfway through the video, keeping the displayed time at zero;
+The player opens paused with the stored poster. When it is unavailable, files
+up to 4 MiB use a midpoint frame. Larger or unknown-size files show the
+opening frame. The playhead stays at zero.
 **Play** resumes a known saved position; the timeline lets you return to the beginning.
 Opening the preview does not autoplay.
 Seeking and decoding can take time, and the selected picture can still be black.
