@@ -190,6 +190,7 @@ function getLocation() {
             ? section!
             : "cache",
         previewId: url.searchParams.get("preview") || "",
+        returningToFolder: false,
         highlightId:
             typeof window.history.state?.tgdriveHighlight === "string"
                 ? window.history.state.tgdriveHighlight
@@ -798,7 +799,18 @@ export default function App() {
                     ? window.history.state.tgdriveSearchOrigin
                     : null;
             setSearchOffset(searchHistoryOffset());
-            setLocation(getLocation());
+            const next = getLocation();
+            const folder = window.history.state?.tgdriveReturnFolder;
+            setLocation((previous) =>
+                typeof folder === "string" &&
+                previous.view === "files" &&
+                !previous.previewId &&
+                previous.auth === next.auth &&
+                previous.path ===
+                    (next.path.startsWith("/share_") ? "/share_" : "/") + folder
+                    ? { ...next, highlightId: folder, returningToFolder: true }
+                    : next,
+            );
             setDialog(null);
             setNewOpen(false);
             setMobileNav(false);
@@ -1465,8 +1477,19 @@ export default function App() {
             notify(errorMessage(cause), true);
         }
     };
+    const finishFolderReturn = useCallback(() => {
+        setLocation((current) =>
+            current.returningToFolder
+                ? { ...current, highlightId: "", returningToFolder: false }
+                : current,
+        );
+    }, []);
     const open = (item: DriveItem) => {
         if (item.type === "folder") {
+            window.history.replaceState(
+                { ...window.history.state, tgdriveReturnFolder: item.id },
+                "",
+            );
             navigate(
                 (isPublic ? "/share_" : "/") + item.id,
                 "files",
@@ -2347,6 +2370,11 @@ export default function App() {
                             listingKey={listingKey}
                             shareRefreshKey={String(metadataRefresh)}
                             highlightId={location.highlightId}
+                            onReturnFocus={
+                                location.returningToFolder
+                                    ? finishFolderReturn
+                                    : undefined
+                            }
                             loading={
                                 !changingType && (loading || listingPending)
                             }

@@ -62,7 +62,11 @@ export default function SortMenu({
     if (fixedSort && !combined) return null;
 
     const label = SORT_OPTIONS.find((option) => option.value === value)!.label;
-    const menuLabel = combined ? "View and sort" : "Sort Files";
+    const menuLabel = fixedSort
+        ? "File view"
+        : combined
+          ? "View and sort"
+          : "Sort Files";
     const ViewIcon = view === "grid" ? LayoutGrid : List;
     const orderLabel = order === "asc" ? "Ascending" : "Descending";
     const viewLabel = view === "grid" ? "Grid view" : "List view";

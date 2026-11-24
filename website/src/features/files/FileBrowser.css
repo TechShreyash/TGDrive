@@ -1127,6 +1127,12 @@
     --badge-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1'/%3E%3C/svg%3E");
 }
 
+@media (max-width: 360px) {
+    .file-table:not(.file-grid) .file-status-label::before {
+        display: none;
+    }
+}
+
 /* Selection checkbox sits top-left on the tile. */
 .file-grid .file-selection-slot {
     display: none;

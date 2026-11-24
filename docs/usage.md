@@ -120,6 +120,7 @@ to configure the two directions independently.
 | Action | How |
 | --- | --- |
 | Open | Double-click with a mouse, press Enter on a focused name, or tap on touch |
+| Return to the parent listing | Use browser Back after opening a folder to return to its row, including on later pages. |
 | Select an item | Click with a mouse or touch and hold. On a public link, a mouse click focuses the name. |
 | Select several items | Click an item, then Shift-click another to select the range on the current page. Ctrl-click (Command-click on Mac) adds or removes an item. You can also choose **Select** or touch and hold an item, then use the rows or checkboxes. **Done** or Escape clears selection. |
 | Create a folder | **New → New folder** |

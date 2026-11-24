@@ -12,7 +12,7 @@ if os.environ.get("TGDRIVE_E2E") != "1":
     pytest.skip("Set TGDRIVE_E2E=1 to run Chromium checks", allow_module_level=True)
 
 import tests.browser.test_browser_e2e as fixtures
-from tests.browser.node_pages import NODES, fetch_with_rows
+from tests.browser.node_pages import NODES, fetch_with_rows, is_listing
 from tests.browser.test_browser_e2e import ARTIFACTS, expect, login
 
 browser = fixtures.browser
@@ -369,3 +369,35 @@ def test_owner_resource_limits_are_automatic_and_rejected(server, desktop):
         page.request.get(server.url + "/api/v1/settings/performance").json()["revision"]
         == initial["revision"]
     )
+
+
+@pytest.mark.parametrize("width", [1440, 390])
+def test_back_returns_focus_to_opened_folder_on_its_page(server, desktop, width):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": 844})
+    folders = [
+        {"id": f"folder-{i}", "name": f"Folder {i:03}", "type": "folder", "path": "/"}
+        for i in range(145)
+    ]
+
+    def listing(route):
+        if not is_listing(route.request, "/"):
+            route.continue_()
+            return
+        response, payload = fetch_with_rows(route, folders)
+        route.fulfill(response=response, json=payload)
+
+    page.route(NODES, listing)
+    login(page, server.url)
+    page.get_by_role("button", name="Next Page").click()
+    folder = page.get_by_role("button", name="Preview samples", exact=True)
+    for _ in range(2):
+        folder.press("Enter")
+        expect(
+            page.get_by_role("heading", name="Preview samples", exact=True)
+        ).to_be_visible()
+        page.go_back()
+        expect(folder).to_be_focused()
+        expect(folder).to_be_in_viewport()
+        expect(page.locator(".file-row.selected")).to_have_count(0)
+        expect(page.get_by_role("button", name="Select", exact=True)).to_be_visible()

@@ -112,8 +112,11 @@ def test_recent_view_controls_stay_at_end_of_toolbar(server, desktop):
             page.screenshot(path=ARTIFACTS / "recent-desktop.png")
 
     page.set_viewport_size({"width": 390, "height": 844})
-    compact_view = toolbar.get_by_role("button", name="View and sort", exact=True)
+    compact_view = toolbar.get_by_role("button", name="File view", exact=True)
     compact_view.click()
+    expect(
+        page.get_by_role("menu", name="File view").get_by_role("menuitemradio")
+    ).to_have_count(2)
     page.get_by_role("menuitemradio", name="List view", exact=True).click()
     expect(page.locator("tr.file-row").first).to_be_visible()
     expect(select).to_be_visible()

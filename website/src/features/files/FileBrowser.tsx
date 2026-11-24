@@ -281,6 +281,7 @@ export default function FileBrowser({
     listingKey,
     shareRefreshKey,
     highlightId = "",
+    onReturnFocus,
     loading,
     typePending = false,
     staleTypeRows = false,
@@ -317,6 +318,7 @@ export default function FileBrowser({
     listingKey: string;
     shareRefreshKey: string;
     highlightId?: string;
+    onReturnFocus?: () => void;
     loading: boolean;
     typePending?: boolean;
     staleTypeRows?: boolean;
@@ -582,7 +584,11 @@ export default function FileBrowser({
     }, [page, listingKey, layout]);
     const highlighted = useRef("");
     useEffect(() => {
-        if (loading || !highlightId) return;
+        if (!highlightId) {
+            highlighted.current = "";
+            return;
+        }
+        if (loading) return;
         const target = JSON.stringify([
             listingKey,
             highlightId,
@@ -595,20 +601,28 @@ export default function FileBrowser({
             (item) => item?.id === highlightId,
         );
         if (index < 0) return;
-        setPage(Math.floor(index / 100));
-        setSelected(new Set([highlightId]));
-        setSelectionMode(null);
-        let frame = requestAnimationFrame(() => {
-            frame = requestAnimationFrame(() => {
-                highlighted.current = target;
-                const row = document.querySelector<HTMLElement>(
-                    '[data-item-id="' + CSS.escape(highlightId) + '"]',
-                );
-                row?.scrollIntoView({ block: "center" });
-                row?.querySelector<HTMLButtonElement>(
-                    ".item-name-button",
-                )?.focus({ preventScroll: true });
+        const targetPage = Math.floor(index / 100);
+        if (page !== targetPage) {
+            setPage(targetPage);
+            return;
+        }
+        if (!onReturnFocus) {
+            setSelected(new Set([highlightId]));
+            setSelectionMode(null);
+        }
+        const frame = requestAnimationFrame(() => {
+            const row = document.querySelector<HTMLElement>(
+                '[data-item-id="' + CSS.escape(highlightId) + '"]',
+            );
+            if (!row) return;
+            highlighted.current = target;
+            row.scrollIntoView({
+                block: onReturnFocus ? "nearest" : "center",
             });
+            row.querySelector<HTMLButtonElement>(".item-name-button")?.focus({
+                preventScroll: true,
+            });
+            onReturnFocus?.();
         });
         return () => cancelAnimationFrame(frame);
     }, [
@@ -616,6 +630,8 @@ export default function FileBrowser({
         paging?.rows,
         listingKey,
         highlightId,
+        page,
+        onReturnFocus,
         loading,
         sort,
         order,
