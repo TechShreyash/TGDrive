@@ -1382,7 +1382,7 @@ async def seed_pdf_features(request: Request):
 
 
 def seed_reading_samples(target):
-    from tests.support.book_samples import cbr, cbz, epub, manga_epub
+    from tests.support.book_samples import cbr, cbz, epub
 
     if hasattr(target, "reading_path"):
         return target.reading_path
@@ -1393,7 +1393,6 @@ def seed_reading_samples(target):
             "The little journey.epub": epub(unsafe=True),
             "Sample comic.cbz": cbz(),
             "Sample manga.cbr": cbr(),
-            "Image-based manga.epub": manga_epub(),
         }.items(),
         980,
     ):
@@ -1444,12 +1443,35 @@ async def seed_zip(request: Request):
     return {"path": runtime.preview_path + "/" + item["id"]}
 
 
-@app.post("/__test__/office")
-async def seed_office(request: Request):
-    from tests.media.test_office_preview import office_samples
-
+@app.post("/__test__/document-samples")
+async def seed_document_samples(request: Request):
     _control(request)
-    for message_id, (name, content) in enumerate(office_samples().items(), 980):
+    samples = {
+        "Read me.md": (
+            b"# Local setup\n\nUse **Docker** to start TGDrive.\n\n"
+            b"- Start the server\n- Open My Files\n\n"
+            b"![External image](https://example.invalid/image.png)\n\n"
+            b"<script>externalScript()</script>\n"
+        ),
+        **{
+            f"Sample.{suffix}": f"Original {suffix} bytes".encode()
+            for suffix in (
+                "doc",
+                "docx",
+                "odt",
+                "ppt",
+                "pptx",
+                "odp",
+                "xls",
+                "xlsx",
+                "ods",
+                "epub",
+                "cbz",
+                "cbr",
+            )
+        },
+    }
+    for message_id, (name, content) in enumerate(samples.items(), 980):
         runtime.payloads[message_id] = content
         runtime.store.add_file(runtime.preview_path, name, message_id, len(content))
     return {"path": runtime.preview_path}
@@ -1470,45 +1492,6 @@ async def seed_move_paths(request: Request):
     duplicate = runtime.store.create_folder(runtime.private_path, "Planning")
     duplicate_path = f"{runtime.private_path}/{duplicate['id']}"
     return {"path": leaf_path, "duplicate": duplicate_path}
-
-
-@app.post("/__test__/books/large-page")
-async def seed_large_book_page(request: Request):
-    """Opt-in encoded-page limit fixture; original PNG stays byte-for-byte intact."""
-    _control(request)
-    import struct
-    import zlib
-    from zipfile import ZipFile
-
-    from tests.support.book_samples import png
-
-    small = png(2)
-    # A legal private ancillary chunk keeps decoded pixels small while exercising
-    # a genuinely large original PNG through parsing, HTTP, CSP and image decode.
-    payload = b"p" * (39 * 1024**2)
-    chunk = b"tgDr" + payload
-    image = (
-        small[:-12]
-        + struct.pack(">I", len(payload))
-        + chunk
-        + struct.pack(">I", zlib.crc32(chunk))
-        + small[-12:]
-    )
-    output = io.BytesIO()
-    with ZipFile(output, "w") as archive:
-        archive.writestr("unused.bin", b"x" * (48 * 1024**2))
-        archive.writestr("page.png", image)
-    data = output.getvalue()
-    folder = seed_reading_samples(runtime)
-    runtime.payloads[985] = data
-    item = runtime.store.add_file(folder, "Large original page.cbz", 985, len(data))
-    return {
-        "path": folder,
-        "file": folder + "/" + item["id"],
-        "image_size": len(image),
-        "image_sha256": hashlib.sha256(image).hexdigest(),
-        "size": len(data),
-    }
 
 
 async def seed_thumbnail_samples(target):

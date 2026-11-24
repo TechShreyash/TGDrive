@@ -47,7 +47,7 @@ def main():
             original(program, arguments, environment)
 
         os.execvpe = trace_before_exec
-    if module == "tgdrive.media.book_worker":
+    if module == "tgdrive.media.archive_preview_worker":
         print_result = builtins.print
 
         def trace_before_reply(*values, **options):
@@ -55,7 +55,7 @@ def main():
             if (
                 values
                 and isinstance(values[0], str)
-                and values[0].startswith(('{"result":', '{"image":', '{"error":'))
+                and values[0].startswith(('{"result":', '{"error":'))
             ):
                 flush()
             print_result(*values, **options)

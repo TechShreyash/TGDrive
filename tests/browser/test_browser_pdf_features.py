@@ -162,7 +162,6 @@ def test_preview_options_do_not_select_labels_and_file_text_remains_selectable(
     _, page = desktop
     page.set_viewport_size({"width": width, "height": height})
     page.add_init_script(f"localStorage.setItem('tgdrive.appearance', '{theme}')")
-    server.control("/office", method="POST")
     login(page, server.url)
     page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
     dialog = open_sample(page, "sample.pdf")
@@ -206,12 +205,6 @@ def test_preview_options_do_not_select_labels_and_file_text_remains_selectable(
     page.mouse.click(1, 1)
     page.keyboard.press("Escape")
     expect(dialog).not_to_be_visible()
-
-    word = open_sample(page, "Meeting.docx")
-    text = word.get_by_text("Review <draft>", exact=True)
-    expect(text).to_be_visible()
-    text.dblclick()
-    assert page.evaluate("getSelection().toString().trim().length") > 0
 
 
 @pytest.mark.parametrize("width", [1440, 390])

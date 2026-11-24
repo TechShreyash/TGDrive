@@ -15,7 +15,7 @@ from coverage import Coverage
 
 _WORKERS = frozenset(
     {
-        "tgdrive.media.book_worker",
+        "tgdrive.media.archive_preview_worker",
         "tgdrive.media.compatibility_worker",
         "tgdrive.media.thumbnail_worker",
         "tgdrive.transfers.archive_worker",

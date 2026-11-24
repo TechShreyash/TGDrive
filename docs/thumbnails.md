@@ -23,9 +23,7 @@ For a library, use [background rebuilding](#rebuild-existing-thumbnails).
 | JPEG, PNG, WebP, GIF, BMP, TIFF | Scaled image; one frame for animation |
 | MP4/M4V/MOV, MKV/WebM, AVI, WMV/ASF, MPEG | Frame between 40% and 60% of the duration, with first-frame fallback |
 | PDF | First page |
-| EPUB / CBZ / CBR | Declared EPUB raster cover or first image; first naturally ordered comic page |
 | MP3, FLAC, M4A, Ogg/Opus, WAV, AAC | Embedded artwork when available to the decoder; otherwise an icon |
-| DOCX/PPTX/XLSX, ODT/ODP/ODS | Embedded raster preview when present |
 | AVIF | Image when the installed decoder supports it |
 
 </details>

@@ -75,9 +75,15 @@ def test_zip_preview_share_is_scoped_and_revocable(server: Server, desktop, brow
         response = public.request.get(allowed)
         assert response.status == 200
         assert response.json()["kind"] == "archive"
+        conditional = {"If-None-Match": response.headers["etag"]}
+        assert public.request.get(allowed, headers=conditional).status == 304
         owner.request.delete(
             server.url + "/api/v1/shares", data={"share_id": share["id"]}
         )
-        assert public.request.get(allowed).status in (401, 403, 404)
+        assert public.request.get(allowed, headers=conditional).status in (
+            401,
+            403,
+            404,
+        )
     finally:
         public.close()

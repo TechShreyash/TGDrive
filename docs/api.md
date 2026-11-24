@@ -300,8 +300,8 @@ Access is **Owner** or **Share**; pass `path` and optional `auth` as for `/file`
 
 | Method and route | Purpose | Notes and errors |
 | --- | --- | --- |
-| `GET /api/v1/preview` | `kind`: `text`, `pdf`, `video`, `book`, `archive`, `office` or `unsupported` | Text is at most 256 KiB |
-| `GET /api/v1/books` | Book index, one chapter/page with `entry`, Office content, or ZIP contents | Office returns document text, worksheet cells, or slide text and embedded images. Slides set `truncated` when preview limits or unsupported images or embedded objects leave content out. The optional entry is a zero-based worksheet or slide index. ZIP returns `kind: archive` and entries with `name`, `directory`, uncompressed `size` and `encrypted`; ZIP entry extraction is not exposed here. [Reader limits](architecture.md#book-reader-internals) |
+| `GET /api/v1/preview` | `kind`: `text`, `pdf`, `video`, `archive` or `unsupported` | Text is at most 256 KiB |
+| `GET /api/v1/books` | ZIP contents | ZIP returns `kind: archive` and entries with `name`, `directory`, uncompressed `size` and `encrypted`. [Preview limits](architecture.md#pdf-and-zip-preview-internals) |
 | `GET /api/v1/media` | Original plus real stored variants | `/file?quality=<id>` picks one; unknown IDs `404` |
 | `GET /api/v1/playback/compatibility.m3u8` | Short-window compatible video manifest | Owner/share access; path and optional auth; resource limits can return 413, 422 or 503 |
 | `GET /api/v1/playback/segment.ts` | One H.264/AAC compatible segment | Use signed URLs from the manifest; authorization rechecked; changed file 409, invalid signature 403, out-of-range segment 416 |

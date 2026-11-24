@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from tests.media.test_pooled_media import account
-from tgdrive.media.books import read_range
+from tgdrive.media.file_range import read_range
 from tgdrive.media.media_reader import BLOCK
 from tgdrive.media.media_scheduler import effective_priority, media_priority
 from tgdrive.media.previews import lease_media
@@ -16,10 +16,10 @@ from tgdrive.telegram.client_pool import ClientPool
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("background", [False, True])
-async def test_cold_book_range_uses_single_account_slot_without_nested_reservation(
+async def test_cold_file_range_uses_single_account_slot_without_nested_reservation(
     tmp_path, background
 ):
-    payload = b"a" * BLOCK + b"book tail"
+    payload = b"a" * BLOCK + b"file tail"
     client = account("only-bot", payload)
     metadata = cast(AsyncMock, client.get_messages).side_effect
     priorities = []
@@ -59,7 +59,7 @@ async def test_cold_book_range_uses_single_account_slot_without_nested_reservati
     "error", [OSError("metadata failed"), asyncio.CancelledError()]
 )
 async def test_background_metadata_failure_releases_lease_and_priority(error):
-    client = account("only-bot", b"book")
+    client = account("only-bot", b"file")
 
     async def fail(*_args, **_kwargs):
         assert effective_priority(media_priority.get()) == "preload"

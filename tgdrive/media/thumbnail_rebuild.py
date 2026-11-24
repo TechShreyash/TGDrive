@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import copy
 import json
 import os
@@ -27,14 +26,13 @@ from tgdrive.core.errors import (
     TrashedItemError,
 )
 from tgdrive.media import generated_thumbnails as covers
-from tgdrive.media.books import parse_book, read_range
+from tgdrive.media.file_range import read_range
 from tgdrive.media.media_reader import media_capacity_options
 from tgdrive.media.media_scheduler import media_priority
 from tgdrive.media.posters import load_poster, poster_identity
 from tgdrive.media.thumbnail_worker import (
     AUDIO_FORMATS,
     IMAGE_CODECS,
-    OFFICE_FORMATS,
     VIDEO_FORMATS,
 )
 from tgdrive.media.thumbnails import ThumbnailBusy
@@ -49,7 +47,7 @@ BLOCK = 1024**2
 SOURCE_BUDGET = 64 * BLOCK
 PDF_BUDGET = 256 * BLOCK
 RATE = 2 * BLOCK
-SUPPORTED = covers.SUPPORTED | {".cbr"}
+SUPPORTED = covers.SUPPORTED
 
 
 def file_identity(data):
@@ -438,34 +436,12 @@ class ThumbnailRebuild:
                     remote_url=url,
                     source_size=data["size"],
                 )
-            if suffix in {".epub", ".cbz", ".cbr"} | OFFICE_FORMATS:
-                if suffix in {".epub", ".cbz"} | OFFICE_FORMATS:
-                    result = await parse_book(data, source.read, thumbnail=True)
-                else:
-                    index = await parse_book(data, source.read)
-                    entry = index["entries"][0]["name"]
-                    result = await parse_book(data, source.read, entry)
-                if result.get("kind") != "image":
-                    return None
-                content = base64.b64decode(result["data"], validate=True)
-                suffix = {
-                    "image/jpeg": ".jpg",
-                    "image/png": ".png",
-                    "image/webp": ".webp",
-                    "image/gif": ".gif",
-                    "image/avif": ".avif",
-                }.get(result["mime"])
-                if suffix is None:
-                    return None
-            elif suffix == ".pdf":
-                if data["size"] > PDF_BUDGET:
-                    raise SourceLimit("PDF exceeds 256 MiB rebuild limit")
-                content = None
-            else:
+            if suffix != ".pdf":
                 return None
-            required = len(content) if content is not None else data["size"]
+            if data["size"] > PDF_BUDGET:
+                raise SourceLimit("PDF exceeds 256 MiB rebuild limit")
             opening = asyncio.create_task(
-                asyncio.to_thread(self.staging._open_source, required, 64 * BLOCK)
+                asyncio.to_thread(self.staging._open_source, data["size"], 64 * BLOCK)
             )
             opened, interrupted = await covers._finish_owned(opening)
             if opened is not None:
@@ -473,12 +449,9 @@ class ThumbnailRebuild:
             if interrupted:
                 raise asyncio.CancelledError
             assert output is not None and temporary is not None
-            if content is not None:
-                await covers._owned_disk_call(output.write, content)
-            else:
-                for start in range(0, data["size"], BLOCK):
-                    block = await source.read(start, min(BLOCK, data["size"] - start))
-                    await covers._owned_disk_call(output.write, block)
+            for start in range(0, data["size"], BLOCK):
+                block = await source.read(start, min(BLOCK, data["size"] - start))
+                await covers._owned_disk_call(output.write, block)
             await covers._owned_disk_call(output.flush)
             return await covers.generate(temporary, "cover" + suffix, background=True)
         finally:

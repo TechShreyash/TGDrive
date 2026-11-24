@@ -352,14 +352,7 @@ export function fileUrl(path: string, auth = "", download = false): string {
 }
 
 export interface PreviewDescriptor {
-    kind:
-        | "text"
-        | "pdf"
-        | "video"
-        | "book"
-        | "archive"
-        | "office"
-        | "unsupported";
+    kind: "text" | "pdf" | "video" | "archive" | "unsupported";
     size: number;
     text?: string;
     language?: string;

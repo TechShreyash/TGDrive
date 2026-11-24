@@ -14,7 +14,7 @@ TGDrive prevents conflicting writes. For everyday actions, use the
 | How do uploads become saved files? | [Transfer pipeline](#transfer-pipeline) · [Retries](#bounds-and-retries) · [Cancellation](#cancellation-and-destination-changes) |
 | How are reads, history and backups handled? | [File responses](#telegram-transport-and-file-responses) · [History](#finished-history) · [Backups](#database-safety-copies-and-security) |
 | Where is the code? | [Components](#components) |
-| How do readers and thumbnails stay bounded? | [Book reader internals](#book-reader-internals) · [Thumbnail rendering internals](#thumbnail-rendering-internals) |
+| How do readers and thumbnails stay bounded? | [PDF and ZIP preview internals](#pdf-and-zip-preview-internals) · [Thumbnail rendering internals](#thumbnail-rendering-internals) |
 
 <details>
 <summary>All sections</summary>
@@ -29,7 +29,7 @@ TGDrive prevents conflicting writes. For everyday actions, use the
 - [Transfer pipeline](#transfer-pipeline)
 - [Telegram transport and file responses](#telegram-transport-and-file-responses)
 - [Media and performance](#media-and-performance)
-- [Book reader internals](#book-reader-internals)
+- [PDF and ZIP preview internals](#pdf-and-zip-preview-internals)
 - [Thumbnail rendering internals](#thumbnail-rendering-internals)
 - [Database safety copies and security](#database-safety-copies-and-security)
 - [Diagnostic history](#diagnostic-history)
@@ -683,12 +683,7 @@ progress kind advances catalog revision or independently triggers a backup.
 Owner thumbnail summaries batch at most 128 visible IDs without media reads;
 public thumbnail views use scoped local progress, even with owner cookies.
 
-## Book reader internals
-
-User-facing formats and controls are in [Reading books and comics](reading.md).
-
-EPUB chapters with images and at most 80 surrounding text characters use the
-illustrated-page layout. More complex publisher layouts can differ.
+## PDF and ZIP preview internals
 
 PDF.js retains a source buffer up to the **256 MiB** file limit. HTTP requests use
 at most **1 MiB** ranges with **two** reader requests active. Combined active
@@ -698,35 +693,17 @@ buffers. Success/failure releases claims. Reading more than 64 MiB over time doe
 not close the document. Canvas/page/text budgets also apply; these limits do not
 guarantee a complex PDF will fit every device's memory.
 
-| Bound | Limit |
-| --- | --- |
-| Index/chapter/thumbnail operation | 32 MiB fetched; aligned 1 MiB reads and a four-block parser cache |
-| One selected original raster image | 64 MiB encoded image; up to 96 MiB source reads without loading unrelated ZIP entries |
-| Raster images | Headers validated before output; at most 64,000,000 pixels and a 32,768-pixel edge |
-| Archive | Stored/deflate ZIP methods; at most 10,000 entries and a 2 MiB central directory, checked before entry allocation |
-| EPUB / entries | 2 MiB/text entry; 16 MiB thumbnail-source image, separate from the 64 MiB reader-page limit |
-| Parser work | Two simultaneous operations, 16 pending requests, 45-second parser timeout; 55-second total route deadline including shared-result waits |
-| Parser process | 384 MiB virtual address space and 10 seconds CPU time where OS resource limits are supported |
+ZIP previews list directory entries without extracting payloads. The worker reads
+up to **32 MiB** through aligned **1 MiB** blocks and keeps four blocks in memory.
+It validates the central directory before allocating entries, with limits of
+**10,000 entries** and **2 MiB** for the directory. There are two parser slots and
+16 pending requests. The parser has a **45-second** timeout within a **55-second**
+route deadline. On systems that support resource limits, the subprocess has
+**384 MiB** of address space and **10 seconds** of CPU time.
 
-The server caches extracted pages and parsed chapters/indexes for up to **five
-minutes**, bounded to **64 MiB and 16 results**. Concurrent requests for the same
-result share one extraction. Eviction/restart requires parsing again; normal
-source-range cache data can still be reused. Private browser entries are
-revalidated; **304** reuses unchanged bytes. Every request rechecks current access
-and source identity, including cache hits and 304s. Revocation stops later reads
-through that link; it cannot recall delivered bytes or revoke independent links.
-
-Raster bytes cross the parser boundary as bounded binary output without base64
-expansion. Header checks do not decode or resize images. JPEG dimensions must
-appear within the first 1 MiB; excessive/malformed headers are rejected. There
-are pixel/edge bounds, but accepted images still use the browser's decoder, GPU
-and memory. Unsafe/duplicate archive names and extreme compression ratios
-fail. Solid CBR may exhaust its read budget before a page; busy readers receive
-retry guidance. Budgets apply per operation and allow cached-data reuse.
-
-Docker includes CBR's native libarchive runtime; no host installation is needed.
-The bounded parser is not an OS security sandbox: keep the deployment image
-updated. If it cannot parse a book, download the original for a dedicated reader.
+The server caches up to **16 listings** and **64 MiB** for five minutes.
+Concurrent requests for the same ZIP share one parse. Each request rechecks
+access and source identity, including cache hits and conditional responses.
 
 ## Thumbnail rendering internals
 
@@ -763,9 +740,8 @@ metadata/cache hits alone do not repeat it. Temporary admission/space/copy
 failures may retry sooner. Ordinary missing-provider results are briefly cached.
 
 **Manual rebuild reads:** video/images use a private loopback FFmpeg range bridge
-through the shared cache. Books/office files read their index and cover. Most
-sources have a **64 MiB cumulative read budget and 16-minute deadline**;
-books retain their **32 MiB** parser budget. PDFs need seekable local bytes and
+through the shared cache. Most sources have a **64 MiB cumulative read budget
+and 16-minute deadline**. PDFs need seekable local bytes and
 may read the complete original up to **256 MiB**, with free-space checks and
 crash-cleaned private staging. Larger or overly demanding sources are skipped.
 Manual rendering has its own lower-OS-priority slot; only its token-protected
@@ -782,11 +758,8 @@ seconds in if duration is unknown; it and the first-frame fallback each allow
 long reference chains such as UHD HEVC are not decoded. Partial JPEGs are rejected; a nonblack frame
 is not guaranteed. Admission/decoder failures retain the cover/icon fallback.
 
-Large JPEGs above **8 MiB** use decoder downsampling. Book/office covers use the
-bounded archive parser (**32 MiB** reads, **16 MiB** per image), reject remote
-resources/archive-path extraction and force recognized raster bytes through the
-image decoder. Existing covers change only on new upload, explicit rebuild or
-eligible repair.
+Large JPEGs above **8 MiB** use decoder downsampling. Existing covers change only
+on new upload, explicit rebuild or eligible repair.
 
 The renderer uses **one decoding/filter thread and 64 MiB per allocation** and
 cannot write files. Where supported, it has a **768 MiB virtual address-space

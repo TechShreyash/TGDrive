@@ -237,23 +237,8 @@ files outside the conversion limits can still require an original download.
 | PDF up to 256 MiB | Page box, zoom menu with Fit width and Fit page |
 | Video/audio | Player with available track and subtitle controls |
 | Supported text/code | Read-only text, first 256 KiB |
-| EPUB | Chapters, Reading options and saved reading position |
-| CBZ/CBR | Comic pages, page fit and right-to-left reading |
 | ZIP | Browse files and nested folders without extracting; file sizes and password-protected entries are shown |
-| Unsupported formats | Original download |
-
-DOCX and ODT previews show headings and body text. XLSX and ODS previews let
-you switch between visible worksheets and show up to the first 100 rows and
-20 columns per sheet. Swipe horizontally or focus the worksheet and use
-the arrow keys to see more columns.
-
-PPTX and ODP previews show slide text and supported embedded images in
-presentation order. Use Previous slide and Next slide to browse.
-Presenter notes stay in the original. The viewer marks the preview as partial
-and offers Download original when it skips an image or embedded object such
-as a chart. Use the original for the full layout, animations, and media.
-Older binary Office formats (.doc, .xls and .ppt) are available as original
-downloads.
+| Word, Excel, PowerPoint, OpenDocument, ebooks, comics, and other unsupported formats | Original download |
 
 Markdown previews render headings, lists, emphasis and code. Use Show source
 to read the original markup. The preview displays external image captions and
@@ -318,7 +303,7 @@ and [font attachments](https://www.matroska.org/technical/attachments.html)).
 Telegram retrieval is the bottleneck. Server delivery and browser decoding still
 take time; a fully cached file does not guarantee instant playback.
 
-PDFs, EPUB and comics request sections as needed rather than automatically
+PDFs request sections as needed rather than automatically
 preloading the whole file. [Reader controls and limits](reading.md).
 
 <details>
@@ -559,7 +544,7 @@ or be evicted. **A preload is not a backup** and cannot keep a sleeping server o
 
 Requested sections are cached with bounded read-ahead. **Preload during playback**
 defaults On and warms upcoming original audio/video. Opening once does not
-automatically preload the whole original. PDFs/books/comics stay sparse.
+automatically preload the whole original. PDFs stay sparse.
 [Read-ahead policy](performance.md#automatic-read-ahead).
 
 ### Parallel and resumed downloads

@@ -1182,32 +1182,33 @@ def create_app(
             raise HTTPException(404, exc.public_detail) from exc
 
     @app.get("/api/v1/books")
-    async def book_preview(
+    async def zip_preview(
         request: Request,
         path: Annotated[str, Query(min_length=1)],
         auth: Annotated[str | None, Query(max_length=512)] = None,
         entry: Annotated[str | None, Query(min_length=1, max_length=1024)] = None,
     ) -> Response:
-        from tgdrive.media.books import BookCache, parse_book, read_range
+        from tgdrive.media.archive_preview import ArchivePreviewCache, parse_archive
+        from tgdrive.media.file_range import read_range
 
         path, data = await asyncio.to_thread(authorized_file, request, path, auth)
         if auth is None:
             record_opened(_store(request), data["id"])
-        cache = getattr(app.state, "book_cache", None)
+        cache = getattr(app.state, "zip_cache", None)
         if cache is None:
-            cache = app.state.book_cache = BookCache()
+            cache = app.state.zip_cache = ArchivePreviewCache()
         key = cache.key(data, entry)
-        pending = getattr(app.state, "book_requests", 0)
+        pending = getattr(app.state, "zip_requests", 0)
         if pending >= 16:
             raise HTTPException(
                 503,
-                "The reader is busy. Try again shortly.",
+                "The ZIP preview is busy. Try again shortly.",
                 headers={"Retry-After": "2"},
             )
-        semaphore = getattr(app.state, "book_slots", None)
+        semaphore = getattr(app.state, "zip_slots", None)
         if semaphore is None:
-            semaphore = app.state.book_slots = asyncio.Semaphore(2)
-        app.state.book_requests = pending + 1
+            semaphore = app.state.zip_slots = asyncio.Semaphore(2)
+        app.state.zip_requests = pending + 1
         acquired = False
 
         async def authorize():
@@ -1216,7 +1217,7 @@ def create_app(
                 current.get(key) != data.get(key)
                 for key in ("message_id", "size", "parts")
             ):
-                raise HTTPException(409, "The stored book changed. Reopen it.")
+                raise HTTPException(409, "The stored ZIP changed. Reopen it.")
 
         async def fetch(start, count):
             return await read_range(
@@ -1229,7 +1230,7 @@ def create_app(
             )
 
         def response(payload):
-            content, mime, etag = payload
+            content, etag = payload
             headers = {
                 "Cache-Control": "private, no-cache",
                 "Vary": "Cookie",
@@ -1241,7 +1242,7 @@ def create_app(
                 for value in request.headers.get("if-none-match", "").split(",")
             ]:
                 return Response(status_code=304, headers=headers)
-            return Response(content, media_type=mime, headers=headers)
+            return Response(content, media_type="application/json", headers=headers)
 
         try:
             # Waiters hold only descriptors; no parser slot or page buffer.
@@ -1256,23 +1257,23 @@ def create_app(
                 except TimeoutError as exc:
                     raise HTTPException(
                         503,
-                        "The reader is busy. Try again shortly.",
+                        "The ZIP preview is busy. Try again shortly.",
                         headers={"Retry-After": "2"},
                     ) from exc
                 await authorize()
-                result = await parse_book(data, fetch, entry, raw_images=True)
+                result = await parse_archive(data, fetch, entry)
                 await authorize()
                 return response(cache.put(key, result))
         except TimeoutError as exc:
             raise HTTPException(
                 503,
-                "The reader is busy. Try again shortly.",
+                "The ZIP preview is busy. Try again shortly.",
                 headers={"Retry-After": "2"},
             ) from exc
         finally:
             if acquired:
                 semaphore.release()
-            app.state.book_requests -= 1
+            app.state.zip_requests -= 1
 
     @app.get("/api/v1/thumbnail")
     async def file_thumbnail(

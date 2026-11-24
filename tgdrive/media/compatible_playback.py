@@ -21,7 +21,7 @@ from aiohttp import web
 from fastapi import HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
-from tgdrive.media import books
+from tgdrive.media import file_range
 from tgdrive.media.compatibility_worker import (
     ADDRESS_SPACE_BYTES,
     COMPATIBILITY_FORMATS,
@@ -295,7 +295,7 @@ def register_compatibility_routes(app, settings, runtime, authorized_file):
 
         async def fetch(start, count):
             with media_priority.set("playback"):
-                return await books.read_range(
+                return await file_range.read_range(
                     runtime(request).pool,
                     settings.storage_channel,
                     data,

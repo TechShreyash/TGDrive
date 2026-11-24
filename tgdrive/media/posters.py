@@ -9,7 +9,7 @@ from typing import TypeGuard
 
 from telethon.errors import RPCError
 
-from tgdrive.media import books
+from tgdrive.media import file_range
 from tgdrive.media.generated_thumbnails import read, save
 from tgdrive.media.media_reader import media_capacity_options
 from tgdrive.media.streaming import TelegramFileNotFound
@@ -51,7 +51,7 @@ async def load_poster(*, pool, channel_id, poster, directory, authorize, name=""
     if name:
         source.update(name=name, purpose="poster")
     try:
-        content = await books.read_range(
+        content = await file_range.read_range(
             pool,
             channel_id,
             source,

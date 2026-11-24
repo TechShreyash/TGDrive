@@ -168,11 +168,11 @@ async def test_loopback_decoder_source_checks_token_and_exact_http_ranges(
         await source.close()
 
 
-@pytest.mark.parametrize("name", ["photo.png", "movie.mov", "manga.epub", "comic.cbz"])
+@pytest.mark.parametrize("name", ["photo.png", "movie.mov"])
 async def test_native_rebuild_uses_selected_bytes_and_preserves_originals(
     rebuild, monkeypatch, name
 ):
-    from tests.support.book_samples import cbz, epub, png
+    from tests.support.book_samples import png
 
     if not shutil.which("ffmpeg"):
         pytest.skip("native decoder unavailable")
@@ -183,10 +183,6 @@ async def test_native_rebuild_uses_selected_bytes_and_preserves_originals(
         else (
             Path(__file__).resolve().parents[1] / "fixtures/movtext-subtitles.mp4"
         ).read_bytes()
-        if name.endswith("mov")
-        else epub(padding=48 * module.BLOCK)
-        if name.endswith("epub")
-        else cbz(padding=48 * module.BLOCK)
     )
     item = store.add_file("/", name, 12, len(original))
     calls = []
@@ -206,13 +202,7 @@ async def test_native_rebuild_uses_selected_bytes_and_preserves_originals(
     assert manager.state["failed"] == manager.state["skipped"] == 0
     assert read(manager.directory, manager.settings.storage_channel, item["message_id"])
     assert sum(count for _, count in calls) < 4 * module.BLOCK
-    assert original.startswith(
-        b"\x89PNG"
-        if name.endswith("png")
-        else b"PK"
-        if name.endswith(("epub", "cbz"))
-        else b"\x00"
-    )
+    assert original.startswith(b"\x89PNG" if name.endswith("png") else b"\x00")
     assert not list(manager.directory.glob(".repair-*.source"))
 
 
@@ -265,7 +255,7 @@ async def test_rebuild_prefers_verified_poster_and_retains_native_fallback(
             return None if poster_result == "decode_failure" else COVER
         return COVER
 
-    monkeypatch.setattr("tgdrive.media.books.read_range", fetch)
+    monkeypatch.setattr("tgdrive.media.file_range.read_range", fetch)
     monkeypatch.setattr(module.covers, "generate", generate)
     await manager.start()
     assert manager.task is not None
@@ -317,7 +307,7 @@ async def test_poster_retries_reuse_verified_bytes_and_keep_admission(
     async def no_cover(*args, **kwargs):
         return None
 
-    monkeypatch.setattr("tgdrive.media.books.read_range", fetch)
+    monkeypatch.setattr("tgdrive.media.file_range.read_range", fetch)
     monkeypatch.setattr(manager.staging, "render_image", render)
     monkeypatch.setattr(module.covers, "generate", no_cover)
     assert await manager.render_when_runnable(source) == COVER

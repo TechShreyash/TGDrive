@@ -4,8 +4,8 @@ from zipfile import ZipFile
 
 import pytest
 
-from tgdrive.media.book_worker import BookError, RemoteFile, read_book
-from tgdrive.media.books import parse_book
+from tgdrive.media.archive_preview import parse_archive
+from tgdrive.media.archive_preview_worker import RemoteFile, ZipPreviewError, list_zip
 from tgdrive.media.previews import describe_preview
 
 
@@ -28,7 +28,7 @@ async def test_zip_index_is_sparse_and_contains_no_extracted_data():
         reads.append((start, size))
         return content[start : start + size]
 
-    result = await parse_book({"name": "files.zip", "size": len(content)}, fetch)
+    result = await parse_archive({"name": "files.zip", "size": len(content)}, fetch)
     assert result["kind"] == "archive"
     assert result["entries"][0] == {
         "name": "large.bin",
@@ -46,9 +46,9 @@ def test_encrypted_zip_can_be_listed_without_reading_entry_payloads():
     at = content.index(b"PK\x01\x02")
     struct.pack_into("<H", content, at + 8, 1)
     source = RemoteFile(len(content), lambda start, size: content[start : start + size])
-    assert read_book(source, "zip")["entries"][0]["encrypted"] is True
-    with pytest.raises(BookError, match="without extracting"):
-        read_book(source, "zip", "large.bin")
+    assert list_zip(source)["entries"][0]["encrypted"] is True
+    with pytest.raises(ZipPreviewError, match="without extracting"):
+        list_zip(source, "large.bin")
 
 
 @pytest.mark.parametrize("name", ["../secret", "/absolute", "bad\\path", "dir/../"])
@@ -58,8 +58,8 @@ def test_zip_preview_refuses_unsafe_paths(name):
         archive.writestr(name, b"")
     content = output.getvalue()
     source = RemoteFile(len(content), lambda start, size: content[start : start + size])
-    with pytest.raises(BookError, match="path"):
-        read_book(source, "zip")
+    with pytest.raises(ZipPreviewError, match="path"):
+        list_zip(source)
 
 
 def test_empty_zip_has_an_empty_index():
@@ -68,7 +68,7 @@ def test_empty_zip_has_an_empty_index():
         pass
     content = output.getvalue()
     source = RemoteFile(len(content), lambda start, size: content[start : start + size])
-    assert read_book(source, "zip") == {"kind": "archive", "entries": []}
+    assert list_zip(source) == {"kind": "archive", "entries": []}
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ import hashlib
 import io
 import struct
 import zlib
-from zipfile import ZIP_STORED, ZipFile
+from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 PDF_SAMPLE_PASSWORD = "fixture-pdf-unlock"
 
@@ -200,8 +200,12 @@ def png(page=1):
 def epub(*, padding=0, unsafe=False):
     out = io.BytesIO()
     with ZipFile(out, "w", ZIP_STORED) as archive:
-        archive.writestr("mimetype", "application/epub+zip")
-        archive.writestr(
+
+        def write(name, data):
+            archive.writestr(ZipInfo(name), data)
+
+        write("mimetype", "application/epub+zip")
+        write(
             "META-INF/container.xml",
             (
                 '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:co'
@@ -209,7 +213,7 @@ def epub(*, padding=0, unsafe=False):
                 'full-path="OPS/book.opf"/></rootfiles></container>'
             ),
         )
-        archive.writestr(
+        write(
             "OPS/book.opf",
             (
                 '<package xmlns="http://www.idpf.org/2007/opf"><metadata '
@@ -224,7 +228,7 @@ def epub(*, padding=0, unsafe=False):
                 'idref="one"/><itemref idref="two"/></spine></package>'
             ),
         )
-        archive.writestr(
+        write(
             "OPS/nav.xhtml",
             (
                 '<html xmlns="http://www.w3.org/1999/xhtml"><body><nav><a '
@@ -243,7 +247,7 @@ def epub(*, padding=0, unsafe=False):
             if unsafe
             else ""
         )
-        archive.writestr(
+        write(
             "OPS/one.xhtml",
             (
                 '<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>A '
@@ -256,7 +260,7 @@ def epub(*, padding=0, unsafe=False):
             + malicious
             + "</body></html>",
         )
-        archive.writestr(
+        write(
             "OPS/two.xhtml",
             (
                 '<html xmlns="http://www.w3.org/1999/xhtml"><body><h1 '
@@ -266,9 +270,9 @@ def epub(*, padding=0, unsafe=False):
                 'alt="Illustrative sample page"/></body></html>'
             ),
         )
-        archive.writestr("OPS/images/page.png", png())
+        write("OPS/images/page.png", png())
         if padding:
-            archive.writestr("unused/padding.bin", b"x" * padding)
+            write("unused/padding.bin", b"x" * padding)
     return out.getvalue()
 
 
@@ -309,21 +313,3 @@ def cbr():
         output += header(0x74, 0x8000, fields) + data
     output += header(0x7B, 0)
     return bytes(output)
-
-
-def manga_epub():
-    """A two-page image-based EPUB using the same generated panels as CBZ."""
-    output = io.BytesIO()
-    with (
-        ZipFile(io.BytesIO(epub())) as original,
-        ZipFile(output, "w", ZIP_STORED) as archive,
-    ):
-        for info in original.infolist():
-            content = original.read(info.filename)
-            if info.filename in {"OPS/one.xhtml", "OPS/two.xhtml"}:
-                content = (
-                    b'<html xmlns="http://www.w3.org/1999/xhtml"><body><div><img '
-                    b'src="images/page.png" alt="Manga page"/></div></body></html>'
-                )
-            archive.writestr(info.filename, content)
-    return output.getvalue()

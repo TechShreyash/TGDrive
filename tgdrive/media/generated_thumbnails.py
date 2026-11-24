@@ -35,13 +35,6 @@ _slots = weakref.WeakKeyDictionary()
 _background_slots = weakref.WeakKeyDictionary()
 PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 SUPPORTED = {
-    ".cbr",
-    ".docx",
-    ".pptx",
-    ".xlsx",
-    ".odt",
-    ".odp",
-    ".ods",
     ".mp3",
     ".flac",
     ".m4a",
@@ -49,8 +42,6 @@ SUPPORTED = {
     ".opus",
     ".wav",
     ".aac",
-    ".epub",
-    ".cbz",
     ".jpg",
     ".jpeg",
     ".png",

@@ -2128,15 +2128,16 @@ progress::-moz-progress-bar {
     padding: 0;
     max-height: none;
     overflow: hidden;
-    color: #202735;
-    background: #fff;
+    color: var(--ink);
+    background: var(--surface-subtle);
     box-shadow: 0 4px 18px #0003;
-    color-scheme: only light;
 }
 .pdf-page canvas {
     display: block;
     width: 100%;
     height: 100%;
+    background: #fff;
+    color-scheme: only light;
 }
 .pdf-page-loading,
 .pdf-page-error {
@@ -2147,7 +2148,7 @@ progress::-moz-progress-bar {
     gap: 12px;
     height: 100%;
     padding: 24px;
-    color: #59677c;
+    color: var(--muted);
     font-size: 13px;
 }
 .preview-pdf-error {
@@ -2620,7 +2621,6 @@ progress::-moz-progress-bar {
 .shared-unlock,
 .preview-header,
 .pdf-view-options,
-.book-toolbar,
 :where(button, summary, [role="button"], [role="menuitem"], [role="option"]) {
     -webkit-user-select: none;
     user-select: none;
@@ -2629,9 +2629,6 @@ input,
 textarea,
 [contenteditable]:not([contenteditable="false"]),
 .text-preview pre,
-.book-chapter,
-.office-document,
-.office-sheet,
 .pdf-text-layer,
 .pdf-text-layer *,
 .settings-facts dd,
@@ -3549,7 +3546,7 @@ textarea,
 .preview-quality[hidden] {
     display: none;
 }
-.preview-toolbar-toggle {
+.preview-fullscreen-surface > .preview-toolbar-toggle {
     position: absolute;
     z-index: 10;
     /* Keep one stable target clear of the browser's fullscreen exit control. */
@@ -3573,10 +3570,6 @@ textarea,
 .preview-toolbar-toggle:focus-visible {
     outline: 2px solid #f1f3f6;
     outline-offset: -4px;
-}
-.file-preview .preview-fullscreen-surface:fullscreen .preview-header {
-    /* Reserve space for the toggle in the expanded toolbar too. */
-    padding-right: calc(max(12px, env(safe-area-inset-right)) + 56px);
 }
 .file-details .preview-fullscreen-surface {
     display: contents;

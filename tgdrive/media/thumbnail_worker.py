@@ -46,7 +46,6 @@ AUDIO_FORMATS = {
     ".wav": "wav",
     ".aac": "aac",
 }
-OFFICE_FORMATS = {".docx", ".pptx", ".xlsx", ".odt", ".odp", ".ods"}
 MAX_BYTES = 64 * 1024
 MAX_POSTER_BYTES = 1024 * 1024
 VIDEO_IMAGES_MAGIC = b"TGDRVIMG"
@@ -56,122 +55,6 @@ LOCAL_SECONDS = 60
 STALL_SECONDS = 30
 # shortcut: fixed hang guard per remote attempt, replace if real renders need longer.
 REMOTE_CEILING_SECONDS = 600
-
-
-def archive_cover(path: Path, suffix: str) -> tuple[bytes, str] | None:
-    from tgdrive.media.book_worker import RemoteFile
-
-    with path.open("rb") as source:
-
-        def fetch(start, length):
-            source.seek(start)
-            return source.read(length)
-
-        return archive_cover_from_source(RemoteFile(path.stat().st_size, fetch), suffix)
-
-
-def archive_cover_from_source(source, suffix: str) -> tuple[bytes, str] | None:
-    from tgdrive.media.book_worker import (
-        IMAGES,
-        MAX_ENTRY,
-        image_type,
-        local_ref,
-        natural,
-        open_zip,
-        xml,
-        zip_bytes,
-    )
-
-    if suffix == ".cbr":
-        import base64
-
-        from tgdrive.media.book_worker import read_book
-
-        index = read_book(source, "cbr")
-        result = read_book(source, "cbr", index["entries"][0]["name"])
-        data = base64.b64decode(result["data"], validate=True)
-        kind = {
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp",
-            "image/gif": ".gif",
-            "image/avif": ".avif",
-        }.get(result["mime"])
-        return (data, kind) if kind else None
-    with open_zip(source) as archive:
-        candidates = []
-        if suffix in OFFICE_FORMATS:
-            candidates = [
-                name
-                for name in (
-                    "docProps/thumbnail.jpeg",
-                    "docProps/thumbnail.jpg",
-                    "docProps/thumbnail.png",
-                    "Thumbnails/thumbnail.png",
-                )
-                if name in archive.namelist()
-            ]
-            if not candidates:
-                return None
-        elif suffix == ".epub":
-            if "META-INF/encryption.xml" in archive.namelist():
-                return None
-            container = xml(zip_bytes(archive, "META-INF/container.xml"))
-            package_name = next(
-                node.get("full-path")
-                for node in container.iter()
-                if node.tag.rsplit("}", 1)[-1] == "rootfile"
-            )
-            package = xml(zip_bytes(archive, package_name))
-            cover_ids = {
-                node.get("content")
-                for node in package.iter()
-                if node.tag.rsplit("}", 1)[-1] == "meta" and node.get("name") == "cover"
-            }
-            for node in package.iter():
-                if node.tag.rsplit("}", 1)[-1] != "item":
-                    continue
-                name = local_ref(package_name, node.get("href", ""))
-                if name and Path(name).suffix.lower() in IMAGES:
-                    if (
-                        "cover-image" in node.get("properties", "").split()
-                        or node.get("id") in cover_ids
-                    ):
-                        candidates.insert(0, name)
-                    else:
-                        candidates.append(name)
-        else:
-            candidates = sorted(
-                (
-                    name
-                    for name in archive.namelist()
-                    if Path(name).suffix.lower() in IMAGES
-                    and not name.startswith("__MACOSX/")
-                ),
-                key=natural,
-            )
-        if not candidates:
-            candidates = sorted(
-                (
-                    name
-                    for name in archive.namelist()
-                    if Path(name).suffix.lower() in IMAGES
-                    and not name.startswith("__MACOSX/")
-                ),
-                key=natural,
-            )
-        if not candidates:
-            return None
-        data = zip_bytes(archive, candidates[0], maximum=MAX_ENTRY)
-        mime = image_type(data)
-        kind = {
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp",
-            "image/gif": ".gif",
-            "image/avif": ".avif",
-        }.get(mime)
-        return (data, kind) if kind is not None else None
 
 
 def video_seek_time(path: Path | str, suffix: str, *, remote=False) -> str:
@@ -279,14 +162,6 @@ def render(
 ) -> bytes:
     source_name = remote_url or str(path)
     cover_input = image_data
-    if suffix in {".epub", ".cbz", ".cbr"} | OFFICE_FORMATS:
-        try:
-            cover = archive_cover(path, suffix)
-        except Exception:
-            return b""
-        if cover is None:
-            return b""
-        cover_input, suffix = cover
     # Force known demuxers/codecs. A disguised HLS/concat playlist must not turn
     # an uploaded file into arbitrary file or network reads.
     if suffix == ".pdf":

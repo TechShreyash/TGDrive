@@ -59,7 +59,7 @@ dialog shows destination choices; extraction was not submitted.
 Videos offer **Continue** from saved progress: owners can continue across
 devices; anonymous viewers keep browser-local positions. Built-in menus provide
 available audio/subtitle tracks and playback settings; chapters and seek
-previews depend on the file. PDFs, EPUB and comics have dedicated readers.
+previews depend on the file. PDFs have a dedicated reader.
 [Player controls](usage.md#open-preview-and-download) · [Reader guide](reading.md)
 
 | Continue watching | Player settings |
@@ -67,7 +67,7 @@ previews depend on the file. PDFs, EPUB and comics have dedicated readers.
 | ![Continue from a saved position in the video player](assets/video-continue.jpg) | ![Built-in video player settings menu](assets/video-settings.jpg) |
 
 <details>
-<summary>Video, image, audio, PDF, EPUB and comic viewers</summary>
+<summary>Video, image, audio and PDF viewers</summary>
 
 ![Video open in TGDrive's player](assets/media-preview.jpg)
 
@@ -76,10 +76,6 @@ previews depend on the file. PDFs, EPUB and comics have dedicated readers.
 | ![Sample image in the image viewer](assets/image-preview.jpg) | ![Sample audio in the audio player](assets/audio-preview.jpg) |
 
 ![PDF reader with page and fit controls](assets/pdf-reader.jpg)
-
-![EPUB reader with chapter navigation](assets/epub-reader.jpg)
-
-![Comic reader with page and fit controls](assets/comic-reader.jpg)
 
 Preview support depends on the file and browser. The original remains downloadable.
 

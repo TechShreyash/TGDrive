@@ -22,6 +22,24 @@ describe("bounded provider thumbnails", () => {
         expect(thumbnailCandidate({ ...item, name: "Archive.zip" })).toBe(
             false,
         );
+        for (const extension of [
+            "doc",
+            "docx",
+            "odt",
+            "ppt",
+            "pptx",
+            "odp",
+            "xls",
+            "xlsx",
+            "ods",
+            "epub",
+            "cbz",
+            "cbr",
+        ]) {
+            expect(
+                thumbnailCandidate({ ...item, name: "Document." + extension }),
+            ).toBe(false);
+        }
         expect(thumbnailCandidate({ ...item, type: "folder" })).toBe(false);
         const url = new URL(
             thumbnailUrl(item, "private-token"),
@@ -53,7 +71,7 @@ describe("bounded provider thumbnails", () => {
             }),
         );
     });
-    it.each([204, 401, 403, 404, 503])(
+    it.each([204, 401, 403, 404])(
         "leaves an icon fallback for HTTP %s",
         async (status) => {
             vi.stubGlobal(
@@ -73,6 +91,26 @@ describe("bounded provider thumbnails", () => {
             ).toBeNull();
         },
     );
+    it("retries a temporarily busy cover once", async () => {
+        const request = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(null, {
+                    status: 503,
+                    headers: { "Retry-After": "0" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(new Uint8Array([1]), {
+                    headers: { "Content-Type": "image/png" },
+                }),
+            );
+        vi.stubGlobal("fetch", request);
+        await expect(
+            fetchThumbnail("/thumbnail", new AbortController().signal),
+        ).resolves.toBe("data:image/png;base64,AQ==");
+        expect(request).toHaveBeenCalledTimes(2);
+    });
     it("rejects declared/actual oversized images and non-image responses", async () => {
         for (const response of [
             new Response("small", {

@@ -39,7 +39,7 @@ def setup_poster(app_client, monkeypatch, *, content=JPEG, before_read=None):
             before_read()
         return content
 
-    monkeypatch.setattr("tgdrive.media.books.read_range", read)
+    monkeypatch.setattr("tgdrive.media.file_range.read_range", read)
     return client, store, "/" + item["id"], reads
 
 
@@ -137,7 +137,7 @@ def test_poster_added_after_negative_cache_is_reconsidered(app_client, monkeypat
         return b"\xff\xd8\xffnew\xff\xd9"
 
     monkeypatch.setattr(store, "get_file", get_file)
-    monkeypatch.setattr("tgdrive.media.books.read_range", poster_read)
+    monkeypatch.setattr("tgdrive.media.file_range.read_range", poster_read)
     monkeypatch.setattr(client.app.state.thumbnail_repair, "render_image", render)
     fixtures.login(client)
     assert client.get("/api/v1/thumbnail", params={"path": path}).status_code == 204
@@ -259,7 +259,7 @@ def test_poster_revoked_while_reading_never_returns_the_body(app_client, monkeyp
         store.revoke_share(path)
         return JPEG
 
-    monkeypatch.setattr("tgdrive.media.books.read_range", read)
+    monkeypatch.setattr("tgdrive.media.file_range.read_range", read)
     response = client.get("/api/v1/poster", params={"path": path, "auth": token})
     assert response.status_code == 403
     assert response.content != JPEG
@@ -273,7 +273,7 @@ def test_older_file_has_no_poster_reads_or_new_cache_writes(app_client, monkeypa
     async def forbidden(*args, **kwargs):
         raise AssertionError("No poster reference must not fetch original bytes")
 
-    monkeypatch.setattr("tgdrive.media.books.read_range", forbidden)
+    monkeypatch.setattr("tgdrive.media.file_range.read_range", forbidden)
     fixtures.login(client)
     assert (
         client.get("/api/v1/poster", params={"path": "/" + item["id"]}).status_code
@@ -304,7 +304,7 @@ def test_poster_transport_failure_is_retryable_and_not_negative_cached(
     async def unavailable(*args, **kwargs):
         raise OSError("Disconnected")
 
-    monkeypatch.setattr("tgdrive.media.books.read_range", unavailable)
+    monkeypatch.setattr("tgdrive.media.file_range.read_range", unavailable)
     response = client.get("/api/v1/poster", params={"path": path})
     assert response.status_code == 503
     assert response.headers["retry-after"] == "5"
@@ -313,7 +313,7 @@ def test_poster_transport_failure_is_retryable_and_not_negative_cached(
     async def available(*args, **kwargs):
         return JPEG
 
-    monkeypatch.setattr("tgdrive.media.books.read_range", available)
+    monkeypatch.setattr("tgdrive.media.file_range.read_range", available)
     assert client.get("/api/v1/poster", params={"path": path}).status_code == 200
 
 

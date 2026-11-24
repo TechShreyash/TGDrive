@@ -142,39 +142,107 @@
     min-height: 44px;
 }
 @media (max-width: 720px) {
-    .file-preview:not(.file-details)
-        .preview-header-pdf:not(.preview-header-book) {
+    .file-preview:not(.file-details) .preview-header-pdf {
         gap: 4px 8px;
         padding-block: max(4px, env(safe-area-inset-top)) 4px;
     }
-    .file-preview .preview-header-pdf:not(.preview-header-book) .page-jump {
+    .file-preview .preview-header-pdf .page-jump {
         min-width: 44px;
         height: 44px;
     }
 }
 @media (min-width: 540px) and (max-width: 720px) and (max-height: 440px) and (orientation: landscape) {
-    .file-preview .preview-header-pdf:not(.preview-header-book) {
+    .file-preview .preview-header-pdf {
         grid-template-columns: 44px minmax(0, 1fr) auto 44px 44px;
     }
-    .file-preview
-        .preview-fullscreen-surface:fullscreen
-        .preview-header-pdf:not(.preview-header-book) {
+    .file-preview .preview-fullscreen-surface:fullscreen .preview-header-pdf {
         grid-template-columns: 44px minmax(0, 1fr) auto 44px 44px 48px;
     }
-    .file-preview
-        .preview-header-pdf:not(.preview-header-book)
-        .preview-toolbar-slot {
+    .file-preview .preview-header-pdf .preview-toolbar-slot {
         grid-column: 3;
         grid-row: 1;
     }
-    .file-preview
-        .preview-header-pdf:not(.preview-header-book)
-        .preview-fullscreen {
+    .file-preview .preview-header-pdf .preview-fullscreen {
         grid-column: 4;
     }
-    .file-preview
-        .preview-header-pdf:not(.preview-header-book)
-        .preview-download {
+    .file-preview .preview-header-pdf .preview-download {
         grid-column: 5;
+    }
+}
+
+/* Keep the PDF toolbar on one surface, with a light outline around each group. */
+.file-preview
+    .pdf-controls
+    :is(.reader-navigation, .pdf-toolbar > .inline-actions) {
+    outline: 1px solid var(--line);
+    outline-offset: -1px;
+    background: transparent;
+}
+.file-preview .pdf-controls .page-jump {
+    border-color: var(--line-subtle);
+    background: var(--pill);
+}
+.file-preview .pdf-controls .page-jump:focus-visible {
+    border-color: var(--action);
+}
+.file-preview
+    .preview-header-pdf
+    :is(.preview-close, .preview-fullscreen, .preview-toolbar-toggle-pdf),
+.file-preview .preview-header-pdf > a.preview-download {
+    border-radius: 8px;
+    background: var(--pill);
+    color: var(--ink);
+}
+.file-preview
+    .preview-header-pdf
+    :is(
+        .preview-close,
+        .preview-fullscreen,
+        .preview-toolbar-toggle-pdf,
+        a.preview-download
+    ):hover {
+    background: var(--hover);
+}
+.file-preview .preview-header-pdf > a.preview-download svg {
+    color: var(--action);
+}
+
+.file-preview .preview-fullscreen-surface:has(> .preview-toolbar-toggle-pdf) {
+    --pdf-reopen-height: 34px;
+}
+.file-preview .preview-fullscreen-surface > .preview-toolbar-toggle-pdf {
+    justify-content: center;
+    gap: 7px;
+    width: auto;
+    height: var(--pdf-reopen-height);
+    padding: 0 12px;
+    border-color: var(--line);
+    border-radius: 999px;
+    background: var(--surface-raised);
+    color: var(--ink);
+    box-shadow: 0 2px 8px light-dark(#1b26361a, #0005);
+    font-size: 12px;
+    font-weight: 600;
+}
+.file-preview .preview-fullscreen-surface > .preview-toolbar-toggle-pdf:hover {
+    background: var(--hover);
+}
+@media (max-width: 720px), (any-pointer: coarse) {
+    .file-preview
+        .preview-fullscreen-surface:has(> .preview-toolbar-toggle-pdf) {
+        --pdf-reopen-height: 44px;
+    }
+}
+
+/* Narrow pages extend behind the edge controls. Keep the reopen button above
+   the scrolling paper so it cannot cover the first line of the document. */
+@media (max-width: 1100px) {
+    .file-preview
+        .preview-fullscreen-surface:has(> .preview-toolbar-toggle-pdf)
+        .pdf-preview {
+        padding-block-start: calc(
+            max(8px, env(safe-area-inset-top)) + var(--pdf-reopen-height)
+        );
+        background: var(--pdf-stage);
     }
 }

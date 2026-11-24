@@ -16,7 +16,7 @@ not the screenshot date.
 
 | Status | Files |
 | --- | --- |
-| Outdated (whole interface changed) | `drive-overview`, `drive-list`, `mobile-drive`, `new-menu`, `file-actions`, `create-zip`, `extract-archive`, `archive-result`, `url-import`, `torrent-import`, `image-preview`, `audio-preview`, `pdf-reader`, `epub-reader`, `comic-reader`, `cache-settings`, `transfer-settings`, `performance-overview`, `performance-resources`, `preloads`, `recovery-file`, `thumbnail-rebuild`, `current-features.mp4` |
+| Outdated (whole interface changed) | `drive-overview`, `drive-list`, `mobile-drive`, `new-menu`, `file-actions`, `create-zip`, `extract-archive`, `archive-result`, `url-import`, `torrent-import`, `image-preview`, `audio-preview`, `pdf-reader`, `cache-settings`, `transfer-settings`, `performance-overview`, `performance-resources`, `preloads`, `recovery-file`, `thumbnail-rebuild`, `current-features.mp4` |
 | Header only changed | `media-preview`, `video-settings`, `video-continue` |
 
 <a id="readme-banner"></a>
@@ -35,7 +35,7 @@ filename changes, update the README, gallery and `PUBLIC_DOCS` in
 | `drive-overview`, `drive-list`, `new-menu`, `file-actions`, `mobile-drive` | Browsing, upload/import entry points, actions and emulated phone layout |
 | `torrent-import`, `create-zip`, `extract-archive`, `archive-result`, `url-import` | Import/archive dialogs and the completed Notes.zip |
 | `media-preview`, `video-continue`, `video-settings`, `image-preview`, `audio-preview` | Current player, Continue, built-in settings, images and audio |
-| `pdf-reader`, `epub-reader`, `comic-reader` | Document, ebook and comic readers |
+| `pdf-reader` | PDF reader |
 | `preloads`, `performance-overview`, `performance-resources` | Local demo cache coverage and illustrative resource/traffic readings |
 | `cache-settings`, `transfer-settings`, `thumbnail-rebuild` | Local demo configuration and rebuild confirmation |
 | `recovery-file` | Obsolete local demo recovery-file/key form; not current restore instructions |

@@ -1560,6 +1560,63 @@ def test_continuous_pdf_virtualizes_canvases_and_keeps_all_pages_reachable(
     assert_pdf_canvas_budget(dialog)
 
 
+@pytest.mark.parametrize(
+    "theme, stage, placeholder",
+    [
+        ("dark", "rgb(22, 24, 28)", "rgb(23, 29, 38)"),
+        ("light", "rgb(233, 236, 240)", "rgb(246, 248, 252)"),
+    ],
+)
+def test_pdf_loading_surfaces_follow_theme_until_paper_has_rendered(
+    server: Server,
+    desktop: tuple[Any, Any],
+    theme: str,
+    stage: str,
+    placeholder: str,
+) -> None:
+    _, page = desktop
+    page.emulate_media(color_scheme="dark" if theme == "dark" else "light")
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).dblclick()
+
+    page.evaluate("""() => {
+        window.pdfPlaceholders = [];
+        const observer = new MutationObserver(() => {
+            const page = document.querySelector('.pdf-page[aria-busy=true]');
+            if (!page) return;
+            const canvas = page.querySelector('canvas');
+            window.pdfPlaceholders.push({
+                background: getComputedStyle(page).backgroundColor,
+                canvasHidden: getComputedStyle(canvas).display === 'none',
+            });
+        });
+        observer.observe(document.body, {
+            childList: true, attributes: true, subtree: true,
+        });
+    }""")
+    held = []
+    pattern = "**/assets/PdfPreview-*.js"
+    page.route(pattern, lambda route: held.append(route))
+    with page.expect_request(pattern):
+        page.get_by_role("button", name="sample.pdf", exact=True).dblclick()
+    dialog = preview_dialog(page)
+    expect(dialog.get_by_text("Loading PDF viewer…")).to_be_visible()
+    expect(dialog.locator(".preview-surface-pdf")).to_have_css(
+        "background-color", stage
+    )
+    assert len(held) == 1
+    held[0].continue_()
+
+    assert_rendered_pdf_page(page, "sample.pdf", 1)
+    assert {
+        "background": placeholder,
+        "canvasHidden": True,
+    } in page.evaluate("window.pdfPlaceholders")
+    expect(dialog.get_by_role("img", name="sample.pdf, page 1")).to_have_css(
+        "background-color", "rgb(255, 255, 255)"
+    )
+
+
 def test_pdf_chunk_failure_keeps_preview_controls_and_can_reload(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:

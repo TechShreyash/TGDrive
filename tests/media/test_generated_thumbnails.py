@@ -406,38 +406,6 @@ async def test_native_upload_keeps_original_and_own_cover_when_thumbnail_is_opti
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("kind", ["epub", "cbz", "cbr", "docx"])
-async def test_archive_cover_generation_is_bounded_and_preserves_original(
-    tmp_path, kind
-):
-    from tests.support.book_samples import cbr, cbz, epub
-
-    if kind == "cbr":
-        try:
-            import libarchive  # noqa: F401
-        except ImportError, OSError, AttributeError:
-            pytest.skip("Native libarchive is not installed")
-
-    if not shutil.which("ffmpeg"):
-        pytest.skip("native ffmpeg not installed")
-    if kind == "docx":
-        import io
-        from zipfile import ZipFile
-
-        archive = io.BytesIO()
-        with ZipFile(archive, "w") as output:
-            output.writestr("docProps/thumbnail.png", png())
-        original = archive.getvalue()
-    else:
-        original = epub() if kind == "epub" else cbr() if kind == "cbr" else cbz()
-    path = tmp_path / ("book." + kind)
-    path.write_bytes(original)
-    cover = await generate(path, path.name)
-    assert cover and cover.startswith(b"\xff\xd8\xff") and cover.endswith(b"\xff\xd9")
-    assert len(cover) <= MAX_BYTES
-    assert path.read_bytes() == original
-
-
 def test_large_jpeg_uses_decoder_downsampling_before_scaling(tmp_path, monkeypatch):
     from tgdrive.media import thumbnail_worker
 

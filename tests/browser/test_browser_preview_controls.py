@@ -13,7 +13,6 @@ if os.environ.get("TGDRIVE_E2E") != "1":
 import tests.browser.test_browser_e2e as fixtures
 from tests.browser.test_browser_e2e import (
     ARTIFACTS,
-    CONTROL,
     expect,
     fixture_nodes,
     login,
@@ -127,6 +126,18 @@ def test_pdf_real_fit_width_page_and_fullscreen(server, desktop, width):
     expect_expanded_fullscreen_toolbar(page)
     hide = page.get_by_role("button", name="Hide Toolbar", exact=True)
     expect(hide).to_be_focused()
+    hide_bounds = hide.bounding_box()
+    download_bounds = page.get_by_role("link", name="Download Original").bounding_box()
+    assert hide_bounds and download_bounds
+    assert (
+        abs(
+            hide_bounds["y"]
+            + hide_bounds["height"] / 2
+            - download_bounds["y"]
+            - download_bounds["height"] / 2
+        )
+        <= 1
+    )
     hide.press("Enter")
     expect_collapsed_fullscreen_toolbar(page)
     page.screenshot(path=ARTIFACTS / f"pdf-fullscreen-collapsed-{width}.png")
@@ -217,9 +228,6 @@ def test_phone_pdf_controls_keep_pages_and_keyboard_actions_reachable(
         ("sample.png", 1440),
         ("sample.wav", 1440),
         ("reports.csv", 1440),
-        ("The little journey.epub", 1440),
-        ("The little journey.epub", 390),
-        ("The little journey.epub", 320),
     ],
 )
 def test_supported_previews_enter_exit_fullscreen_and_close(
@@ -235,20 +243,10 @@ def test_supported_previews_enter_exit_fullscreen_and_close(
             ),
         )
     login(page, server.url)
-    if name.endswith("epub"):
-        folder = page.request.post(
-            server.url + "/__test__/books", headers=CONTROL
-        ).json()["path"]
-        page.goto(server.url + "/?path=" + folder)
-    else:
-        page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
     page.get_by_role("button", name=name, exact=True).press("Enter")
     if name == "sample.png":
         expect(page.locator(".preview-quality")).to_be_visible()
-    if name.endswith("epub"):
-        expect(
-            page.get_by_role("group", name="Reader controls", exact=True)
-        ).to_be_visible()
     enter = page.get_by_role("button", name="Enter Fullscreen", exact=True)
     expect(enter).to_be_visible()
     enter.click()
@@ -262,21 +260,6 @@ def test_supported_previews_enter_exit_fullscreen_and_close(
     expand_fullscreen_toolbar(page)
     if name == "sample.png":
         expect(page.locator(".preview-quality")).to_be_visible()
-    if name.endswith("epub"):
-        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-        if width <= 720:
-            toolbar = page.get_by_role("group", name="Reader controls", exact=True)
-            bounds = toolbar.bounding_box()
-            assert bounds is not None
-            assert bounds["x"] + bounds["width"] >= width - 16
-        page.screenshot(path=ARTIFACTS / f"book-fullscreen-expanded-{width}.png")
-        expect(
-            page.get_by_role("group", name="Reader controls", exact=True)
-        ).to_be_visible()
-        page.get_by_label("Reading options", exact=True).click()
-        page.get_by_role("button", name="Increase text size", exact=True).click()
-        expect(page.locator(".book-chapter")).to_have_css("font-size", "20px")
-        page.get_by_label("Reading options", exact=True).click()
     page.get_by_role("button", name="Hide Toolbar", exact=True).click()
     expect_collapsed_fullscreen_toolbar(page)
     page.keyboard.press("Escape")

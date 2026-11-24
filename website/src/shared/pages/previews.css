@@ -1,7 +1,7 @@
 /*
  * File previews: three-zone reader toolbar (file, page, view), a themed details
  * dialog, and content-sized text, audio and image stages.
- * Loaded last. PdfPreview.css and BookPreview.css load lazily after it, so
+ * Loaded last. PdfPreview.css loads lazily after it, so
  * rules that override them carry an extra `.file-preview .preview-header-reader`.
  */
 
@@ -19,6 +19,19 @@
 }
 .file-preview .preview-fullscreen-surface {
     background: var(--canvas);
+}
+.file-preview.file-preview-video {
+    --surface: #1a212b;
+    --ink: #edf2fa;
+    --muted: #acb8c9;
+    --line-subtle: #2c3543;
+    --hover: #273241;
+    --action: #8dbbff;
+    --action-soft: #22344e;
+    --on-action-soft: #c8deff;
+    --selected: #2c4261;
+    --file-video: #bca7eb;
+    color-scheme: dark;
 }
 .file-preview :is(.preview-surface-image, .preview-surface-video) {
     color-scheme: dark;
@@ -110,16 +123,8 @@
     color: var(--ink);
     color-scheme: inherit;
 }
-.file-preview
-    :is(
-        .preview-surface-archive,
-        .preview-surface-office,
-        .preview-surface-other
-    ) {
+.file-preview :is(.preview-surface-archive, .preview-surface-other) {
     background: var(--canvas);
-}
-.file-preview .preview-surface-office {
-    align-items: stretch;
 }
 .file-preview .preview-loading {
     color: var(--muted);
@@ -149,7 +154,7 @@
 /* ---------- Reader toolbar: file left, page center, view right ---------- */
 
 /* One pill per control group: pager in the center, zoom on the right. */
-.file-preview .preview-header-reader :is(.reader-navigation, .book-toolbar),
+.file-preview .preview-header-reader .reader-navigation,
 .file-preview .preview-header-reader .pdf-toolbar > .inline-actions {
     display: flex;
     flex-wrap: nowrap;
@@ -163,8 +168,6 @@
     .preview-header-reader
     :is(
         .reader-navigation .icon-button,
-        .book-toolbar > .icon-button,
-        .book-options > summary,
         .pdf-toolbar .inline-actions .icon-button,
         .pdf-options-toggle
     ) {
@@ -182,15 +185,12 @@
     .preview-header-reader
     :is(
         .reader-navigation .icon-button,
-        .book-toolbar > .icon-button,
-        .book-options > summary,
         .pdf-toolbar .inline-actions .icon-button,
         .pdf-options-toggle,
         .pdf-zoom-toggle
     ):hover:not(:disabled) {
     background: var(--pill-hover);
 }
-.file-preview .preview-header-reader .book-options[open] > summary,
 .file-preview .preview-header-reader .pdf-zoom-toggle[aria-expanded="true"],
 .file-preview .preview-header-reader .pdf-options-toggle[aria-expanded="true"] {
     background: var(--pill-hover);
@@ -225,8 +225,7 @@
     gap: 0;
     color: var(--ink);
 }
-/* The id selector outranks the old #book-entry select sizing in BookPreview.css. */
-.file-preview .preview-header-reader :is(.page-jump, #book-entry.page-jump) {
+.file-preview .preview-header-reader .page-jump {
     flex: 0 0 auto;
     max-width: 8ch;
 }
@@ -252,72 +251,15 @@
     outline: 2px solid color-mix(in srgb, var(--action) 30%, transparent);
     outline-offset: 0;
 }
-.file-preview .preview-header-reader .book-position {
+.file-preview .preview-header-reader .reader-position {
     padding: 0 6px 0 4px;
     color: var(--muted);
     font-size: 13px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
 }
-/* EPUB chapters keep a short native picker, styled as part of the pill. */
-.file-preview .preview-header-reader .book-toolbar select#book-entry {
-    flex: 0 1 auto;
-    width: auto;
-    min-width: 0;
-    max-width: 220px;
-    height: 36px;
-    padding: 0 8px;
-    border: 0;
-    border-radius: 8px;
-    background: transparent;
-    color: var(--ink);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-}
-.file-preview .preview-header-reader .book-toolbar select#book-entry:hover {
-    background: var(--pill-hover);
-}
-.file-preview .preview-header-reader .book-toolbar > .book-position {
-    padding-inline: 2px 4px;
-}
-.file-preview .preview-header-reader .book-options {
-    border-left: 1px solid var(--line);
-    padding-left: 2px;
-    margin-left: 2px;
-}
-
-/* Reading options popover. */
-.file-preview .preview-header-reader .book-options-panel {
-    position: absolute;
-    z-index: 6;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 2px;
-    width: 220px;
-    max-width: calc(100vw - 24px);
-    max-height: calc(
-        100dvh - 90px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
-    );
-    overflow: auto;
-    overscroll-behavior: contain;
-    padding: 6px;
-    border: 1px solid var(--line-subtle);
-    border-radius: 14px;
-    background: var(--surface-raised);
-    color: var(--ink);
-    box-shadow: var(--menu-shadow);
-    animation: refresh-fade var(--dur-1) var(--ease-out);
-}
 .file-preview .preview-header-reader .pdf-toolbar {
     position: relative;
-}
-.file-preview .preview-header-reader .book-options-panel {
-    top: calc(100% + 10px);
-    right: -2px;
-    flex-wrap: nowrap;
 }
 .file-preview .preview-header-reader .view-menu-item {
     display: flex;
@@ -383,81 +325,6 @@
     outline: 2px solid var(--action);
     outline-offset: -2px;
 }
-.file-preview .preview-header-reader .reader-menu-section {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-    margin: 0;
-    padding: 0;
-    border: 0;
-}
-.file-preview
-    .preview-header-reader
-    .reader-menu-section
-    + .reader-menu-section,
-.file-preview
-    .preview-header-reader
-    .book-typeface-control
-    + .reader-menu-section {
-    margin-top: 4px;
-    padding-top: 6px;
-    border-top: 1px solid var(--line-subtle);
-}
-.file-preview .preview-header-reader .reader-menu-section legend {
-    padding: 4px 10px 2px;
-    color: var(--muted);
-    font-size: 12px;
-    font-weight: 600;
-}
-/* EPUB text size row stays one compact line above the sections. */
-.file-preview .preview-header-reader .book-options-panel > .icon-button {
-    display: none;
-}
-.file-preview .preview-header-reader .book-options-panel:has(> .icon-button) {
-    display: grid;
-    grid-template-columns: 36px 1fr 36px;
-    align-items: center;
-}
-.file-preview
-    .preview-header-reader
-    .book-options-panel:has(> .icon-button)
-    > .icon-button {
-    display: inline-flex;
-    width: 36px;
-    height: 36px;
-    border-radius: 9px;
-    color: var(--ink);
-}
-.file-preview
-    .preview-header-reader
-    .book-options-panel:has(> .icon-button)
-    > span {
-    text-align: center;
-    font-size: 13px;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-}
-.file-preview
-    .preview-header-reader
-    .book-options-panel
-    > :is(.book-typeface-control, .reader-menu-section) {
-    grid-column: 1 / -1;
-}
-.file-preview .preview-header-reader .book-typeface-control {
-    padding: 4px 4px 4px 10px;
-    font-size: 13px;
-}
-.file-preview .preview-header-reader .book-typeface-control select {
-    height: 32px;
-    padding: 0 8px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--surface);
-    color: var(--ink);
-    font: inherit;
-}
-
 .file-preview .preview-header-reader .preview-fullscreen {
     flex: 0 0 36px;
 }
@@ -495,9 +362,7 @@
         align-items: center;
         gap: 10px;
     }
-    .file-preview
-        .preview-header-reader
-        :is(.reader-navigation, .book-toolbar) {
+    .file-preview .preview-header-reader .reader-navigation {
         position: absolute;
         top: 50%;
         left: 50%;
@@ -520,13 +385,6 @@
         display: inline-flex;
         background: var(--pill);
     }
-    .file-preview .preview-header-reader .book-toolbar {
-        position: static;
-        translate: none;
-    }
-    .file-preview .preview-header-reader.preview-header-book .preview-heading {
-        max-width: none;
-    }
 }
 
 @media (min-width: 721px) and (pointer: coarse) {
@@ -537,8 +395,6 @@
             .preview-fullscreen,
             .preview-download,
             .reader-navigation .icon-button,
-            .book-toolbar > .icon-button,
-            .book-options > summary,
             .pdf-toolbar .inline-actions .icon-button,
             .pdf-options-toggle,
             .view-menu-item
@@ -557,9 +413,11 @@
         grid-template-columns: 44px minmax(0, 1fr) 44px 44px 48px;
         padding-right: max(12px, env(safe-area-inset-right));
     }
-    .file-preview
-        .preview-header-reader
-        :is(.reader-navigation, .book-toolbar) {
+    .file-preview .preview-header-reader .preview-toolbar-toggle {
+        grid-column: -2;
+        grid-row: 1;
+    }
+    .file-preview .preview-header-reader .reader-navigation {
         flex: 1;
         min-width: 0;
         justify-content: center;
@@ -571,8 +429,6 @@
         .preview-header-reader
         :is(
             .reader-navigation .icon-button,
-            .book-toolbar > .icon-button,
-            .book-options > summary,
             .pdf-toolbar .inline-actions .icon-button,
             .pdf-options-toggle,
             .view-menu-item
@@ -582,40 +438,23 @@
         min-height: 44px;
         height: 44px;
     }
-    .file-preview .preview-header-reader .reader-navigation .icon-button,
-    .file-preview .preview-header-reader .book-toolbar > .icon-button {
+    .file-preview .preview-header-reader .reader-navigation .icon-button {
         width: 44px;
     }
     .file-preview
         .preview-header-reader
         .reader-navigation
-        .icon-button:last-child,
-    .file-preview
-        .preview-header-reader
-        .book-toolbar
-        > .icon-button
-        + .book-position
-        + .icon-button {
+        .icon-button:last-child {
         margin-left: auto;
     }
     .file-preview
         .preview-header-reader
         .reader-navigation
-        .icon-button:first-child,
-    .file-preview
-        .preview-header-reader
-        .book-toolbar
-        > .icon-button:first-child {
+        .icon-button:first-child {
         margin-right: auto;
     }
     .file-preview .preview-header-reader .page-jump {
         height: 36px;
-        font-size: 16px;
-    }
-    .file-preview .preview-header-reader .book-toolbar select#book-entry {
-        flex: 1 1 auto;
-        height: 44px;
-        max-width: none;
         font-size: 16px;
     }
     .file-preview .preview-header-reader .pdf-options-toggle {
@@ -623,47 +462,21 @@
         width: 44px;
         background: var(--pill);
     }
-    .file-preview .preview-header-reader .book-options-panel {
-        position: fixed;
-        top: calc(112px + env(safe-area-inset-top));
-        right: max(12px, env(safe-area-inset-right));
-        width: min(260px, calc(100vw - 24px));
-        max-height: calc(
-            100dvh - 124px - env(safe-area-inset-top) -
-                env(safe-area-inset-bottom)
-        );
-    }
 }
 
 /* PDF stage: thin themed scrollbar on a soft canvas. */
+.file-preview .preview-surface-pdf {
+    --pdf-stage: light-dark(#e9ecf0, #16181c);
+    background: var(--pdf-stage);
+}
 .file-preview .pdf-scroll {
-    background: light-dark(#e9ecf0, #16181c);
+    background: var(--pdf-stage);
     scrollbar-width: thin;
     scrollbar-color: light-dark(#b4bcc6, #4a4f57) transparent;
 }
 
 .pdf-page,
-.book-page,
 .reader-page {
-    border-radius: 4px;
-    box-shadow:
-        0 18px 44px -18px light-dark(#141a2366, #000c),
-        0 2px 6px light-dark(#141a231f, #0006);
-}
-
-/* Comics and image pages: capped like PDF fit width, centered on the soft canvas. */
-.file-preview .book-content:has(> .book-image) {
-    background: light-dark(#e9ecf0, #16181c);
-}
-.file-preview .book-fit-width > .book-image > img,
-.file-preview .book-fit-width .book-illustrated-page img {
-    max-width: min(100%, 960px);
-}
-.file-preview .book-fit-page > .book-image > img {
-    max-height: 100%;
-}
-.file-preview .book-content > .book-image > img,
-.file-preview .book-illustrated-page img {
     border-radius: 4px;
     box-shadow:
         0 18px 44px -18px light-dark(#141a2366, #000c),
@@ -985,4 +798,26 @@
 .file-preview .preview-feedback .secondary-button:hover,
 .file-preview .preview-toolbar-toggle:hover {
     background: var(--surface-subtle);
+}
+
+.file-preview .preview-header .preview-toolbar-toggle {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    border-radius: 10px;
+}
+.file-preview .preview-header .preview-toolbar-toggle:hover {
+    background: var(--hover);
+}
+@media (max-width: 720px), (any-pointer: coarse) {
+    .file-preview .preview-header .preview-toolbar-toggle {
+        width: 44px;
+        height: 44px;
+    }
 }

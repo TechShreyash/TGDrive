@@ -28,7 +28,7 @@ TGDrive keeps the folders, previews and sharing on top.
 | --- | --- |
 | **[Upload and resume](docs/usage.md#upload-files-or-folders)** | Upload files or whole folders. Interrupted uploads resume when you reselect the originals, and large files split automatically. |
 | **[Import from anywhere](docs/usage.md#import-a-torrent-or-magnet-link)** | Bring in torrents and magnet links with their folders, [direct URLs](docs/usage.md#import-from-a-url), or files sent to [your Telegram bot](docs/usage.md#upload-through-your-telegram-bot). |
-| **[Watch and read](docs/usage.md#open-preview-and-download)** | Stream video and audio and pick up where you left off. Open photos, PDFs, text, EPUB ebooks and CBZ/CBR comics in the browser. |
+| **[Watch and read](docs/usage.md#open-preview-and-download)** | Stream video and audio and pick up where you left off. Open photos, PDFs and text in the browser. |
 | **[Archives](docs/usage.md#create-zips-and-extract-archives)** | Create ZIPs, or extract ZIP, 7z, RAR, TAR and compressed files, as background jobs. |
 | **[Share and embed](docs/usage.md#share-and-revoke)** | Create read-only links for files or folders with expiry and revocation, or embed a viewer in your website. |
 | **[Recover](docs/backup-recovery.md)** | Save an encrypted backup and the original `ENCRYPTION_KEY` off-host. Restore after database loss, or rebuild a lost channel from a confirmed independent copy. |

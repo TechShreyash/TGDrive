@@ -25,14 +25,8 @@ vi.mock("react", async (importOriginal) => {
 vi.mock("./pdf/PdfPreview", () => {
     throw new Error("The PDF viewer chunk is unavailable.");
 });
-vi.mock("./books/BookPreview", () => {
-    throw new Error("The book viewer chunk is unavailable.");
-});
 vi.mock("./archives/ArchivePreview", () => {
     throw new Error("The archive viewer chunk is unavailable.");
-});
-vi.mock("./OfficePreview", () => {
-    throw new Error("The Office viewer chunk is unavailable.");
 });
 vi.mock("./MarkdownPreview", () => {
     throw new Error("The Markdown viewer chunk is unavailable.");
@@ -119,7 +113,7 @@ describe("bounded safe previews", () => {
     });
 
     it("keeps recovery controls available when a document viewer chunk rejects", async () => {
-        expect(viewerLoaders).toHaveLength(5);
+        expect(viewerLoaders).toHaveLength(3);
         for (const load of viewerLoaders) {
             const viewer = await load();
             const html = renderToStaticMarkup(createElement(viewer.default));

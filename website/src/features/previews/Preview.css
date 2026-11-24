@@ -95,12 +95,8 @@
             .archive-breadcrumbs button,
             .archive-folder,
             .archive-pagination button
-        ),
-    .file-preview .preview-surface-office .mantine-NativeSelect-input {
+        ) {
         min-height: 44px;
-    }
-    .file-preview .preview-surface-office .mantine-NativeSelect-input {
-        font-size: 16px;
     }
     .file-preview .preview-surface-audio {
         padding-bottom: max(12px, env(safe-area-inset-bottom));

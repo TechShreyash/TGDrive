@@ -13,7 +13,7 @@ through [Setup](setup.md). How to propose changes: [CONTRIBUTING.md](../CONTRIBU
 | Edit the app | [Install](#install-the-development-environment) · [Run](#run-while-editing) · [Sample content](#preview-with-sample-content) |
 | Choose checks | [Validation commands](#validation-commands) · [Live Telegram](#live-telegram-testing) |
 | Find the code | [Repository/test map](#repository-map-and-test-map) · [Code conventions](#code-conventions) |
-| Preserve behavior | [Frontend](#frontend-contracts) · [Channel backups](#independent-channel-backup-contracts) · [Readers](#selective-book-pages-and-shared-pdf-resources) |
+| Preserve behavior | [Frontend](#frontend-contracts) · [Channel backups](#independent-channel-backup-contracts) · [Readers](#selective-pdf-resources) |
 | Prepare a release | [CI](#when-github-checks-run) · [Source artifacts](#source-releases) · [Release procedure](release.md) |
 | Update guides or captures | [Documentation policy](#documentation-maintenance) · [Media guide](assets/README.md) |
 
@@ -74,8 +74,7 @@ Open [localhost:18767](http://localhost:18767/) with `offline browser test passw
 The fixture seeds files, transfers, shares, caches, performance and reading samples
 without Telegram credentials. The sample Automatic tuning report uses the
 production sizing rules with example disk, CPU and memory readings. Restart
-resets the fixture. CBR needs
-[libarchive](reading.md), included in Docker. Showcase uses the production
+resets the fixture. Showcase uses the production
 16 GiB file cap; ordinary browser tests use 32 MiB. Never publicly deploy the
 fixture or its `/__test__` endpoints.
 
@@ -100,7 +99,7 @@ measure live Telegram/MongoDB throughput or certify deployment.
 | Video resume and owner/share isolation | `tests/storage/test_video_progress.py`, `tests/web/test_video_progress.py`, `website/src/features/previews/video/videoWatchProgress.test.ts` and `tests/browser/test_browser_player_resume.py`; cover ordered writers, completion, failed saves and recovery. |
 | Navigation reuse, stale requests and share indicators | [`test_browser_navigation_requests.py`](../tests/browser/test_browser_navigation_requests.py) and [`test_catalog_statistics.py`](../tests/storage/test_catalog_statistics.py). |
 | Idle/hidden polling and thumbnail scroll reuse | `website/src/app/statusPolling.test.ts`, `website/src/features/transfers/jobPolling.test.ts`, `tests/browser/test_browser_file_views.py`; sending/retry correctness stays independent of polling. |
-| Thumbnail regeneration and selective readers | `tests/media/test_thumbnail_rebuild.py`, `test_generated_thumbnails.py`, `test_thumbnails.py`, `test_books.py`, `test_books_api.py`, `test_multipart_previews.py`; synthetic browser flows in `test_browser_thumbnail_rebuild.py` and `test_browser_books_shares.py`. |
+| Thumbnail regeneration and selective readers | `tests/media/test_thumbnail_rebuild.py`, `test_generated_thumbnails.py`, `test_thumbnails.py`, `test_zip_preview.py`, `test_multipart_previews.py`; synthetic browser flows in `test_browser_thumbnail_rebuild.py` and `test_browser_zip_preview.py`. |
 
 <details>
 <summary>Focused archive, URL, torrent and download commands</summary>
@@ -147,7 +146,7 @@ regressions are:
 
 ```bash
 uv run --frozen --all-groups python -m pytest -W error \
-  tests/media/test_media_request_fairness.py tests/media/test_book_range_admission.py \
+  tests/media/test_media_request_fairness.py tests/media/test_file_range_admission.py \
   tests/media/test_file_status.py tests/media/test_media_scheduler.py \
   tests/media/test_media_admission_priority.py tests/media/test_stream_delivery.py \
   tests/media/test_multipart_streaming.py tests/web/test_app.py -q
@@ -449,7 +448,7 @@ public showcase media belongs in `docs/assets/`.
 | Catalog and MongoDB | `tests/storage/` |
 | Telegram clients, bot mode and Premium login | `tests/telegram/` |
 | Jobs, uploads, split files and URL imports | `tests/transfers/` |
-| Streaming, cache, previews, books and thumbnails | `tests/media/` |
+| Streaming, cache, previews and thumbnails | `tests/media/` |
 | Checkpoints and database recovery | `tests/recovery/` |
 | Independent channel backups and activation | `tests/replication/` |
 | Performance counters, logging, request IDs and history | `tests/observability/` |
@@ -749,7 +748,7 @@ directions and database-only recovery without risking the only copy.
 
 </details>
 
-## Selective book pages and shared PDF resources
+## Selective PDF resources
 
 The vendored PDF.js worker keeps image substreams sparse during parsing, defers image
 stream bodies in page resource discovery and loads a painted image's dependencies
@@ -768,15 +767,3 @@ support additional character sets and image formats without an asset CDN. Keep
 sparse transport, page/image/pixel bounds and XFA/script restrictions intact.
 Password prompts pass only an in-memory value to PDF.js; passwords are never
 stored in browser preferences or sent to a TGDrive password endpoint.
-
-Comic and EPUB look-ahead starts only after the visible page/chapter is usable
-and retains one upcoming entry. Selection changes and close cancel speculative
-work. Next cancels/restarts an unfinished prefetch as foreground work; do not
-claim that pending reads are shared. Keep the 64 MiB raster response bound and
-verify request ordering, cancellation and cleanup when changing this behavior.
-
-`tests/media/test_books.py` covers unchanged large original page bytes and bounded result
-reuse. `tests/media/test_books_api.py` covers access checks on cached/conditional responses.
-`website/src/features/previews/books/bookImage.test.ts` covers download progress, errors, retry and cancellation;
-the comic error/recovery, large original page and EPUB offscreen-image cases in
-`tests/browser/test_browser_books_shares.py` exercise the shipped UI and HTTP path.

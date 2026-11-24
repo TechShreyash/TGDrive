@@ -945,7 +945,10 @@ export default function PdfPreview({
                                 total={document?.numPages ?? 0}
                                 onJump={goToPage}
                             />
-                            <span className="book-position" aria-live="polite">
+                            <span
+                                className="reader-position"
+                                aria-live="polite"
+                            >
                                 {document && (
                                     <>
                                         <span className="sr-only">

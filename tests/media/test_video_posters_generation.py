@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import struct
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,6 @@ import pytest
 
 from tgdrive.media import generated_thumbnails as covers
 from tgdrive.media import thumbnail_worker as worker
-from tgdrive.media.book_worker import image_dimensions
 
 THUMBNAIL = b"\xff\xd8\xffsmall\xff\xd9"
 POSTER = b"\xff\xd8\xfflarge\xff\xd9"
@@ -21,6 +21,47 @@ def pair(small=THUMBNAIL, poster=POSTER, *, magic=worker.VIDEO_IMAGES_MAGIC):
     return (
         worker.VIDEO_IMAGES_HEADER.pack(magic, len(small), len(poster)) + small + poster
     )
+
+
+def jpeg_dimensions(data):
+    position = 2
+    for _ in range(10_000):
+        if position + 4 > len(data) or data[position] != 0xFF:
+            raise ValueError
+        while position < len(data) and data[position] == 0xFF:
+            position += 1
+        if position + 3 > len(data):
+            raise ValueError
+        marker = data[position]
+        position += 1
+        if marker == 0x01:
+            continue
+        if marker in {0xD9, 0xDA}:
+            raise ValueError
+        length = int.from_bytes(data[position : position + 2], "big")
+        if length < 2 or position + length > len(data):
+            raise ValueError
+        if marker in {
+            0xC0,
+            0xC1,
+            0xC2,
+            0xC3,
+            0xC5,
+            0xC6,
+            0xC7,
+            0xC9,
+            0xCA,
+            0xCB,
+            0xCD,
+            0xCE,
+            0xCF,
+        }:
+            if length < 8:
+                raise ValueError
+            height, width = struct.unpack_from(">HH", data, position + 3)
+            return width, height
+        position += length
+    raise ValueError
 
 
 @pytest.mark.parametrize(
@@ -67,8 +108,8 @@ async def test_native_video_images_are_bounded_and_do_not_upscale(
     assert thumbnail and poster
     assert len(thumbnail) <= covers.MAX_BYTES
     assert len(poster) <= covers.MAX_POSTER_BYTES
-    assert image_dimensions(poster, "image/jpeg") == [expected]
-    assert max(image_dimensions(thumbnail, "image/jpeg")[0]) <= 320
+    assert jpeg_dimensions(poster) == expected
+    assert max(jpeg_dimensions(thumbnail)) <= 320
     assert path.read_bytes() == original
 
 

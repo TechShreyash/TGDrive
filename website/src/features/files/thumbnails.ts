@@ -4,13 +4,6 @@ export const MAX_THUMBNAIL_BYTES = 128 * 1024;
 export const THUMBNAIL_CONCURRENCY = 4;
 export const THUMBNAIL_PENDING = 32;
 const candidates = new Set([
-    "cbr",
-    "docx",
-    "pptx",
-    "xlsx",
-    "odt",
-    "odp",
-    "ods",
     "mp3",
     "flac",
     "m4a",
@@ -18,8 +11,6 @@ const candidates = new Set([
     "opus",
     "wav",
     "aac",
-    "epub",
-    "cbz",
     "jpg",
     "jpeg",
     "png",
@@ -103,6 +94,29 @@ export async function fetchThumbnail(
     url: string,
     signal: AbortSignal,
 ): Promise<string | null> {
+    const first = await fetchThumbnailOnce(url, signal);
+    if (typeof first !== "number") return first;
+    // Wait outside the request queue so other visible files can load.
+    await new Promise<void>((resolve, reject) => {
+        signal.throwIfAborted();
+        const cancel = () => {
+            clearTimeout(timer);
+            reject(signal.reason);
+        };
+        const timer = setTimeout(() => {
+            signal.removeEventListener("abort", cancel);
+            resolve();
+        }, first);
+        signal.addEventListener("abort", cancel, { once: true });
+    });
+    const retry = await fetchThumbnailOnce(url, signal);
+    return typeof retry === "number" ? null : retry;
+}
+
+async function fetchThumbnailOnce(
+    url: string,
+    signal: AbortSignal,
+): Promise<string | number | null> {
     return limited(signal, async () => {
         const response = await fetch(url, {
             credentials: "same-origin",
@@ -111,6 +125,15 @@ export async function fetchThumbnail(
             // Each mount revalidates permission; HTTP ETags can reuse the small body.
             cache: "no-cache",
         });
+        if (response.status === 503) {
+            await response.body?.cancel();
+            const retryAfter = Number(response.headers.get("retry-after") ?? 2);
+            return Number.isFinite(retryAfter) &&
+                retryAfter >= 0 &&
+                retryAfter <= 5
+                ? retryAfter * 1000
+                : null;
+        }
         const mime = response.headers.get("content-type")?.split(";")[0].trim();
         if (
             !response.ok ||

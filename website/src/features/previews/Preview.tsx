@@ -19,6 +19,8 @@ import {
     Download,
     Maximize,
     Minimize,
+    PanelTopClose,
+    PanelTopOpen,
     RefreshCw,
     X,
 } from "lucide-react";
@@ -88,10 +90,6 @@ const PdfPreview = lazy(() =>
     import("./pdf/PdfPreview").catch(() => ({ default: ViewerUnavailable })),
 );
 
-const BookPreview = lazy(() =>
-    import("./books/BookPreview").catch(() => ({ default: ViewerUnavailable })),
-);
-
 const ArchivePreview = lazy(() =>
     import("./archives/ArchivePreview").catch(() => ({
         default: ViewerUnavailable,
@@ -101,10 +99,6 @@ const ArchivePreview = lazy(() =>
 const MarkdownPreview = lazy(() =>
     import("./MarkdownPreview").catch(() => ({ default: ViewerUnavailable })),
 );
-const OfficePreview = lazy(() =>
-    import("./OfficePreview").catch(() => ({ default: ViewerUnavailable })),
-);
-
 export function nativePreviewKind(
     name: string,
 ): "image" | "video" | "audio" | null {
@@ -214,15 +208,9 @@ export async function loadPreview(
     if (
         !data ||
         typeof data !== "object" ||
-        ![
-            "text",
-            "pdf",
-            "video",
-            "book",
-            "archive",
-            "office",
-            "unsupported",
-        ].includes(data.kind) ||
+        !["text", "pdf", "video", "archive", "unsupported"].includes(
+            data.kind,
+        ) ||
         (data.size !== undefined &&
             (!Number.isSafeInteger(data.size) || data.size < 0)) ||
         (data.reason !== undefined &&
@@ -617,7 +605,6 @@ export default function Preview({
     }, [path, auth, nativeKind, attempt]);
     const pdf =
         descriptor?.kind === "pdf" ? safePdfUrl(descriptor.url) : undefined;
-    const documentPreview = !!pdf || descriptor?.kind === "book";
     const details =
         !kind && !loadError && (loading || descriptor?.kind === "unsupported");
     const suffix = item.name.includes(".")
@@ -636,12 +623,52 @@ export default function Preview({
           : fileStatus?.phase === "receiving"
             ? "Receiving file…"
             : null;
+    const toolbarLabel = toolbarCollapsed ? "Show Toolbar" : "Hide Toolbar";
+    const toolbarToggle = (
+        <button
+            className={
+                "preview-toolbar-toggle icon-button" +
+                (pdf ? " preview-toolbar-toggle-pdf" : "")
+            }
+            type="button"
+            aria-label={toolbarLabel}
+            title={pdf && toolbarCollapsed ? undefined : toolbarLabel}
+            aria-controls="preview-header"
+            aria-expanded={!toolbarCollapsed}
+            onClick={() => {
+                setToolbarCollapsed(!toolbarCollapsed);
+                requestAnimationFrame(() =>
+                    fullscreenSurface.current
+                        ?.querySelector<HTMLButtonElement>(
+                            ".preview-toolbar-toggle",
+                        )
+                        ?.focus({ preventScroll: true }),
+                );
+            }}
+        >
+            {pdf ? (
+                toolbarCollapsed ? (
+                    <>
+                        <PanelTopOpen size={16} aria-hidden="true" />
+                        <span>Show toolbar</span>
+                    </>
+                ) : (
+                    <PanelTopClose size={17} aria-hidden="true" />
+                )
+            ) : toolbarCollapsed ? (
+                <ChevronDown size={19} aria-hidden="true" />
+            ) : (
+                <ChevronUp size={19} aria-hidden="true" />
+            )}
+        </button>
+    );
     return (
         <dialog
             ref={viewer}
             className={
                 "file-preview" +
                 (details ? " file-details" : "") +
+                (kind === "video" ? " file-preview-video" : "") +
                 (!onClose ? " preview-embedded" : "")
             }
             aria-labelledby="preview-title"
@@ -673,40 +700,13 @@ export default function Preview({
             }}
         >
             <div className="preview-fullscreen-surface" ref={fullscreenSurface}>
-                {fullscreen && (
-                    <button
-                        className="preview-toolbar-toggle"
-                        type="button"
-                        aria-label={
-                            toolbarCollapsed ? "Show Toolbar" : "Hide Toolbar"
-                        }
-                        title={
-                            toolbarCollapsed ? "Show Toolbar" : "Hide Toolbar"
-                        }
-                        aria-controls="preview-header"
-                        aria-expanded={!toolbarCollapsed}
-                        onClick={() =>
-                            setToolbarCollapsed((collapsed) => !collapsed)
-                        }
-                    >
-                        {toolbarCollapsed ? (
-                            <ChevronDown size={19} aria-hidden="true" />
-                        ) : (
-                            <ChevronUp size={19} aria-hidden="true" />
-                        )}
-                    </button>
-                )}
+                {fullscreen && toolbarCollapsed && toolbarToggle}
                 <header
                     id="preview-header"
                     hidden={fullscreen && toolbarCollapsed}
                     className={
                         "preview-header" +
-                        (documentPreview
-                            ? " preview-header-pdf preview-header-reader"
-                            : "") +
-                        (descriptor?.kind === "book"
-                            ? " preview-header-book"
-                            : "")
+                        (pdf ? " preview-header-pdf preview-header-reader" : "")
                     }
                 >
                     {onClose && (
@@ -738,7 +738,7 @@ export default function Preview({
                                     </span>
                                 </span>
                             </div>
-                            {documentPreview && (
+                            {pdf && (
                                 <div
                                     className="preview-toolbar-slot"
                                     ref={setToolbarTarget}
@@ -776,6 +776,7 @@ export default function Preview({
                             </a>
                         </>
                     )}
+                    {fullscreen && !toolbarCollapsed && toolbarToggle}
                 </header>
                 {fullscreenError && (
                     <p className="preview-limit" role="alert">
@@ -871,7 +872,6 @@ export default function Preview({
                                 (pdf
                                     ? "pdf"
                                     : descriptor?.kind === "archive" ||
-                                        descriptor?.kind === "office" ||
                                         descriptor?.kind === "text"
                                       ? descriptor.kind
                                       : kind || "other")
@@ -1043,23 +1043,6 @@ export default function Preview({
                                         </code>
                                     </pre>
                                 </div>
-                            ) : descriptor?.kind === "office" ? (
-                                <Suspense
-                                    fallback={
-                                        <div
-                                            className="preview-loading"
-                                            role="status"
-                                        >
-                                            <Spinner /> Loading Office viewer…
-                                        </div>
-                                    }
-                                >
-                                    <OfficePreview
-                                        key={path + auth}
-                                        path={path}
-                                        auth={auth}
-                                    />
-                                </Suspense>
                             ) : descriptor?.kind === "archive" ? (
                                 <Suspense
                                     fallback={
@@ -1075,25 +1058,6 @@ export default function Preview({
                                         key={path + auth}
                                         path={path}
                                         auth={auth}
-                                    />
-                                </Suspense>
-                            ) : descriptor?.kind === "book" ? (
-                                <Suspense
-                                    fallback={
-                                        <div
-                                            className="preview-loading"
-                                            role="status"
-                                        >
-                                            <Spinner />
-                                            Loading reader…
-                                        </div>
-                                    }
-                                >
-                                    <BookPreview
-                                        key={path + auth}
-                                        path={path}
-                                        auth={auth}
-                                        toolbarTarget={toolbarTarget}
                                     />
                                 </Suspense>
                             ) : pdf ? (
