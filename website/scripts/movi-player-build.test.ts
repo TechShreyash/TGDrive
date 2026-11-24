@@ -78,6 +78,42 @@ describe("reviewed Movi build transform", () => {
         expect(cap(undefined, 1)).toBe(100);
     });
 
+    it.each(["complete", "fail"])(
+        "protects the newer playback clock when a superseded demux seek ends with %s",
+        async (outcome) => {
+            const start = patched.indexOf("  async seek(A2, I2) {");
+            const end = patched.indexOf("  abandonSupersededSeek(A2) {", start);
+            const makeCore = new Function("g", "Je", "HttpSource",
+                `return class { ${patched.slice(start, end)} }`);
+            const Core = makeCore({ info() {}, warn() {} }, "", class {});
+            let release!: () => void;
+            const native = new Promise<void>((resolve, reject) => {
+                release = outcome === "complete" ? resolve : () => reject(new Error("old read failed"));
+            });
+            const entered = Promise.withResolvers<void>();
+            const core = Object.assign(new Core(), {
+                stateManager: { getState: () => "playing", canSeek: () => true, setState: vi.fn() },
+                getSourceFailure: () => null, startTime: 0, seekSessionId: 0,
+                animationFrameId: null, emit: vi.fn(), getDuration: () => 100,
+                stopPauseBuffering() {}, discardLoopPreroll() {}, dropVideoReadAhead() {},
+                videoDecoder: { flush() {} }, audioDecoder: { flush() {} },
+                audioRenderer: { reset() {} }, clock: { pause() {}, seek: vi.fn() },
+                demuxer: { seek: () => { entered.resolve(); return native; } },
+                audioDemuxer: { seek: vi.fn() }, abandonSupersededSeek: vi.fn(),
+            });
+            const previous = core.seek(17);
+            await entered.promise;
+            core.seekSessionId++;
+            core.seekingToKeyframe = true;
+            release();
+            await previous;
+            expect(core.abandonSupersededSeek).toHaveBeenCalledWith(1);
+            expect(core.clock.seek).not.toHaveBeenCalled();
+            expect(core.audioDemuxer.seek).not.toHaveBeenCalled();
+            expect(core.seekingToKeyframe).toBe(true);
+        },
+    );
+
     it("pins the ESM slim entry for build/dev and excludes dependency prebundling", () => {
         const plugin = moviPlayerBuild();
         expect(plugin.enforce).toBe("pre");

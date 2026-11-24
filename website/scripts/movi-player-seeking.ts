@@ -29,6 +29,28 @@ export function patchMoviSeeking(source: string): string {
             "if (!t2 && this.atomicIsStreaming() && (!this.seekHinted",
             "if (!t2 && (this._probing || this.atomicIsStreaming()) && (!this.seekHinted",
         ],
+        // A newer seek can start while native I/O is suspended. Only its owner
+        // may move the playback clock, clear decoder state or reposition audio.
+        [
+            "return this.demuxInFlight = false, this.abandonSupersededSeek(Q2);",
+            "return this.abandonSupersededSeek(Q2);",
+        ],
+        [
+            "await this.demuxer.seek(A2 + this.startTime), this.audioDemuxer) {",
+            "await this.demuxer.seek(A2 + this.startTime), this.seekSessionId !== Q2) return this.abandonSupersededSeek(Q2);\n      if (this.audioDemuxer) {",
+        ],
+        [
+            "for (; this.audioDemuxInFlight && I4++ < 200; ) await new Promise((A3) => setTimeout(A3, 5));",
+            "for (; this.audioDemuxInFlight && I4++ < 200; ) await new Promise((A3) => setTimeout(A3, 5));\n        if (this.seekSessionId !== Q2) return this.abandonSupersededSeek(Q2);",
+        ],
+        [
+            "this._splitAudioEof = false, this._lastSplitAudioPts = A2;",
+            "if (this.seekSessionId !== Q2) return this.abandonSupersededSeek(Q2);\n        this._splitAudioEof = false, this._lastSplitAudioPts = A2;",
+        ],
+        [
+            "throw this.seekingToKeyframe = false, this.seekSessionId === Q2 &&",
+            "if (this.seekSessionId !== Q2) return this.abandonSupersededSeek(Q2);\n      throw this.seekingToKeyframe = false,",
+        ],
         // Picture completion clears seekTargetTime independently of the audio
         // demux cursor. Keep its own lower bound until muxed audio catches up.
         [
