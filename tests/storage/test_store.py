@@ -386,6 +386,41 @@ def test_share_expiry_rotation_revocation_and_trash_are_durable(
     assert store.list_shares() == []
 
 
+@pytest.mark.parametrize("already_trashed", [False, True])
+def test_trash_revokes_every_link_in_subtree(already_trashed):
+    store = new_store()
+    parent = store.create_folder("/", "Parent")
+    parent_path = _full_path(parent)
+    folder = store.create_folder(parent_path, "Shared")
+    folder_path = _full_path(folder)
+    child = store.add_file(folder_path, "inside.bin", 1, 42)
+    file_path = _full_path(child)
+    parent_token = store.create_share(parent_path)
+    folder_tokens = [store.create_share(folder_path) for _ in range(2)]
+    file_tokens = [store.create_share(file_path) for _ in range(2)]
+
+    if already_trashed:
+        # Older/imported catalogs can have links under an already hidden folder.
+        snapshot = store.export()
+        snapshot["root"]["children"][parent["id"]]["children"][folder["id"]][
+            "trashed"
+        ] = True
+        store = store_from_payload(snapshot)
+    else:
+        store.set_trashed(folder_path, True)
+
+    page = store.list_shares_page(include_expired=True, limit=1)
+    assert [row["node_id"] for row in page["shares"]] == [parent["id"]]
+    assert page["next_cursor"] is None
+    assert not store.authorize_file(file_path, parent_token)
+    store.set_trashed(folder_path, False)
+    assert store.authorize_file(file_path, parent_token)
+    assert not any(
+        store.authorize_file(file_path, token) for token in folder_tokens + file_tokens
+    )
+    assert len(store.export()["shares"]) == 1
+
+
 def test_operation_id_is_idempotent_across_restart_and_permanent_deletion(
     tmp_path,
 ) -> None:

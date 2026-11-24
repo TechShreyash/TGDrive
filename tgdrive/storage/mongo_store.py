@@ -1524,8 +1524,8 @@ class MongoStore:
                     "trashed_files": sign * files,
                     "trashed_bytes": sign * size,
                 }
-            if trashed:
-                self._revoke_under(node["_id"])
+            # Restoring an older catalog item must not revive any stale links.
+            self._revoke_under(node["_id"])
             self._bump(**counters)
         return self._record(node, path)
 
@@ -2368,11 +2368,13 @@ class MongoStore:
                     ]
                     chains = self._chains({row["node_id"] for row in active})
                     for row in active:
-                        if limit is not None and len(result) == limit:
-                            return {"shares": result, "next_cursor": last}
                         chain = chains.get(row["node_id"])
                         if chain is None:
                             raise NotFoundError("Item not found")
+                        if self._hidden(chain):
+                            continue
+                        if limit is not None and len(result) == limit:
+                            return {"shares": result, "next_cursor": last}
                         result.append(
                             {
                                 "id": row["id"],

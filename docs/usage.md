@@ -557,9 +557,11 @@ valid authorization; network/Telegram delays and decoding can still buffer.
 
 Trash shows **Deleted from: My Files / …** to identify each item's source.
 
-- **Move to Trash** hides the item and revokes its shares, keeping Telegram files.
-- **Restore** brings it back, subject to name/access checks. An item pending
-  permanent deletion cannot be restored.
+- **Move to Trash** revokes every share link for the item. Trashing a folder
+  also revokes links for everything inside it. Telegram files are kept.
+- **Restore** brings the item back, subject to name and access checks. Anyone
+  using a revoked link needs a new one. An item pending permanent deletion
+  cannot be restored.
 - **Delete permanently** removes its database records, descendants and shares
   after confirmation. It cannot be cancelled or restored from Trash.
 

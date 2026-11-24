@@ -45,6 +45,44 @@ def test_trash_rollback_restores_shares_and_revision(app_client):
     assert store.authorize_file(path, token)
 
 
+def test_bulk_trash_removes_all_selected_shares_and_restoring_keeps_them_revoked(
+    app_client,
+):
+    client, store, _, _ = app_client
+    folder = store.create_folder("/", "Shared folder")
+    folder_path = "/" + folder["id"]
+    child = store.add_file(folder_path, "child.txt", 9120, 4)
+    child_path = folder_path + "/" + child["id"]
+    file = store.add_file("/", "Shared file.txt", 9121, 5)
+    file_path = "/" + file["id"]
+    survivor = store.add_file("/", "Other file.txt", 9122, 6)
+    survivor_path = "/" + survivor["id"]
+    login(client)
+
+    def create_link(path):
+        response = client.post("/api/v1/shares", json={"path": path})
+        assert response.status_code == 201
+        return response.json()
+
+    revoked = [
+        create_link(path) for path in (folder_path, child_path, file_path, file_path)
+    ]
+    kept = create_link(survivor_path)
+    paths = [file_path, folder_path]
+    for action in ("trash", "restore"):
+        response = client.post(
+            "/api/v1/nodes/bulk", json={"paths": paths, "action": action}
+        )
+        assert response.status_code == 200
+        assert [row["id"] for row in client.get("/api/v1/shares").json()["shares"]] == [
+            kept["id"]
+        ]
+        for link in revoked:
+            response = client.post("/api/v1/shares/link", json={"share_id": link["id"]})
+            assert response.status_code == 410
+    assert store.authorize_file(survivor_path, kept["auth"])
+
+
 def test_restore_rollback_preserves_trash_names_and_shares(app_client):
     client, store, _, _ = app_client
     first = store.add_file("/", "same.txt", 9103, 4)
