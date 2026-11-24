@@ -455,7 +455,17 @@ def test_resumable_multiple_files_navigation_and_mobile_layout(
     page.locator(".drive-nav").get_by_role("link", name="My Files", exact=True).click()
     page.get_by_role("button", name="資料", exact=True).dblclick()
     expect(page.get_by_role("button", name="résumé #1.txt", exact=True)).to_be_visible()
+    page.get_by_role("link", name="Transfers", exact=False).click()
+    expect(page.get_by_role("heading", name="Transfers", exact=True)).to_be_visible()
+    expect(page.locator("#transfer-toggle")).to_have_count(0)
+    page.go_back()
+    expect(page.get_by_role("button", name="résumé #1.txt", exact=True)).to_be_visible()
+    expect(page.locator("#transfer-toggle")).to_have_attribute("aria-expanded", "false")
     page.get_by_role("button", name="Show Transfer Details", exact=True).click()
+    page.get_by_role("link", name="Recent", exact=True).click()
+    expect(page.locator("#transfer-toggle")).to_have_count(0)
+    page.go_back()
+    expect(page.locator("#transfer-toggle")).to_have_attribute("aria-expanded", "true")
     expect(row(page, "first.txt").locator(".transfer-metrics")).to_contain_text("/s")
     expect(row(page, "first.txt").locator(".transfer-metrics")).to_contain_text(
         "remaining"

@@ -59,6 +59,8 @@ export default function TransferPanel({
     expandedPage = false,
     onLocate,
     pageContext = "files",
+    collapsed: collapsedChoice,
+    onCollapsedChange,
     finishedControls,
     finishedCount,
     onBrowseFiles,
@@ -68,6 +70,8 @@ export default function TransferPanel({
     onError: (message: string) => void;
     expandedPage?: boolean;
     pageContext?: string;
+    collapsed?: boolean;
+    onCollapsedChange?: (collapsed: boolean) => void;
     onLocate?: (item: Transfer, folder?: boolean) => void;
     finishedControls?: ReactNode;
     finishedCount?: number;
@@ -78,12 +82,11 @@ export default function TransferPanel({
     items = expandedPage
         ? items
         : items.filter((item) => item.initiatedHere === true);
-    const [collapsed, setCollapsed] = useState(
-        () =>
-            !!window.history.state?.tgdriveReveal ||
-            window.matchMedia("(max-width: 720px)").matches ||
-            pageContext !== "files",
-    );
+    const collapsed =
+        collapsedChoice ??
+        (pageContext !== "files" ||
+            Boolean(window.history.state?.tgdriveReveal) ||
+            window.matchMedia("(max-width: 720px)").matches);
     const [notice, setNotice] = useState<{
         batchId: string;
         text: string;
@@ -112,9 +115,6 @@ export default function TransferPanel({
         const timer = setTimeout(() => setFloatingVisible(false), 5000);
         return () => clearTimeout(timer);
     }, [unresolved, expandedPage]);
-    useEffect(() => {
-        if (!expandedPage && pageContext !== "files") setCollapsed(true);
-    }, [pageContext, expandedPage]);
     const [now, setNow] = useState(Date.now);
     useEffect(() => {
         if (!active) return;
@@ -307,7 +307,7 @@ export default function TransferPanel({
                         <button
                             id="transfer-toggle"
                             className="text-button"
-                            onClick={() => setCollapsed(!collapsed)}
+                            onClick={() => onCollapsedChange?.(!collapsed)}
                             aria-expanded={!collapsed}
                             aria-controls="transfer-list"
                             aria-label={
@@ -396,7 +396,7 @@ export default function TransferPanel({
                                     onLocate={
                                         onLocate
                                             ? (item, folder) => {
-                                                  setCollapsed(true);
+                                                  onCollapsedChange?.(true);
                                                   onLocate(item, folder);
                                               }
                                             : undefined

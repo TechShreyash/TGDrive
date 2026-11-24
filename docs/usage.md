@@ -461,7 +461,8 @@ still needing originals, including failed uploads with resumable [receipts](refe
 Folders with unfinished files retain their rows until cleared after completion.
 Server history clears for all devices; browser-only history clears here.
 
-The desktop floating panel shows this browser's work; Transfers also shows other
+The desktop floating panel remembers whether you collapsed it as you navigate.
+The panel shows this browser's work; Transfers also shows other
 devices' server jobs. Clearing the panel does not erase saved history.
 [History storage](architecture.md#finished-history).
 

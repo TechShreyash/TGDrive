@@ -667,6 +667,7 @@ export default function App() {
             .map(transferTaskId),
     ).size;
     const [dismissedTransferNotice, setDismissedTransferNotice] = useState("");
+    const [transferPanelCollapsed, setTransferPanelCollapsed] = useState<boolean>();
     const mobileTransfersButton = useRef<HTMLButtonElement>(null);
     const mobileIssueTasks = new Set(
         items
@@ -2636,6 +2637,8 @@ export default function App() {
                     ["files", "trash", "shares"].includes(view) && (
                         <TransferPanel
                             pageContext={view}
+                            collapsed={transferPanelCollapsed}
+                            onCollapsedChange={setTransferPanelCollapsed}
                             items={items}
                             onLocate={(item, folder) =>
                                 void locateTransfer(item, folder)
