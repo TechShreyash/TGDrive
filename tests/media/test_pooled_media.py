@@ -277,3 +277,97 @@ async def test_cooling_premium_metadata_uses_idle_bot():
         await asyncio.wait_for(acquire(), 0.5)
     finally:
         await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_first_cold_block_reuses_eligible_metadata_account():
+    payload = b"x" * MIB
+    accounts = [account(str(i), payload) for i in range(3)]
+    pool = ClientPool(accounts)
+    await pool.start()
+    try:
+        response = await stream_telegram_file(
+            pool=pool,
+            channel_id=-100123,
+            message_id=77,
+            file_name="seek.mkv",
+            expected_size=len(payload),
+            request=make_request(),
+        )
+        assert await response_body(response) == payload
+        assert sum(bot.get_messages.await_count for bot in accounts) == 1
+    finally:
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_stalled_second_block_switches_accounts_after_delivery_starts(
+    monkeypatch,
+):
+    from tests.media.test_telegram_cache import Iterator
+    from tgdrive.telegram.clients import Client
+
+    payload = b"".join(bytes([i]) * MIB for i in range(5))
+    accounts = [account(str(i), payload) for i in range(3)]
+    entered = asyncio.Event()
+    gate = asyncio.Event()
+    stalled = None
+    original = Iterator.__anext__
+
+    async def interrupt_one_account(iterator):
+        nonlocal stalled
+        if iterator.offset == MIB:
+            if stalled is None:
+                stalled = iterator.owner
+            if iterator.owner is stalled:
+                entered.set()
+                await gate.wait()
+        return await original(iterator)
+
+    monkeypatch.setattr(Iterator, "__anext__", interrupt_one_account)
+    monkeypatch.setattr(Client, "_download_timeout_floor", 0.1, raising=False)
+    pool = ClientPool(accounts)
+    await pool.start()
+    try:
+        response = await stream_telegram_file(
+            pool=pool,
+            channel_id=-100123,
+            message_id=77,
+            file_name="download.bin",
+            expected_size=len(payload),
+            request=make_request(),
+            download=True,
+        )
+        reader = response.body_iterator
+        assert await anext(reader) == payload[:MIB]
+        await asyncio.wait_for(entered.wait(), 1)
+        async with asyncio.timeout(2):
+            assert b"".join([chunk async for chunk in reader]) == payload[MIB:]
+        assert all(row.active_leases == 0 for row in await pool.status())
+        assert all(bot.native.active == 0 for bot in accounts)
+    finally:
+        gate.set()
+        await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_metadata_timeout_releases_bot_before_retrying():
+    payload = b"seek payload"
+    slow, ready = account("slow", payload), account("ready", payload)
+    slow.get_messages.side_effect = TimeoutError
+    pool = ClientPool([slow, ready])
+    await pool.start()
+    try:
+        response = await stream_telegram_file(
+            pool=pool,
+            channel_id=-100123,
+            message_id=77,
+            file_name="seek.mkv",
+            expected_size=len(payload),
+            request=make_request(),
+        )
+        assert await response_body(response) == payload
+        assert slow.get_messages.await_count == ready.get_messages.await_count == 1
+        assert all(row.active_leases == 0 for row in await pool.status())
+    finally:
+        await pool.stop()

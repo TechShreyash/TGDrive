@@ -223,6 +223,15 @@ cleanup cannot change a newly opened viewer's preparation.
 
 </details>
 
+The first cold block prefers the account that validated the file when eligible
+accounts have equal capacity in use. Subsequent blocks can use the other bots.
+Each native 512 KiB read has a progress deadline starting at five seconds. It
+adapts to recent read latency and backs off after a timeout, up to one minute.
+If a read stalls, the pooled reader releases the account and retries the missing
+block through the existing bounded failover path. Scheduler admission, configured
+bandwidth pacing and waiting for the browser are outside the native deadline.
+A coalesced media metadata lookup has its own eight-second provider deadline.
+
 Independent blocks can use different healthy clients and shared in-flight
 fetches while responses preserve order. Empty/short origin blocks use bounded
 retry/failover; incomplete blocks are never marked ready. Requests authorize

@@ -630,6 +630,7 @@ class ClientPool:
         premium_required: bool | None = None,
         prefer_premium: bool = False,
         client_name: str | None = None,
+        preferred_download_client: TelegramClientLifecycle | None = None,
         media: bool = False,
         allow_users: bool = False,
         download: bool = False,
@@ -861,6 +862,8 @@ class ClientPool:
                                 else item.media_active
                                 if media
                                 else item.active,
+                                download
+                                and item.client is not preferred_download_client,
                                 item.selected_at,
                                 item.index,
                             ),

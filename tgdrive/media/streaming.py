@@ -480,6 +480,8 @@ async def stream_telegram_file(
                     await pool.defer_client(
                         getattr(client, "name", ""), time.time() + max(1, error.seconds)
                     )
+                elif isinstance(error, TimeoutError):
+                    await pool.defer_client(client.name, time.time() + 2)
                 elif problem is None and pool.kind_of(client) != "user":
                     raise
                 if attempt == 2:

@@ -15,7 +15,7 @@ import time
 import weakref
 from collections import OrderedDict, deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -35,7 +35,11 @@ from telethon.sessions import StringSession
 
 from tgdrive.core import encryption
 from tgdrive.core.config import Settings
-from tgdrive.media.media_scheduler import MediaScheduler
+from tgdrive.media.media_scheduler import (
+    MediaPriorityScope,
+    MediaScheduler,
+    media_priority,
+)
 from tgdrive.telegram.client_identity import IdentityCache, account_identity
 from tgdrive.telegram.client_pool import ClientPool
 from tgdrive.telegram.connection_errors import (
@@ -444,6 +448,8 @@ class Client:
     """Adapt one Telegram account to the pool's transfer and media operations."""
 
     _download_block_cache: _BlockCache
+    _download_timeout_floor = 5.0
+    _download_part_timeout = 0.0
 
     def __init__(
         self,
@@ -878,10 +884,13 @@ class Client:
     async def get_messages(self, channel: int, *, message_ids: Any) -> Any:
         scheduler = getattr(self, "_media_scheduler", None)
         try:
-            if scheduler is None:
-                result = await self.native.get_messages(channel, ids=message_ids)
-            else:
-                async with scheduler.request():
+            async with scheduler.request() if scheduler is not None else nullcontext():
+                # Coalesced media lookups run under a shared priority scope.
+                # Upload verification and checkpoint reads use the ordinary RPC.
+                media_lookup = isinstance(message_ids, int) and isinstance(
+                    media_priority.get(), MediaPriorityScope
+                )
+                async with asyncio.timeout(8 if media_lookup else None):
                     result = await self.native.get_messages(channel, ids=message_ids)
         except (FloodWaitError, FloodPremiumWaitError) as error:
             if scheduler is not None:
@@ -1408,6 +1417,26 @@ class Client:
 
     supports_uncached_media = True
 
+    async def _next_download_part(self, iterator):
+        # Measure the native read only. Scheduler admission, bandwidth pacing,
+        # and the HTTP consumer may legitimately wait much longer.
+        timeout = max(self._download_timeout_floor, self._download_part_timeout)
+        started = time.monotonic()
+        try:
+            async with asyncio.timeout(timeout):
+                part = await anext(iterator, None)
+        except TimeoutError:
+            self._download_part_timeout = min(
+                60.0, max(self._download_part_timeout, 2 * timeout)
+            )
+            raise
+        if part is not None:
+            elapsed = time.monotonic() - started
+            self._download_part_timeout = min(
+                60.0, max(self._download_part_timeout * 0.95, elapsed * 4)
+            )
+        return part
+
     async def stream_media(
         self, message: Any, *, limit: int, offset: int, use_cache: bool = True
     ) -> AsyncGenerator[bytes]:
@@ -1453,19 +1482,15 @@ class Client:
                 try:
                     while len(data) < _DOWNLOAD_BLOCK:
                         scheduler = getattr(self, "_media_scheduler", None)
-                        if scheduler is None:
-                            try:
-                                part = await anext(iterator)
-                            except StopAsyncIteration:
-                                break
-                        else:
-                            async with scheduler.request():
-                                try:
-                                    part = await anext(iterator)
-                                except StopAsyncIteration:
-                                    part = None
-                            if part is None:
-                                break
+                        async with (
+                            scheduler.request()
+                            if scheduler is not None
+                            else nullcontext()
+                        ):
+                            part = await self._next_download_part(iterator)
+                        if part is None:
+                            break
+                        if scheduler is not None:
                             scheduler.record_bytes(len(part))
                         await self._admit_payload(len(part))
                         data.extend(part[: _DOWNLOAD_BLOCK - len(data)])

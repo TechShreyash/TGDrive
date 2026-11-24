@@ -1389,6 +1389,10 @@ async def stream_pooled_media(
                 "prefer_premium": True,
                 "priority": media_priority.get(),
             }
+            # On a cold head the validated account already owns this reference.
+            # A hint only breaks ties between equally available eligible slots.
+            if index == offset and attempt == 0:
+                kwargs["preferred_download_client"] = client
             if request_id is not None:
                 kwargs["request_id"] = request_id
             async with pool.lease(**kwargs) as account:

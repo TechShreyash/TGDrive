@@ -110,6 +110,8 @@ class PartLease:
                             self.client.name,
                             time.time() + max(1, error.seconds),
                         )
+                    elif isinstance(error, TimeoutError):
+                        await self.pool.defer_client(self.client.name, time.time() + 2)
                     elif problem is None and self.pool.kind_of(self.client) != "user":
                         raise
                     if attempt == 2:
