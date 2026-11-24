@@ -685,9 +685,14 @@ async def fixture_verify_connection(_api_id, _api_hash, row, _channel):
     if row.kind == "user":
         return "synthetic-premium-account"
     prefix = row.credential.get_secret_value().split(":", 1)[0]
-    return (
-        "offline-browser-storage" if prefix == "123456" else "synthetic-bot-" + prefix
+    if prefix == "123456":
+        return "offline-browser-storage"
+    runtime_name = "synthetic-bot-" + prefix
+    runtime.connection_manager.identity_cache.write(
+        runtime_name,
+        {"display_name": "Fixture Archive Bot", "username": "fixture_archive_bot"},
     )
+    return runtime_name
 
 
 class FixtureReplica:

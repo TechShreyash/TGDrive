@@ -152,6 +152,8 @@ def test_connection_validation_clears_after_credential_correction(server, browse
         section.get_by_role("button", name="Add Storage Bot", exact=True).tap()
         form = section.locator("form.connection-editor")
         token = form.get_by_label("Bot Token", exact=True)
+        expect(token).to_be_focused()
+        expect(form.locator("input")).to_have_count(1)
         token.fill(" ")
         form.get_by_role("button", name="Verify and Save", exact=True).tap()
         expect(form.get_by_role("alert")).to_contain_text("Enter the bot token")

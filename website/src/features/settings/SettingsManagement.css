@@ -228,6 +228,9 @@
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
     gap: 20px;
 }
+.management-bot-token {
+    max-width: 40rem;
+}
 .management-fields > div {
     min-width: 0;
 }

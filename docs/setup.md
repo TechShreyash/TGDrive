@@ -329,7 +329,10 @@ After setup, add bots through **Connections → Add storage bot**.
 First add each bot as a channel administrator with **Post Messages** and
 **Delete Messages** and **Edit Messages** in the same channel, including pin
 permission for any account that publishes backups.
-Save, and the change connects immediately. You can add accounts at any time; finish pending transfers before removing or replacing one.
+Paste the BotFather token and choose **Verify and Save**. TGDrive uses the
+bot’s Telegram name and username and enables the connection when it is saved.
+You can add accounts at any time. Finish pending transfers before removing or
+replacing one.
 
 Premium is optional. Use **Connections → Connect Premium account** to sign in,
 or its advanced controls to import an authorized session. All accounts use the

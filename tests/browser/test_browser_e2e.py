@@ -3093,8 +3093,11 @@ def test_settings_connection_changes_are_write_only_verified_and_apply_live(
     expect(section.locator("form.connection-editor")).to_have_count(0)
     section.get_by_role("button", name="Add Storage Bot", exact=True).click()
     form = section.locator("form.connection-editor")
-    form.get_by_label("Local Label", exact=True).fill("Extra storage bot")
-    form.get_by_label("Bot Token", exact=True).fill("987654:" + "z" * 30)
+    token = form.get_by_label("Bot Token", exact=True)
+    expect(token).to_be_focused()
+    expect(form.locator("input")).to_have_count(1)
+    expect(token).to_have_attribute("type", "password")
+    token.fill("987654:" + "z" * 30)
     form.get_by_role("button", name="Verify and Save", exact=True).click()
     expect(section.locator("form.connection-editor")).to_have_count(0)
     pending = page.request.get(server.url + "/api/v1/settings")
@@ -3103,17 +3106,25 @@ def test_settings_connection_changes_are_write_only_verified_and_apply_live(
     assert body["revision"] == 3
     assert "restart_required" not in body and "application_mode" not in body
     assert body["active_clients"][0]["connected"] is True
+    added = next(
+        client
+        for client in body["clients"]
+        if client["username"] == "fixture_archive_bot"
+    )
+    assert added["display_name"] == "Fixture Archive Bot"
+    assert added["enabled"] is True
     assert "api_hash" not in body
     serialized = json.dumps(body)
     for secret in ("b" * 32, "123456:" + "y" * 30, "987654:" + "z" * 30):
         assert secret not in serialized
         assert secret not in section.inner_text()
     extra = section.locator(".managed-client-list > li").filter(
-        has_text="Extra storage bot"
+        has_text="Fixture Archive Bot"
     )
+    expect(extra).to_contain_text("@fixture_archive_bot")
     expect(extra).to_contain_text("Not connected")
     expect(extra.locator(".is-connected")).to_have_count(0)
-    section.get_by_role("button", name="Manage Extra storage bot", exact=True).click()
+    section.get_by_role("button", name="Manage Fixture Archive Bot", exact=True).click()
     form = section.locator("form.connection-editor")
     expect(form.get_by_label("Replace Bot Token", exact=True)).to_have_value("")
     form.get_by_role("button", name="Done", exact=True).click()

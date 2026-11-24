@@ -404,120 +404,139 @@ export default function SettingsManagement({
             )}
         </div>
     );
-    const editor = (row: ClientDraft) => (
-        <form
-            className="connection-editor"
-            onSubmit={(event) => void save(event)}
-        >
-            <fieldset disabled={demoMode || saving}>
-                {row.removed ? (
-                    <div className="client-removal">
-                        <p>{row.label} will be removed when you save.</p>
-                        <button
-                            type="button"
-                            className="text-button"
-                            onClick={() =>
-                                changeClient(row.key, { removed: false })
-                            }
-                        >
-                            <Undo2 size={16} /> Undo Removal
-                        </button>
-                    </div>
-                ) : (
-                    <>
-                        <div className="management-fields">
-                            <div>
-                                <label htmlFor={"client-label-" + row.key}>
-                                    Local Label
-                                </label>
-                                <input
-                                    ref={firstField}
-                                    id={"client-label-" + row.key}
-                                    required
-                                    maxLength={80}
-                                    value={row.label}
-                                    onChange={(event) =>
-                                        changeClient(row.key, {
-                                            label: event.target.value,
-                                        })
-                                    }
-                                />
-                            </div>
-                            <div>
-                                <label htmlFor={"client-credential-" + row.key}>
-                                    {row.id ? "Replace " : ""}
-                                    {row.kind === "bot"
-                                        ? "Bot Token"
-                                        : "Telethon Session"}
-                                </label>
-                                <input
-                                    id={"client-credential-" + row.key}
-                                    type="password"
-                                    autoComplete="new-password"
-                                    maxLength={8192}
-                                    required={!row.id}
-                                    value={row.credential}
-                                    aria-describedby={
-                                        "credential-help-" + row.key
-                                    }
-                                    onChange={(event) =>
-                                        changeClient(row.key, {
-                                            credential: event.target.value,
-                                        })
-                                    }
-                                />
-                                <p
-                                    id={"credential-help-" + row.key}
-                                    className="management-caption"
-                                >
-                                    {row.id
-                                        ? "Leave blank to keep the saved credential."
-                                        : row.kind === "bot"
-                                          ? "Paste the token from BotFather. It stays hidden after saving."
-                                          : "Import a Telethon StringSession generated locally. Treat it as an account credential."}
-                                </p>
-                            </div>
+    const editor = (row: ClientDraft) => {
+        const addingBot = !row.id && row.kind === "bot";
+        return (
+            <form
+                className="connection-editor"
+                onSubmit={(event) => void save(event)}
+            >
+                <fieldset disabled={demoMode || saving}>
+                    {row.removed ? (
+                        <div className="client-removal">
+                            <p>{row.label} will be removed when you save.</p>
+                            <button
+                                type="button"
+                                className="text-button"
+                                onClick={() =>
+                                    changeClient(row.key, { removed: false })
+                                }
+                            >
+                                <Undo2 size={16} /> Undo Removal
+                            </button>
                         </div>
-                        <div className="connection-editor-options">
-                            <label className="management-checkbox">
-                                <input
-                                    type="checkbox"
-                                    checked={row.enabled}
-                                    onChange={(event) =>
-                                        changeClient(row.key, {
-                                            enabled: event.target.checked,
-                                        })
-                                    }
-                                />{" "}
-                                Enabled
-                            </label>
-                            {row.id && (
-                                <button
-                                    type="button"
-                                    className="text-button danger-text"
-                                    onClick={() =>
-                                        changeClient(row.key, {
-                                            removed: true,
-                                            credential: "",
-                                        })
-                                    }
-                                >
-                                    <X size={16} /> Remove Client
-                                </button>
+                    ) : (
+                        <>
+                            <div
+                                className={
+                                    addingBot
+                                        ? "management-bot-token"
+                                        : "management-fields"
+                                }
+                            >
+                                {!addingBot && (
+                                    <div>
+                                        <label
+                                            htmlFor={"client-label-" + row.key}
+                                        >
+                                            Local Label
+                                        </label>
+                                        <input
+                                            ref={firstField}
+                                            id={"client-label-" + row.key}
+                                            required
+                                            maxLength={80}
+                                            value={row.label}
+                                            onChange={(event) =>
+                                                changeClient(row.key, {
+                                                    label: event.target.value,
+                                                })
+                                            }
+                                        />
+                                    </div>
+                                )}
+                                <div>
+                                    <label
+                                        htmlFor={"client-credential-" + row.key}
+                                    >
+                                        {row.id ? "Replace " : ""}
+                                        {row.kind === "bot"
+                                            ? "Bot Token"
+                                            : "Telethon Session"}
+                                    </label>
+                                    <input
+                                        ref={addingBot ? firstField : undefined}
+                                        id={"client-credential-" + row.key}
+                                        type="password"
+                                        autoComplete="new-password"
+                                        maxLength={8192}
+                                        required={!row.id}
+                                        value={row.credential}
+                                        aria-describedby={
+                                            "credential-help-" + row.key
+                                        }
+                                        onChange={(event) =>
+                                            changeClient(row.key, {
+                                                credential: event.target.value,
+                                            })
+                                        }
+                                    />
+                                    <p
+                                        id={"credential-help-" + row.key}
+                                        className="management-caption"
+                                    >
+                                        {row.id
+                                            ? "Leave blank to keep the saved credential."
+                                            : row.kind === "bot"
+                                              ? "Paste the token from BotFather. TGDrive gets the bot’s name and username from Telegram when you save."
+                                              : "Import a Telethon StringSession generated locally. Treat it as an account credential."}
+                                    </p>
+                                </div>
+                            </div>
+                            {!addingBot && (
+                                <div className="connection-editor-options">
+                                    <label className="management-checkbox">
+                                        <input
+                                            type="checkbox"
+                                            checked={row.enabled}
+                                            onChange={(event) =>
+                                                changeClient(row.key, {
+                                                    enabled:
+                                                        event.target.checked,
+                                                })
+                                            }
+                                        />{" "}
+                                        Enabled
+                                    </label>
+                                    {row.id && (
+                                        <button
+                                            type="button"
+                                            className="text-button danger-text"
+                                            onClick={() =>
+                                                changeClient(row.key, {
+                                                    removed: true,
+                                                    credential: "",
+                                                })
+                                            }
+                                        >
+                                            <X size={16} /> Remove Client
+                                        </button>
+                                    )}
+                                </div>
                             )}
-                        </div>
-                        {row.kind === "bot" && (
-                            <p className="management-caption">
-                                The bot needs channel administrator permission
-                                to post and delete messages.
-                            </p>
-                        )}
-                    </>
-                )}
-            </fieldset>
-            {footer()}
-        </form>
-    );
+                            {row.kind === "bot" && (
+                                <p className="management-caption">
+                                    The bot needs channel administrator
+                                    permission to post and delete messages.
+                                </p>
+                            )}
+                        </>
+                    )}
+                </fieldset>
+                {footer()}
+            </form>
+        );
+    };
     const selected = draft?.clients.find((row) => row.key === target);
     const connectedClients =
         settings?.clients.filter(
