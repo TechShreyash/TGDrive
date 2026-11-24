@@ -7,6 +7,18 @@ export function patchMoviSeeking(source: string): string {
             "this.module = A2, this.setupAsyncHandlers(), m.add(this);",
             "this.module = A2, this.setupAsyncHandlers(), m.add(this); serializeDemuxOperations(this);",
         ],
+        // WebCodecs can decode in software on desktop too. Apply the existing
+        // decoded-frame budget on desktops reporting at most 4 GiB of RAM.
+        [
+            "if (!I2 && (t2 || !s2)) return requested;",
+            "if (!I2 && (t2 || !s2) && !(navigator.deviceMemory > 0 && navigator.deviceMemory <= 4)) return requested;",
+        ],
+        [
+            "(M2 || MoviPlayer._isMobileDevice && (this.trackManager.getActiveVideoTrack()?.width ?? 0) * (this.trackManager.getActiveVideoTrack()?.height ?? 0) < 8294400) && ((this.videoRenderer?.getQueueSize() ?? 0) + this.videoDecoder.queueSize) > N2",
+            // An empty renderer may still need several input packets before a
+            // reordered picture is emitted. The decoder has its own input limit.
+            "(M2 || MoviPlayer._isMobileDevice && (this.trackManager.getActiveVideoTrack()?.width ?? 0) * (this.trackManager.getActiveVideoTrack()?.height ?? 0) < 8294400 || navigator.deviceMemory > 0 && navigator.deviceMemory <= 4 && (this.videoRenderer?.getQueueSize() ?? 0) > 0) && ((this.videoRenderer?.getQueueSize() ?? 0) + this.videoDecoder.queueSize) > N2",
+        ],
         // The bindings notify their adapter. Forward the hint to HttpSource so
         // a search for a keyframe doesn't start downloading at every probe.
         [

@@ -715,3 +715,9 @@ The file grid can revalidate up to four visible thumbnails concurrently.
 The server still limits cold thumbnail generation to two concurrent fills.
 An authorized thumbnail or poster with a matching weak or strong ETag returns
 304, so reopening a folder can reuse the browser's copy.
+
+On browsers reporting at most 4 GiB of device memory, the enhanced player's
+WebCodecs path budgets queued decoded pictures against 64 MiB. A 1080p,
+24 fps track targets up to eight queued pictures. High frame rates retain
+enough pictures to resume playback. Decoder internals, browser processes and
+the compressed source cache have separate memory costs.

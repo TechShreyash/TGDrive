@@ -60,6 +60,24 @@ describe("reviewed Movi build transform", () => {
         expect(historical).toBe(installed);
         expect(patched).not.toBe(historical);
     });
+    it("bounds decoded desktop WebCodecs pictures on memory-constrained clients", () => {
+        const start = patched.indexOf("  videoQueueCapFrames(A2, I2, g2) {");
+        const end = patched.indexOf("  hasPictureToCarryARewind(", start);
+        const makeCore = new Function("MoviPlayer", "navigator",
+            `return class { ${patched.slice(start, end)} }`);
+        const cap = (deviceMemory: number | undefined, rate: number, frameRate = 24) => {
+            const Core = makeCore({ _isMobileDevice: false, BOUND_RESUME_CUSHION_S: 0.2 }, { deviceMemory });
+            const core = new Core();
+            core.trackManager = { getActiveVideoTrack: () => ({ width: 1920, height: 1080, frameRate }) };
+            return core.videoQueueCapFrames(false, false, rate);
+        };
+        expect(cap(1, 1)).toBe(8);
+        expect(cap(4, 2)).toBe(8);
+        expect(cap(4, 1, 120)).toBe(26);
+        expect(cap(8, 1)).toBe(100);
+        expect(cap(undefined, 1)).toBe(100);
+    });
+
     it("pins the ESM slim entry for build/dev and excludes dependency prebundling", () => {
         const plugin = moviPlayerBuild();
         expect(plugin.enforce).toBe("pre");

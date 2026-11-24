@@ -72,3 +72,5 @@ remain available after the allowance is exhausted. The decoder WASM is unchanged
 The November 2026 build overlay serializes operations on a single suspended
 demuxer, forwards native seek probe hints to the HTTP source and retains the
 muxed audio seek floor until the first eligible packet.
+Desktop WebCodecs playback also uses the decoded-picture budget and burst
+admission checks on browsers reporting at most 4 GiB of device memory.
