@@ -63,12 +63,29 @@ describe("reviewed Movi build transform", () => {
     it("bounds decoded desktop WebCodecs pictures on memory-constrained clients", () => {
         const start = patched.indexOf("  videoQueueCapFrames(A2, I2, g2) {");
         const end = patched.indexOf("  hasPictureToCarryARewind(", start);
-        const makeCore = new Function("MoviPlayer", "navigator",
-            `return class { ${patched.slice(start, end)} }`);
-        const cap = (deviceMemory: number | undefined, rate: number, frameRate = 24) => {
-            const Core = makeCore({ _isMobileDevice: false, BOUND_RESUME_CUSHION_S: 0.2 }, { deviceMemory });
+        const makeCore = new Function(
+            "MoviPlayer",
+            "navigator",
+            `return class { ${patched.slice(start, end)} }`,
+        );
+        const cap = (
+            deviceMemory: number | undefined,
+            rate: number,
+            frameRate = 24,
+            mobile4k = false,
+        ) => {
+            const Core = makeCore(
+                { _isMobileDevice: mobile4k, BOUND_RESUME_CUSHION_S: 0.2 },
+                { deviceMemory },
+            );
             const core = new Core();
-            core.trackManager = { getActiveVideoTrack: () => ({ width: 1920, height: 1080, frameRate }) };
+            core.trackManager = {
+                getActiveVideoTrack: () => ({
+                    width: mobile4k ? 3840 : 1920,
+                    height: mobile4k ? 2160 : 1080,
+                    frameRate,
+                }),
+            };
             return core.videoQueueCapFrames(false, false, rate);
         };
         expect(cap(1, 1)).toBe(8);
@@ -76,6 +93,7 @@ describe("reviewed Movi build transform", () => {
         expect(cap(4, 1, 120)).toBe(26);
         expect(cap(8, 1)).toBe(100);
         expect(cap(undefined, 1)).toBe(100);
+        expect(cap(4, 1, 24, true)).toBe(16);
     });
 
     it.each(["complete", "fail"])(
@@ -83,23 +101,48 @@ describe("reviewed Movi build transform", () => {
         async (outcome) => {
             const start = patched.indexOf("  async seek(A2, I2) {");
             const end = patched.indexOf("  abandonSupersededSeek(A2) {", start);
-            const makeCore = new Function("g", "Je", "HttpSource",
-                `return class { ${patched.slice(start, end)} }`);
+            const makeCore = new Function(
+                "g",
+                "Je",
+                "HttpSource",
+                `return class { ${patched.slice(start, end)} }`,
+            );
             const Core = makeCore({ info() {}, warn() {} }, "", class {});
             let release!: () => void;
             const native = new Promise<void>((resolve, reject) => {
-                release = outcome === "complete" ? resolve : () => reject(new Error("old read failed"));
+                release =
+                    outcome === "complete"
+                        ? resolve
+                        : () => reject(new Error("old read failed"));
             });
             const entered = Promise.withResolvers<void>();
             const core = Object.assign(new Core(), {
-                stateManager: { getState: () => "playing", canSeek: () => true, setState: vi.fn() },
-                getSourceFailure: () => null, startTime: 0, seekSessionId: 0,
-                animationFrameId: null, emit: vi.fn(), getDuration: () => 100,
-                stopPauseBuffering() {}, discardLoopPreroll() {}, dropVideoReadAhead() {},
-                videoDecoder: { flush() {} }, audioDecoder: { flush() {} },
-                audioRenderer: { reset() {} }, clock: { pause() {}, seek: vi.fn() },
-                demuxer: { seek: () => { entered.resolve(); return native; } },
-                audioDemuxer: { seek: vi.fn() }, abandonSupersededSeek: vi.fn(),
+                stateManager: {
+                    getState: () => "playing",
+                    canSeek: () => true,
+                    setState: vi.fn(),
+                },
+                getSourceFailure: () => null,
+                startTime: 0,
+                seekSessionId: 0,
+                animationFrameId: null,
+                emit: vi.fn(),
+                getDuration: () => 100,
+                stopPauseBuffering() {},
+                discardLoopPreroll() {},
+                dropVideoReadAhead() {},
+                videoDecoder: { flush() {} },
+                audioDecoder: { flush() {} },
+                audioRenderer: { reset() {} },
+                clock: { pause() {}, seek: vi.fn() },
+                demuxer: {
+                    seek: () => {
+                        entered.resolve();
+                        return native;
+                    },
+                },
+                audioDemuxer: { seek: vi.fn() },
+                abandonSupersededSeek: vi.fn(),
             });
             const previous = core.seek(17);
             await entered.promise;

@@ -1,5 +1,7 @@
 // The installed slim bundle is hash-pinned by movi-player-build.ts.
 export function patchMoviSeeking(source: string): string {
+    const lowMemoryDesktop =
+        "!MoviPlayer._isMobileDevice && typeof navigator !== 'undefined' && navigator.deviceMemory > 0 && navigator.deviceMemory <= 4";
     const edits = [
         // Asyncify has a single suspended stack and pending read per module.
         // Keep the result copy inside the operation, including for subtitles.
@@ -11,13 +13,13 @@ export function patchMoviSeeking(source: string): string {
         // decoded-frame budget on desktops reporting at most 4 GiB of RAM.
         [
             "if (!I2 && (t2 || !s2)) return requested;",
-            "if (!I2 && (t2 || !s2) && !(navigator.deviceMemory > 0 && navigator.deviceMemory <= 4)) return requested;",
+            `if (!I2 && (t2 || !s2) && !(${lowMemoryDesktop})) return requested;`,
         ],
         [
             "(M2 || MoviPlayer._isMobileDevice && (this.trackManager.getActiveVideoTrack()?.width ?? 0) * (this.trackManager.getActiveVideoTrack()?.height ?? 0) < 8294400) && ((this.videoRenderer?.getQueueSize() ?? 0) + this.videoDecoder.queueSize) > N2",
             // An empty renderer may still need several input packets before a
             // reordered picture is emitted. The decoder has its own input limit.
-            "(M2 || MoviPlayer._isMobileDevice && (this.trackManager.getActiveVideoTrack()?.width ?? 0) * (this.trackManager.getActiveVideoTrack()?.height ?? 0) < 8294400 || navigator.deviceMemory > 0 && navigator.deviceMemory <= 4 && (this.videoRenderer?.getQueueSize() ?? 0) > 0) && ((this.videoRenderer?.getQueueSize() ?? 0) + this.videoDecoder.queueSize) > N2",
+            `(M2 || MoviPlayer._isMobileDevice && (this.trackManager.getActiveVideoTrack()?.width ?? 0) * (this.trackManager.getActiveVideoTrack()?.height ?? 0) < 8294400 || ${lowMemoryDesktop} && (this.videoRenderer?.getQueueSize() ?? 0) > 0) && ((this.videoRenderer?.getQueueSize() ?? 0) + this.videoDecoder.queueSize) > N2`,
         ],
         // The bindings notify their adapter. Forward the hint to HttpSource so
         // a search for a keyframe doesn't start downloading at every probe.
