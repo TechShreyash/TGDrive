@@ -1311,6 +1311,12 @@ def test_new_browsers_open_files_in_list_with_type_filters(server, desktop, widt
         expect(select).to_have_text("All types")
         count = page.locator(".file-mobile-item-count")
         expect(count).to_be_visible()
+        listing = page.get_by_role("region", name="File list")
+        assert listing.evaluate("el => el.scrollWidth <= el.clientWidth + 1")
+        action = listing.locator(".item-actions > summary").first
+        box, viewport = action.bounding_box(), listing.bounding_box()
+        assert box["width"] >= 44
+        assert box["x"] + box["width"] <= viewport["x"] + viewport["width"] + 1
         control_box = select.bounding_box()
         assert control_box["height"] >= 44
         assert control_box["x"] + control_box["width"] < count.bounding_box()["x"]

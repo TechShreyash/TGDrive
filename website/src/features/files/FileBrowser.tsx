@@ -29,6 +29,8 @@ import {
     Check,
     ChevronDown,
     ListFilter,
+    Clock,
+    Search,
     Star,
     AlertCircle,
     Folder,
@@ -294,6 +296,7 @@ export default function FileBrowser({
     onLocate,
     onStar,
     isSearch,
+    onClearSearch,
     auth,
     onReload,
     onUpload,
@@ -329,6 +332,7 @@ export default function FileBrowser({
     onLocate?: (item: DriveItem) => void;
     onStar?: (item: DriveItem) => void;
     isSearch: boolean;
+    onClearSearch: () => void;
     auth: string;
     onReload?: () => void;
     onUpload: () => void;
@@ -620,6 +624,18 @@ export default function FileBrowser({
     const [localFilter, setLocalFilter] = useState<FileFilter>("all");
     useEffect(() => setLocalFilter("all"), [listingKey]);
     const filter = paging?.filter || localFilter;
+    const emptySearch = isSearch || Boolean(searchQuery);
+    const EmptyIcon = emptySearch
+        ? Search
+        : isRecent
+          ? Clock
+          : isTrash
+            ? Trash2
+            : isStarred
+              ? Star
+              : FolderOpen;
+    const FilterIcon =
+        FILE_FILTERS.find(([value]) => value === filter)?.[2] ?? ListFilter;
     const setFilter = paging?.onFilter || setLocalFilter;
     const filterCounts = useMemo(() => {
         const counts = new Map<FileFilter, number>();
@@ -1422,7 +1438,7 @@ export default function FileBrowser({
                     </div>
                 ) : !staleTypeRows && filter !== "all" && !itemCount ? (
                     <div className="empty-state">
-                        <Folder size={46} />
+                        <FilterIcon aria-hidden="true" />
                         <h2>{EMPTY_FILTER_TITLES[filter]}</h2>
                         <p>
                             {isRecent
@@ -1438,7 +1454,7 @@ export default function FileBrowser({
                     </div>
                 ) : allItems.length === 0 ? (
                     <div className="empty-state">
-                        <Folder size={46} />
+                        <EmptyIcon aria-hidden="true" />
                         <h2>
                             {isRecent
                                 ? "No Recent Files Yet"
@@ -1458,7 +1474,9 @@ export default function FileBrowser({
                             {isRecent
                                 ? "Files you open or upload appear here."
                                 : isStarred
-                                  ? "Star a file or folder from its actions menu to find it here."
+                                  ? searchQuery
+                                      ? "Try another name or clear the search to see your starred items."
+                                      : "Star a file or folder from its actions menu to find it here."
                                   : isTrash && searchQuery
                                     ? "Try another name or clear the search. This search stays in Trash."
                                     : isTrash
@@ -1469,6 +1487,15 @@ export default function FileBrowser({
                                           ? "The owner has not added any files to this folder."
                                           : "Upload your first file or create a folder to get started."}
                         </p>
+                        {emptySearch && !isPublic && (
+                            <button
+                                className="secondary-button"
+                                type="button"
+                                onClick={onClearSearch}
+                            >
+                                {isSearch ? "Back to folder" : "Reset search"}
+                            </button>
+                        )}
                         {!isPublic &&
                             !isTrash &&
                             !isSearch &&

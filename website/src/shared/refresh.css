@@ -474,17 +474,17 @@ input[type="checkbox"] {
 
 /* Empty, loading and pagination */
 .empty-state {
-    padding: 80px 20px;
-    gap: 10px;
+    padding: clamp(28px, 7vh, 64px) 16px;
+    gap: 8px;
     animation: refresh-rise var(--dur-3) var(--ease-out);
 }
 .empty-state > svg {
     box-sizing: content-box;
-    width: 34px;
-    height: 34px;
-    margin-bottom: 10px;
-    padding: 24px;
-    border-radius: 28px;
+    width: 25px;
+    height: 25px;
+    margin-bottom: 6px;
+    padding: 13px;
+    border-radius: 16px;
     background: var(--action-soft);
     color: var(--action);
 }

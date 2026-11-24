@@ -138,6 +138,11 @@ up to five cards per row and uses fewer columns as the available space narrows.
 Use List to compare file sizes and added dates. Name conflicts offer
 **keep both** or **skip**.
 
+If a search has no results, **Back to folder** returns to the folder where
+you started. In Trash, Starred, Shared Links and Transfers, **Reset search**
+clears the search within that view. If TGDrive stalls while opening after an
+update, **Reload page** retries the current URL, including a shared link.
+
 On phones and smaller tablets, use **Toggle Navigation** to open the sidebar.
 On a phone you can also open an item's action menu to read its full name.
 

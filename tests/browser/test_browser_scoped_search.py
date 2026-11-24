@@ -70,7 +70,8 @@ def test_slash_search_preserves_query_reload_back_and_clear(server, desktop):
                 search.fill(term)
             assert response.value.ok
             expect(results).to_be_visible()
-        page.get_by_role("button", name="Clear Search", exact=True).click()
+        action = "Clear Search" if index == 0 else "Back to folder"
+        page.get_by_role("button", name=action, exact=True).click()
         expect(page).to_have_url(origin)
         expect(search).to_have_value("")
     assert "11" not in folders and "/11" not in folders
@@ -103,7 +104,7 @@ def test_context_switch_trash_shares_and_preloads_keep_search_scoped(server, des
     ).to_be_visible()
     assert "search_" not in page.url
     expect(page.get_by_role("heading", name="Trash", exact=True)).to_be_visible()
-    search.press("Escape")
+    page.get_by_role("button", name="Reset search").click()
     expect(search).to_have_value("")
     expect(search).to_be_focused()
 
@@ -131,6 +132,24 @@ def test_context_switch_trash_shares_and_preloads_keep_search_scoped(server, des
     assert "view=shares" in page.url
     search.fill("missing")
     expect(page.get_by_role("heading", name="No Matching Shared Links")).to_be_visible()
+
+    page.get_by_role("button", name="Reset search").click()
+    expect(search).to_be_focused()
+    expect(page.locator(".share-row")).to_have_count(2)
+    filters = page.get_by_role("group", name="Filter Shared Links")
+    filters.get_by_role("button", name="Expired").click()
+    search.fill("movie")
+    expect(page.get_by_text("The links found are still active.")).to_be_visible()
+    page.get_by_role("button", name="Show all links").click()
+    expect(filters.get_by_role("button", name="All")).to_be_focused()
+    expect(search).to_have_value("movie")
+    expect(page.locator(".share-row")).to_have_count(1)
+    page.set_viewport_size({"width": 320, "height": 680})
+    buttons = filters.get_by_role("button").all()
+    boxes = [button.bounding_box() for button in buttons]
+    assert max(box["y"] for box in boxes) - min(box["y"] for box in boxes) < 1
+    assert all(box["height"] >= 44 for box in boxes)
+    page.set_viewport_size({"width": 1440, "height": 960})
 
     cache = page.request.get(server.url + "/api/v1/preloads").json()
     cache["cache"]["files"] = [
@@ -234,7 +253,8 @@ def test_transfer_search_resets_cursor_and_filters_active_and_old_finished_names
     expect(
         page.get_by_role("heading", name="No Matching Finished Transfers")
     ).to_be_visible()
-    search.press("Escape")
+    finished.get_by_role("button", name="Reset search").click()
+    expect(search).to_be_focused()
     expect(pager.get_by_role("status")).to_contain_text("Page 1 of 3")
     expect(finished.locator(".transfer-item-name")).to_have_count(20)
 

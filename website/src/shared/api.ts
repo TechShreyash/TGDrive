@@ -146,8 +146,7 @@ async function markedItems(
         }>(`/api/v1/${view}?${params}`, undefined, { signal });
         Object.assign(contents, page.data.contents);
         cursor = page.next_cursor;
-        if (!cursor)
-            return { ...page, data: { ...page.data, contents } };
+        if (!cursor) return { ...page, data: { ...page.data, contents } };
     }
 }
 
@@ -186,7 +185,8 @@ export const api = {
             },
             { method: "PATCH" },
         ),
-    starred: (q = "", signal?: AbortSignal) => markedItems("starred", q, signal),
+    starred: (q = "", signal?: AbortSignal) =>
+        markedItems("starred", q, signal),
     star: (path: string, starred: boolean) =>
         request("/api/v1/starred", { path, starred }, { method: "PATCH" }),
 

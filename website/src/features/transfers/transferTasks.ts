@@ -22,7 +22,11 @@ export function isServerImport(item: Pick<Transfer, "kind">): boolean {
 }
 
 export function isArchiveTransfer(item: Pick<Transfer, "kind">): boolean {
-    return item.kind === "archive" || item.kind === "extract" || item.kind === "pdf_password";
+    return (
+        item.kind === "archive" ||
+        item.kind === "extract" ||
+        item.kind === "pdf_password"
+    );
 }
 
 /** Folder selections are one task; ordinary files each keep their own identity. */

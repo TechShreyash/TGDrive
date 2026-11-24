@@ -18,6 +18,32 @@ pytestmark = pytest.mark.e2e
 browser, desktop, server = browser_fixture, desktop_fixture, server_fixture
 
 
+@pytest.mark.parametrize("missing_css", [False, True])
+def test_missing_entry_bundle_can_reload_the_same_folder(server, desktop, missing_css):
+    _, page = desktop
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    expect(
+        page.get_by_role("heading", name="Preview samples", exact=True)
+    ).to_be_visible()
+    folder_url = page.url
+    page.route("**/assets/index-*.js", lambda route: route.fulfill(status=404))
+    if missing_css:
+        page.route("**/assets/*.css", lambda route: route.fulfill(status=404))
+    page.reload()
+    retry = page.get_by_role("link", name="Reload page")
+    expect(retry).to_be_visible(timeout=8000)
+    page.unroute("**/assets/index-*.js")
+    if missing_css:
+        page.unroute("**/assets/*.css")
+    retry.press("Enter")
+    expect(
+        page.get_by_role("heading", name="Preview samples", exact=True)
+    ).to_be_visible()
+    expect(page).to_have_url(folder_url)
+    expect(retry).to_have_count(0)
+
+
 @pytest.mark.parametrize("destination", ["folder", "starred", "search"])
 def test_pending_destination_never_exposes_previous_rows_or_counts(
     server: Server, desktop: tuple[Any, Any], destination: str

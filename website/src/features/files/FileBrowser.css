@@ -330,7 +330,8 @@
     .column-sort-button {
         min-height: 44px;
     }
-    .actions-cell {
+    .file-table:not(.file-grid) .actions-cell {
+        padding-inline: 0;
         width: 44px;
     }
     .file-table .item-actions > summary {

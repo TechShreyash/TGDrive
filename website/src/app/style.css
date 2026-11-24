@@ -1318,6 +1318,35 @@ progress::-moz-progress-bar {
     gap: 12px;
     color: var(--muted);
 }
+/* This markup is replaced on mount. Its link also works if assets return 404. */
+.startup-fallback {
+    padding-inline: 16px;
+    text-align: center;
+}
+.startup-fallback strong {
+    color: var(--ink);
+}
+.startup-retry {
+    animation: reveal-startup-retry 0s 4s backwards;
+}
+.startup-retry p {
+    margin: 0;
+}
+.startup-retry a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    color: var(--action);
+    text-decoration: underline;
+}
+@keyframes reveal-startup-retry {
+    from {
+        visibility: hidden;
+    }
+    to {
+        visibility: visible;
+    }
+}
 .startup-status {
     display: inline-flex;
     align-items: center;

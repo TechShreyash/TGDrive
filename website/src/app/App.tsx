@@ -2335,6 +2335,7 @@ export default function App() {
                     )}
                     {isFiles ? (
                         <FileBrowser
+                            onClearSearch={clearSearch}
                             header={pageHeading}
                             searchQuery={
                                 ["trash", "starred"].includes(view)
@@ -2514,6 +2515,7 @@ export default function App() {
                         />
                     ) : view === "shares" ? (
                         <SharesView
+                            onClearSearch={clearSearch}
                             query={scopedQuery}
                             refresh={refresh}
                             onError={(message) => notify(message, true)}
@@ -2615,6 +2617,7 @@ export default function App() {
                             mode={view === "activity" ? "visible" : "hidden"}
                         >
                             <TransferHistory
+                                onClearSearch={clearSearch}
                                 active={view === "activity"}
                                 onNotice={notify}
                                 query={view === "activity" ? scopedQuery : ""}

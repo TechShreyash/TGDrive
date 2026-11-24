@@ -313,6 +313,25 @@
         grid-row: 1 / span 2;
     }
 }
+@container (width < 400px) {
+    .shares-toolbar {
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    .shares-toolbar .shares-filters {
+        flex: 1 1 max-content;
+        width: auto;
+        gap: 1px;
+    }
+    .shares-toolbar .shares-filters button {
+        min-height: 44px;
+        padding-inline: 4px;
+        gap: 3px;
+    }
+    .shares-toolbar > .icon-button {
+        margin-inline-start: auto;
+    }
+}
 @container (width < 880px) {
     .shares-filters button {
         min-height: 44px;

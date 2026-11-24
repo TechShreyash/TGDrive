@@ -5,6 +5,7 @@ import {
     LockKeyhole,
     Copy,
     FolderOpen,
+    Search,
     RefreshCw,
     X,
     Check,
@@ -86,6 +87,7 @@ export default function SharesView({
     onLocate,
     onBrowseFiles,
     onNotice,
+    onClearSearch,
     query = "",
 }: {
     refresh: number;
@@ -94,6 +96,7 @@ export default function SharesView({
     onLocate: (share: Share) => void;
     onBrowseFiles: () => void;
     onNotice?: (message: string, error?: boolean) => void;
+    onClearSearch: () => void;
     query?: string;
 }) {
     const [shares, setShares] = useState<Share[]>([]);
@@ -205,6 +208,12 @@ export default function SharesView({
                 Number(shareExpired(a)) - Number(shareExpired(b)) ||
                 Date.parse(b.created_at) - Date.parse(a.created_at),
         );
+    const EmptyIcon = query ? Search : Link;
+    const allFilter = useRef<HTMLButtonElement>(null);
+    const showAllLinks = () => {
+        setFilter("all");
+        allFilter.current?.focus();
+    };
     const revoke = async (share: Share) => {
         if (busy) return;
         if (!share.id) {
@@ -295,6 +304,7 @@ export default function SharesView({
                     {(["active", "expired", "all"] as const).map((value) => (
                         <button
                             key={value}
+                            ref={value === "all" ? allFilter : undefined}
                             className="text-button"
                             aria-pressed={filter === value}
                             onClick={() => setFilter(value)}
@@ -367,9 +377,9 @@ export default function SharesView({
                 </div>
             ) : error && !shares.length ? null : !visible.length ? (
                 <div className="empty-state">
-                    <Link size={36} />
+                    <EmptyIcon aria-hidden="true" />
                     <h2>
-                        {query
+                        {query && !matching.length
                             ? "No Matching Shared Links"
                             : filter === "expired"
                               ? "No Expired Links"
@@ -378,21 +388,35 @@ export default function SharesView({
                                 : "No Active Shared Links"}
                     </h2>
                     <p>
-                        {query
-                            ? "Try another name or clear the search."
-                            : filter === "expired"
-                              ? "Links that reach their expiry date will appear here."
-                              : "Use an item’s Share Link action in My Files to share it."}
+                        {matching.length
+                            ? filter === "expired"
+                                ? "The links found are still active."
+                                : "The links found have expired."
+                            : query
+                              ? "Try another name or clear the search."
+                              : filter === "expired"
+                                ? "Links that reach their expiry date will appear here."
+                                : "Use an item’s Share Link action in My Files to share it."}
                     </p>
-                    {!query && filter !== "expired" && (
+                    {matching.length || query || filter !== "expired" ? (
                         <button
                             className="secondary-button"
                             type="button"
-                            onClick={onBrowseFiles}
+                            onClick={
+                                matching.length
+                                    ? showAllLinks
+                                    : query
+                                      ? onClearSearch
+                                      : onBrowseFiles
+                            }
                         >
-                            Open My Files
+                            {matching.length
+                                ? "Show all links"
+                                : query
+                                  ? "Reset search"
+                                  : "Open My Files"}
                         </button>
-                    )}
+                    ) : null}
                 </div>
             ) : (
                 <>

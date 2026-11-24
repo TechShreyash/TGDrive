@@ -5,7 +5,13 @@ import {
     useRef,
     useState,
 } from "react";
-import { ChevronLeft, ChevronRight, Trash2, Upload } from "lucide-react";
+import {
+    ChevronLeft,
+    ChevronRight,
+    History,
+    Search,
+    Trash2,
+} from "lucide-react";
 import { errorMessage } from "../../shared/api";
 import { ErrorNotice, Modal, Spinner } from "../../shared/components";
 import TransferPanel from "./TransferPanel";
@@ -36,6 +42,7 @@ export default function TransferHistory({
     onError,
     onLocate,
     onNotice,
+    onClearSearch,
     query = "",
 }: {
     active: boolean;
@@ -43,6 +50,7 @@ export default function TransferHistory({
     onLocate: (item: Transfer, folder?: boolean) => void;
     onError: (message: string) => void;
     onNotice?: RefreshNotice;
+    onClearSearch: () => void;
     query?: string;
 }) {
     const [filter, setFilter] = useState<HistoryFilter>("all");
@@ -244,6 +252,7 @@ export default function TransferHistory({
             </button>
         </div>
     );
+    const EmptyIcon = query ? Search : History;
     const empty = loading ? (
         <div
             className="transfer-skeleton-list"
@@ -271,7 +280,7 @@ export default function TransferHistory({
         </div>
     ) : !error ? (
         <div className="empty-state">
-            <Upload size={32} />
+            <EmptyIcon aria-hidden="true" />
             <h2>
                 {query
                     ? "No Matching Finished Transfers"
@@ -290,6 +299,15 @@ export default function TransferHistory({
                       ? "Successful, failed and cancelled transfers appear here."
                       : "Try another filter to see other finished uploads."}
             </p>
+            {query && (
+                <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={onClearSearch}
+                >
+                    Reset search
+                </button>
+            )}
         </div>
     ) : null;
     return (

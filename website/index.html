@@ -54,7 +54,16 @@
         />
     </head>
     <body>
-        <div id="root"></div>
+        <div id="root">
+            <main class="startup startup-fallback">
+                <strong role="status">Opening TGDrive…</strong>
+                <div class="startup-retry">
+                    <p>If the drive hasn’t opened, reload this page.</p>
+                    <a href="">Reload page</a>
+                </div>
+                <noscript>Enable JavaScript to open TGDrive.</noscript>
+            </main>
+        </div>
         <script type="module" src="/src/main.tsx"></script>
     </body>
 </html>
