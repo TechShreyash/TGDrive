@@ -161,7 +161,8 @@ def test_phone_browsing_drawer_and_upload_use_separate_surfaces(
     ).click()
     expect(status).to_have_count(0)
     upload(page, ["Another upload.txt"])
-    expect(status).to_have_text("2 uploads in progress")
+    expect(transfer_tab.locator(".mobile-tab-count")).to_have_text("2")
+    expect(status).to_be_visible()
 
 
 @pytest.mark.parametrize(

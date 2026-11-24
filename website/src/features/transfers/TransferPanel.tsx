@@ -1,7 +1,19 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+    useCallback,
+    useEffect,
+    useId,
+    useRef,
+    useState,
+    type ReactNode,
+    type CSSProperties,
+} from "react";
 import { PasswordInput } from "@mantine/core";
 import {
     Upload,
+    CloudUpload,
+    Download,
+    Layers,
+    Trash2,
     ChevronDown,
     ChevronRight,
     ChevronUp,
@@ -28,6 +40,7 @@ import {
     botCleanupPending,
     transferBlocksRetry,
     isArchiveTransfer,
+    isServerImport,
 } from "./transferTasks";
 import { deviceUploadMessage, needsDeviceUpload } from "./deviceUploadStatus";
 import {
@@ -45,7 +58,7 @@ import { errorMessage } from "../../shared/api";
 import { ErrorNotice, Modal, Spinner } from "../../shared/components";
 import {
     transferDetails,
-    transferProgress,
+    transferStageProgress,
     formatDuration,
     formatProgressPercent,
 } from "./progress";
@@ -58,6 +71,7 @@ export default function TransferPanel({
     onError,
     expandedPage = false,
     onLocate,
+    onOpenTransfers,
     pageContext = "files",
     collapsed: collapsedChoice,
     onCollapsedChange,
@@ -72,6 +86,7 @@ export default function TransferPanel({
     pageContext?: string;
     collapsed?: boolean;
     onCollapsedChange?: (collapsed: boolean) => void;
+    onOpenTransfers?: () => void;
     onLocate?: (item: Transfer, folder?: boolean) => void;
     finishedControls?: ReactNode;
     finishedCount?: number;
@@ -103,8 +118,30 @@ export default function TransferPanel({
     const resumeBatch = useRef("");
     const active = items.filter(isTransferActive).length;
     const unresolved =
-        active > 0 || items.some((item) => item.state === "error");
+        active > 0 ||
+        items.some((item) => item.state === "error" || botCleanupPending(item));
     const [floatingVisible, setFloatingVisible] = useState(unresolved);
+    const attachPanel = useCallback(
+        (panel: HTMLElement | null) => {
+            const main = panel?.parentElement;
+            if (expandedPage || !panel || !main) return;
+
+            const syncClearance = () => {
+                main.style.setProperty(
+                    "--transfer-overlay-clearance",
+                    panel.offsetHeight + 16 + "px",
+                );
+            };
+            syncClearance();
+            const observer = new ResizeObserver(syncClearance);
+            observer.observe(panel);
+            return () => {
+                observer.disconnect();
+                main.style.removeProperty("--transfer-overlay-clearance");
+            };
+        },
+        [expandedPage],
+    );
     useEffect(() => {
         if (expandedPage) return;
         if (unresolved) {
@@ -202,21 +239,24 @@ export default function TransferPanel({
               ),
           ).length
         : 0;
-    const pending = batches.filter((batch) => batch.pending).length;
-    const hasArchiveOperations = items.some(isArchiveTransfer);
-    const operation = hasArchiveOperations ? "transfer" : "upload";
-    const heading = batches.some((batch) => batch.active > 0)
-        ? pending +
-          (pending === 1
+    const hasServerOperations = items.some(isNonUpload);
+    const operation = hasServerOperations ? "transfer" : "upload";
+    const running = batches.filter((batch) => batch.active > 0).length;
+    const queued = batches.filter((batch) => batch.queued > 0).length;
+    const heading = running
+        ? running +
+          (running === 1
               ? " " + operation + " in progress"
               : " " + operation + "s in progress")
-        : batches.some((batch) => batch.queued > 0)
-          ? pending +
-            (pending === 1
+        : queued
+          ? queued +
+            (queued === 1
                 ? " " + operation + " waiting"
                 : " " + operation + "s waiting")
-          : batches.some((batch) => batch.failed || batch.awaiting)
-            ? hasArchiveOperations
+          : batches.some(
+                  (batch) => batch.failed || batch.awaiting || batch.cleanup,
+              )
+            ? hasServerOperations
                 ? "Transfers Need Attention"
                 : "Uploads Need Attention"
             : "Transfers";
@@ -276,6 +316,7 @@ export default function TransferPanel({
     return (
         <section
             id="transfer-dialog"
+            ref={attachPanel}
             className={
                 "transfer-center " + (expandedPage ? "transfer-page" : "")
             }
@@ -290,45 +331,51 @@ export default function TransferPanel({
                 </p>
             )}
             {!expandedPage && (
-                <header className="transfer-heading">
+                <header className="transfer-heading" data-compact={collapsed}>
+                    {collapsed && (
+                        <TransferPanelProgress batches={batches} now={now} />
+                    )}
                     <h2 id="transfer-summary">
-                        {!collapsed && <Upload size={18} />}
-                        {collapsed ? (
-                            <CollapsedTransferSummary
-                                batches={batches}
-                                deviceMessage={deviceMessage}
-                            />
-                        ) : (
-                            heading
-                        )}
-                    </h2>
-                    <div className="inline-actions">
-                        {cancelAll}
                         <button
                             id="transfer-toggle"
-                            className="text-button"
-                            onClick={() => onCollapsedChange?.(!collapsed)}
-                            aria-expanded={!collapsed}
+                            className="transfer-disclosure"
                             aria-controls="transfer-list"
+                            aria-describedby={
+                                collapsed ? undefined : "transfer-heading-copy"
+                            }
                             aria-label={
                                 collapsed
                                     ? "Show Transfer Details"
                                     : "Hide Transfer Details"
                             }
-                            title={
-                                collapsed
-                                    ? "Show Transfer Details"
-                                    : "Hide details; transfers keep running"
-                            }
+                            aria-expanded={!collapsed}
+                            onClick={() => onCollapsedChange?.(!collapsed)}
                         >
-                            {collapsed ? "Show" : "Hide"}
                             {collapsed ? (
-                                <ChevronUp size={15} />
+                                <CollapsedTransferSummary
+                                    batches={batches}
+                                    deviceMessage={deviceMessage}
+                                />
                             ) : (
-                                <ChevronDown size={15} />
+                                <span className="transfer-queue-title">
+                                    <Layers size={16} aria-hidden="true" />
+                                    <span id="transfer-heading-copy">
+                                        {heading}
+                                        {deviceMessage && (
+                                            <small className="transfer-device-status">
+                                                {deviceMessage}
+                                            </small>
+                                        )}
+                                    </span>
+                                </span>
+                            )}
+                            {collapsed ? (
+                                <ChevronUp size={17} />
+                            ) : (
+                                <ChevronDown size={17} />
                             )}
                         </button>
-                    </div>
+                    </h2>
                 </header>
             )}
             <div
@@ -346,7 +393,13 @@ export default function TransferPanel({
                         <header className="transfer-category-heading">
                             <CategoryHeading
                                 className="transfer-category-title"
-                                hidden={!expandedPage && groups.length === 1}
+                                hidden={
+                                    !expandedPage &&
+                                    (groups.length === 1 ||
+                                        (index === 0 &&
+                                            (group.key === "running" ||
+                                                group.key === "queued")))
+                                }
                             >
                                 {group.label}
                                 <span>
@@ -355,7 +408,20 @@ export default function TransferPanel({
                                         : group.count}
                                 </span>
                             </CategoryHeading>
-                            {expandedPage && index === 0 && cancelAll}
+                            {expandedPage && index === 0 && (
+                                <>
+                                    {deviceMessage &&
+                                        group.key !== "finished" && (
+                                            <span
+                                                className="transfer-page-guidance"
+                                                role="status"
+                                            >
+                                                {deviceMessage}
+                                            </span>
+                                        )}
+                                    {cancelAll}
+                                </>
+                            )}
                         </header>
                         {group.key === "finished" && finishedControls}
                         {group.key === "finished" &&
@@ -425,10 +491,18 @@ export default function TransferPanel({
                     </section>
                 ))}
             </div>
-            {!expandedPage &&
-                !collapsed &&
-                batches.some((batch) => !batch.pending) && (
-                    <div className="transfer-footer">
+            {!expandedPage && !collapsed && (
+                <div className="transfer-footer">
+                    {onOpenTransfers && (
+                        <button
+                            className="text-button transfer-open-all"
+                            onClick={onOpenTransfers}
+                        >
+                            All transfers{" "}
+                            <ChevronRight size={14} aria-hidden="true" />
+                        </button>
+                    )}
+                    {batches.some((batch) => !batch.pending) && (
                         <button
                             id="transfer-clear"
                             className="text-button"
@@ -437,12 +511,14 @@ export default function TransferPanel({
                         >
                             Clear Finished
                         </button>
-                    </div>
-                )}
+                    )}
+                    {cancelAll}
+                </div>
+            )}
             {cancelKeys !== null && (
                 <Modal
                     title={
-                        hasArchiveOperations
+                        hasServerOperations
                             ? "Cancel All Transfers?"
                             : "Cancel All Uploads?"
                     }
@@ -460,7 +536,7 @@ export default function TransferPanel({
                             data-keep-uploading
                             onClick={() => setCancelKeys(null)}
                         >
-                            {hasArchiveOperations
+                            {hasServerOperations
                                 ? "Keep Running"
                                 : "Keep Uploading"}
                         </button>
@@ -473,7 +549,7 @@ export default function TransferPanel({
                                 run(transfers.cancelAll(keys));
                             }}
                         >
-                            {hasArchiveOperations
+                            {hasServerOperations
                                 ? "Cancel Transfers"
                                 : "Cancel Uploads"}
                         </button>
@@ -530,6 +606,314 @@ export default function TransferPanel({
     );
 }
 
+function isNonUpload(item: Transfer) {
+    return (
+        isArchiveTransfer(item) ||
+        isServerImport(item) ||
+        item.kind === "delete"
+    );
+}
+
+function isActiveTransferStage(item: Transfer) {
+    return (
+        historyStatus(item) === "running" &&
+        item.state !== "cancelling" &&
+        !item.error
+    );
+}
+
+function isWaitingTransferStage(item: Transfer) {
+    return (
+        [
+            "retry_wait",
+            "source_retry_wait",
+            "waiting_for_telegram",
+            "waiting_for_staging",
+            "waiting_for_uploads",
+            "torrent_select",
+        ].includes(item.stage || "") ||
+        (/^(Waiting for |Connection interrupted|Queued\b)/.test(item.phase) &&
+            !item.phase.startsWith("Queued · receiving slowly"))
+    );
+}
+
+function stageBytes(items: Transfer[], folder?: TransferBatch) {
+    if (folder) {
+        const current = folder.displayBytes;
+        const total =
+            (folder.device.pending ? folder.device.total : folder.totalBytes) ??
+            0;
+        return {
+            current,
+            total,
+            fraction: total ? Math.min(1, current / total) : undefined,
+        };
+    }
+    let current = 0;
+    let total = 0;
+    for (const item of items) {
+        const bytes = transferStageProgress(item).bytes;
+        if (!bytes) return;
+        current += bytes.current;
+        total += bytes.total;
+    }
+    return { current, total, fraction: total ? current / total : undefined };
+}
+
+export function MobileTransferSummary({ items }: { items: Transfer[] }) {
+    const now = Date.now();
+    const batches = summarizeBatches(
+        items.filter((item) => item.initiatedHere),
+        now,
+        transfers.batchProgressSnapshot(),
+    );
+    return <TransferPanelProgress batches={batches} now={now} limit={1} />;
+}
+
+function PendingTransferSummary({ batch }: { batch: TransferBatch }) {
+    const blocked = batch.failed || batch.awaiting || batch.cleanup;
+    const Icon = blocked ? AlertCircle : Clock3;
+    return (
+        <span className="transfer-panel-progress-list">
+            <span className="transfer-panel-progress">
+                <span className="transfer-stage-symbol">
+                    <Icon size={18} />
+                </span>
+                <span className="transfer-panel-progress-label">
+                    <strong>{batch.name}</strong>
+                    <span className="transfer-stage-phase">
+                        {batch.awaiting
+                            ? "Choose the original file to resume"
+                            : blocked
+                              ? "Transfer needs attention"
+                              : batch.items.find((item) =>
+                                    isTransferActive(item),
+                                )?.phase || "Queued"}
+                    </span>
+                </span>
+            </span>
+        </span>
+    );
+}
+
+function TransferPanelProgress({
+    batches,
+    now,
+    limit = 2,
+}: {
+    batches: TransferBatch[];
+    now: number;
+    limit?: number;
+}) {
+    const stages = new Map<
+        string,
+        {
+            items: Transfer[];
+            batches: Set<TransferBatch>;
+            waiting: boolean;
+        }
+    >();
+    for (const batch of batches) {
+        for (const item of batch.items) {
+            if (!isActiveTransferStage(item)) continue;
+            const waiting = isWaitingTransferStage(item);
+            const meter = transferStageProgress(item);
+            const phase = waiting ? item.phase : item.phase.split(" · ")[0];
+            // Only counters with comparable units and denominators can share a percentage.
+            const unit = waiting
+                ? "waiting"
+                : meter.bytes?.total
+                  ? "known"
+                  : meter.fraction !== undefined
+                    ? item.key
+                    : meter.bytes
+                      ? "unknown"
+                      : "unmeasured";
+            const key = JSON.stringify([item.state, item.stage, phase, unit]);
+            const stage = stages.get(key) ?? {
+                items: [],
+                batches: new Set<TransferBatch>(),
+                waiting,
+            };
+            stage.items.push(item);
+            stage.batches.add(batch);
+            stages.set(key, stage);
+        }
+    }
+    const blocked = batches.find(
+        (batch) => batch.failed || batch.awaiting || batch.cleanup,
+    );
+    if (!stages.size || (limit === 1 && blocked)) {
+        const pending = blocked ?? batches.find((batch) => batch.unfinished);
+        return pending ? <PendingTransferSummary batch={pending} /> : null;
+    }
+
+    const rows = [...stages].sort(
+        ([, a], [, b]) =>
+            Number(a.waiting) - Number(b.waiting) ||
+            Number(b.items[0].state === "receiving") -
+                Number(a.items[0].state === "receiving"),
+    );
+    return (
+        <span className="transfer-panel-progress-list">
+            {rows.slice(0, limit).map(([key, { items, batches, waiting }]) => {
+                const first = items[0];
+                const phase =
+                    items.length === 1 || waiting
+                        ? first.phase
+                        : first.phase.split(" · ")[0];
+                const singleBatch =
+                    batches.size === 1 ? [...batches][0] : undefined;
+                const folder = singleBatch?.folder ? singleBatch : undefined;
+                const firstMeter = transferStageProgress(first);
+                const device = first.state === "receiving";
+                const advancesWholeFolder =
+                    folder &&
+                    firstMeter.bytes?.total &&
+                    (device ||
+                        (!folder.device.pending &&
+                            first.stage === "uploading" &&
+                            folder.active === items.length &&
+                            !folder.failed &&
+                            !folder.awaiting &&
+                            !folder.cancelled));
+                const bytes = !waiting
+                    ? stageBytes(
+                          items,
+                          advancesWholeFolder ? folder : undefined,
+                      )
+                    : undefined;
+                const fraction = waiting
+                    ? undefined
+                    : (bytes?.fraction ??
+                      (items.length === 1 ? firstMeter.fraction : undefined));
+                const stageComplete = fraction === 1;
+                const eta =
+                    stageComplete || waiting
+                        ? undefined
+                        : advancesWholeFolder
+                          ? folder.displayEta
+                          : items.length === 1
+                            ? transferDetails(first, now).eta
+                            : undefined;
+                const label = singleBatch
+                    ? phase + " · " + singleBatch.name
+                    : phase;
+                const fileCount = folder
+                    ? device
+                        ? folder.device.received +
+                          "/" +
+                          folder.device.count +
+                          " received"
+                        : folder.completed + "/" + folder.count + " ready"
+                    : items.length > 1
+                      ? items.length +
+                        (items.some(isNonUpload) ? " tasks" : " files")
+                      : "";
+                const percent =
+                    fraction === undefined
+                        ? undefined
+                        : formatProgressPercent(fraction);
+                const StageIcon = waiting
+                    ? Clock3
+                    : folder
+                      ? Folder
+                      : device
+                        ? FileUp
+                        : first.kind === "delete"
+                          ? Trash2
+                          : first.stage === "downloading"
+                            ? Download
+                            : first.kind === "archive" ||
+                                first.kind === "extract"
+                              ? Archive
+                              : CloudUpload;
+                const names = [...batches].map((batch) => batch.name);
+                const title =
+                    names.length === 1
+                        ? names[0]
+                        : names[0] + " and " + (names.length - 1) + " more";
+                return (
+                    <span
+                        className="transfer-panel-progress"
+                        key={key}
+                        title={label}
+                    >
+                        <span className="transfer-stage-symbol">
+                            {!waiting && (
+                                <span
+                                    className="transfer-stage-ring"
+                                    role="progressbar"
+                                    aria-label={
+                                        stages.size === 1
+                                            ? "Transfer panel progress"
+                                            : "Transfer panel progress: " +
+                                              phase
+                                    }
+                                    aria-valuenow={
+                                        fraction === undefined
+                                            ? undefined
+                                            : fraction * 100
+                                    }
+                                    aria-valuetext={
+                                        percent
+                                            ? phase + " · " + percent
+                                            : label
+                                    }
+                                    data-indeterminate={fraction === undefined}
+                                    style={
+                                        {
+                                            "--sweep":
+                                                fraction === undefined
+                                                    ? "90deg"
+                                                    : fraction * 360 + "deg",
+                                        } as CSSProperties
+                                    }
+                                />
+                            )}
+                            <StageIcon size={19} aria-hidden="true" />
+                        </span>
+                        <span className="transfer-panel-progress-label">
+                            <strong title={title}>{title}</strong>
+                            {percent && (
+                                <span className="transfer-panel-progress-percent">
+                                    {percent}
+                                </span>
+                            )}
+                            <span className="transfer-stage-phase">
+                                {phase}
+                            </span>
+                        </span>
+                        <span className="transfer-panel-stage-metrics">
+                            {fileCount && <span>{fileCount}</span>}
+                            {bytes && (bytes.total > 0 || bytes.current > 0) ? (
+                                <span>
+                                    {formatByteProgress(
+                                        bytes.current,
+                                        bytes.total,
+                                    )}
+                                    {bytes.total ? "" : " transferred"}
+                                </span>
+                            ) : null}
+                            {eta !== undefined && (
+                                <span data-metric="eta">
+                                    About {formatDuration(Math.ceil(eta))} left
+                                </span>
+                            )}
+                        </span>
+                    </span>
+                );
+            })}
+            {rows.length > limit && limit > 1 && (
+                <span className="transfer-panel-more-stages">
+                    {rows.length - limit} more{" "}
+                    {rows.length - limit === 1 ? "stage" : "stages"}
+                </span>
+            )}
+        </span>
+    );
+}
+
 export function CollapsedTransferSummary({
     batches,
     deviceMessage,
@@ -537,13 +921,19 @@ export function CollapsedTransferSummary({
     batches: TransferBatch[];
     deviceMessage: string | null;
 }) {
-    const hasArchiveOperations = batches.some((batch) =>
-        batch.items.some(isArchiveTransfer),
+    const hasServerOperations = batches.some((batch) =>
+        batch.items.some(
+            (item) => isNonUpload(item) || item.stage === "downloading",
+        ),
     );
-    const uploading = batches.filter(
-        (batch) =>
-            batch.active >
-            batch.items.filter((item) => item.state === "cancelling").length,
+    const activeStages = batches.map((batch) =>
+        batch.items.filter(isActiveTransferStage),
+    );
+    const uploading = activeStages.filter((items) =>
+        items.some((item) => !isWaitingTransferStage(item)),
+    ).length;
+    const waiting = activeStages.filter(
+        (items) => items.length > 0 && items.every(isWaitingTransferStage),
     ).length;
     const queued = batches.filter(
         (batch) => !batch.active && batch.queued > 0,
@@ -562,8 +952,9 @@ export function CollapsedTransferSummary({
         batches.every((batch) => batch.cancelled === batch.count);
     const pending = [
         uploading
-            ? uploading + (hasArchiveOperations ? " running" : " uploading")
+            ? uploading + (hasServerOperations ? " running" : " uploading")
             : "",
+        waiting ? waiting + " waiting" : "",
         queued ? queued + " queued" : "",
         cancelling ? cancelling + " cancelling" : "",
         attention
@@ -576,15 +967,15 @@ export function CollapsedTransferSummary({
     const summary =
         pending ||
         (complete
-            ? hasArchiveOperations
+            ? hasServerOperations
                 ? "Transfers complete"
                 : "Uploads complete"
             : cancelled
-              ? hasArchiveOperations
+              ? hasServerOperations
                   ? "Transfers cancelled"
                   : "Uploads cancelled"
               : batches.length
-                ? hasArchiveOperations
+                ? hasServerOperations
                     ? "Transfers finished"
                     : "Uploads finished"
                 : "Transfers");
@@ -592,7 +983,7 @@ export function CollapsedTransferSummary({
         ? AlertCircle
         : uploading
           ? Upload
-          : queued
+          : waiting || queued
             ? Clock3
             : cancelling || cancelled
               ? X
@@ -600,7 +991,7 @@ export function CollapsedTransferSummary({
                 ? Check
                 : Upload;
     const guidance =
-        attention && !uploading && !queued && !cancelling
+        attention && !uploading && !waiting && !queued && !cancelling
             ? "Open details to continue"
             : deviceMessage;
     return (
@@ -683,10 +1074,6 @@ export function BatchTransfer({
     const [limit, setLimit] = useState(20);
     const listId = useId();
     const hasFolder = batch.folder;
-    const deviceMessage = deviceUploadMessage(
-        batch.items,
-        deviceUploadsPending,
-    );
     // Keep the browser's pending uploads in one visible phase, even when a
     // different batch has already handed its files to the server.
     const deviceStage =
@@ -709,7 +1096,6 @@ export function BatchTransfer({
                     <TransferRow
                         key={item.key}
                         item={item}
-                        deviceUploadsPending={deviceUploadsPending}
                         deviceStage={deviceStage}
                         onLocate={onLocate}
                         showTimestamp={showTimestamp}
@@ -933,12 +1319,6 @@ export function BatchTransfer({
                 {batch.pending && (
                     <p className="transfer-batch-status" aria-live="polite">
                         {batchStatus(batch, deviceStage)}
-                        {deviceMessage && (
-                            <span className="transfer-device-status">
-                                {" "}
-                                · {deviceMessage}
-                            </span>
-                        )}
                     </p>
                 )}
                 {showTimestamp && finishedAt && (
@@ -1132,9 +1512,64 @@ export function BatchTransfer({
     );
 }
 
+function TransferFilename({ name }: { name: string }) {
+    const text = useRef<HTMLElement>(null);
+    const [overflows, setOverflows] = useState(false);
+    const [expanded, setExpanded] = useState(false);
+    const nameId = useId();
+    useEffect(() => {
+        const node = text.current;
+        if (!node?.closest(".transfer-page")) return;
+        const measure = () => {
+            const style = getComputedStyle(node);
+            const wraps =
+                style.whiteSpace !== "nowrap" &&
+                node.scrollHeight > 2 * parseFloat(style.lineHeight) + 1;
+            setOverflows(wraps);
+            if (!wraps) setExpanded(false);
+        };
+        const observer = new ResizeObserver(measure);
+        observer.observe(node);
+        measure();
+        return () => observer.disconnect();
+    }, [name]);
+
+    return (
+        <>
+            <strong
+                ref={text}
+                id={nameId}
+                className="transfer-item-name"
+                title={name}
+                data-expanded={expanded || undefined}
+            >
+                {name}
+            </strong>
+            {overflows && (
+                <button
+                    type="button"
+                    className="icon-button transfer-name-toggle"
+                    aria-label={
+                        expanded ? "Collapse filename" : "Show full filename"
+                    }
+                    aria-expanded={expanded}
+                    aria-controls={nameId}
+                    aria-describedby={nameId}
+                    onClick={() => setExpanded(!expanded)}
+                >
+                    {expanded ? (
+                        <ChevronUp size={16} />
+                    ) : (
+                        <ChevronDown size={16} />
+                    )}
+                </button>
+            )}
+        </>
+    );
+}
+
 function TransferRow({
     item,
-    deviceUploadsPending,
     now,
     showTimestamp = false,
     compactChild = false,
@@ -1149,7 +1584,6 @@ function TransferRow({
     groupLocation?: string;
     onLocate?: (item: Transfer, folder?: boolean) => void;
     item: Transfer;
-    deviceUploadsPending?: boolean;
     now: number;
     showTimestamp?: boolean;
     run: (task: Promise<unknown>) => void;
@@ -1184,7 +1618,8 @@ function TransferRow({
         ?.split("/")
         .slice(1, -1)
         .join(" / ");
-    const meter = usePresentedProgress(item);
+    const meter = transferStageProgress(item);
+    const waiting = isWaitingTransferStage(item);
     const status = historyStatus(item);
     const finished = status === "completed" || status === "cancelled";
     const received =
@@ -1205,8 +1640,6 @@ function TransferRow({
         ].includes(item.phase) &&
         item.serverStatus !== "queued" &&
         now - (item.startedAt || item.createdAt || now) >= 5000;
-    const deviceMessage =
-        !compactChild && deviceUploadMessage([item], deviceUploadsPending);
     const liveMetrics =
         !received &&
         !finished &&
@@ -1217,6 +1650,7 @@ function TransferRow({
         !finished &&
         status !== "queued" &&
         !(item.state === "error" && item.stage === "interrupted") &&
+        !waiting &&
         meter.fraction !== undefined;
     const interruptionHelp = item.interruptedUploadRecovery
         ? {
@@ -1279,9 +1713,7 @@ function TransferRow({
             </div>
             <div className="transfer-copy">
                 <div className="transfer-item-title">
-                    <strong className="transfer-item-name" title={item.name}>
-                        {item.name}
-                    </strong>
+                    <TransferFilename name={item.name} />
                     {showPercent && !liveMetrics && (
                         <span className="transfer-batch-percent">
                             {formatProgressPercent(meter.fraction!)}
@@ -1353,28 +1785,20 @@ function TransferRow({
                                 {formatProgressPercent(meter.fraction!)}
                             </span>
                         )}
-                        <span
-                            className="transfer-bytes"
-                            title={
-                                !received && item.state === "receiving"
-                                    ? "Bytes sent by this browser. Resume positions are saved only after the server confirms each chunk."
-                                    : !received &&
-                                        item.jobId &&
-                                        ["uploading", "finalizing"].includes(
-                                            item.stage || "",
-                                        ) &&
-                                        !finished
-                                      ? "Bytes sent to Telegram, including parts still uploading. Each part appears in the channel after it finishes."
-                                      : undefined
-                            }
-                        >
-                            {received || finished || status === "queued"
-                                ? formatBytes(item.size || item.total)
-                                : formatByteProgress(
-                                      meter.current,
-                                      meter.total,
-                                  )}
-                        </span>
+                        {(received ||
+                            finished ||
+                            status === "queued" ||
+                            (!waiting && meter.bytes)) && (
+                            <span className="transfer-bytes">
+                                {received || finished || status === "queued"
+                                    ? formatBytes(item.size || item.total)
+                                    : meter.bytes &&
+                                      formatByteProgress(
+                                          meter.bytes.current,
+                                          meter.bytes.total,
+                                      )}
+                            </span>
+                        )}
                         {!received && !finished && status !== "queued" && (
                             <TransferMetrics item={item} now={now} />
                         )}
@@ -1406,7 +1830,7 @@ function TransferRow({
                         <span />
                     </div>
                 )}
-                {liveMetrics && !checkingSource && (
+                {liveMetrics && !checkingSource && !waiting && (
                     <progress
                         aria-label={item.phase + " for " + item.name}
                         max={1}
@@ -1418,11 +1842,6 @@ function TransferRow({
                         {item.jobId
                             ? "The source is taking longer to respond. You can keep browsing."
                             : "Waiting for server confirmation. You can keep browsing."}
-                    </span>
-                )}
-                {deviceMessage && (
-                    <span className="transfer-device-status" role="status">
-                        {deviceMessage}
                     </span>
                 )}
                 {item.stage === "torrent_select" && item.torrentChoice && (
@@ -1635,63 +2054,6 @@ function TransferRow({
     );
 }
 
-/** Ease toward measured bytes only; a stalled transport never advances on a timer. */
-function usePresentedProgress(item: Transfer) {
-    const measured = transferProgress(item);
-    const stage = item.state + ":" + (item.stage || "");
-    const [display, setDisplay] = useState(() => ({
-        stage,
-        total: measured.total,
-        current: measured.current,
-    }));
-    const shown = useRef(display);
-    useEffect(() => {
-        const target = {
-            stage,
-            total: measured.total,
-            current: measured.current,
-        };
-        const previous = shown.current;
-        if (
-            previous.stage !== stage ||
-            previous.total !== target.total ||
-            target.current <= previous.current ||
-            window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        ) {
-            shown.current = target;
-            setDisplay(target);
-            return;
-        }
-        const start = performance.now();
-        let frame = 0;
-        const tick = (now: number) => {
-            const elapsed = Math.min(1, (now - start) / 180);
-            const fraction = 1 - (1 - elapsed) ** 3;
-            const next = {
-                ...target,
-                current:
-                    elapsed === 1
-                        ? target.current
-                        : previous.current +
-                          (target.current - previous.current) * fraction,
-            };
-            shown.current = next;
-            setDisplay(next);
-            if (elapsed < 1) frame = requestAnimationFrame(tick);
-        };
-        frame = requestAnimationFrame(tick);
-        return () => cancelAnimationFrame(frame);
-    }, [stage, measured.current, measured.total]);
-    // Stage changes and retries never show bytes carried over from the previous stage.
-    if (display.stage !== stage || display.total !== measured.total)
-        return measured;
-    return transferProgress({
-        ...item,
-        current: Math.min(display.current, measured.current),
-        sentCurrent: undefined,
-    });
-}
-
 export function TransferMetrics({
     item,
     now,
@@ -1700,27 +2062,20 @@ export function TransferMetrics({
     now: number;
 }) {
     const details = transferDetails(item, now);
+    const waiting = isWaitingTransferStage(item);
     const retryIn =
         item.stage === "retry_wait" &&
         item.retryAt != null &&
         Number.isFinite(item.retryAt)
             ? Math.ceil(item.retryAt - now / 1000)
             : 0;
-    const meter = transferProgress(item);
+    const bytes = transferStageProgress(item).bytes;
     const remaining =
-        ["receiving", "uploading"].includes(item.state) &&
-        ![
-            "queued",
-            "retry_wait",
-            "source_retry_wait",
-            "waiting_for_telegram",
-        ].includes(item.stage || "")
-            ? remainingBytesHint(meter.current, meter.total)
-            : "";
+        bytes && !waiting ? remainingBytesHint(bytes.current, bytes.total) : "";
     return (
         <span className="transfer-metrics" data-timing={details.timing}>
             {remaining && <span>{remaining}</span>}
-            {details.rate ? (
+            {details.rate && !waiting ? (
                 <span
                     className="transfer-speed"
                     title="Speed during this stage"
@@ -1728,7 +2083,7 @@ export function TransferMetrics({
                     {formatBytes(details.rate)}/s
                 </span>
             ) : null}
-            {details.eta !== undefined && (
+            {details.eta !== undefined && !waiting && (
                 <span
                     className="transfer-eta"
                     title={

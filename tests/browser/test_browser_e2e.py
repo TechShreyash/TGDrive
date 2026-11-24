@@ -462,10 +462,34 @@ def test_resumable_multiple_files_navigation_and_mobile_layout(
     expect(page.get_by_role("button", name="résumé #1.txt", exact=True)).to_be_visible()
     expect(page.locator("#transfer-toggle")).to_have_attribute("aria-expanded", "false")
     page.get_by_role("button", name="Show Transfer Details", exact=True).click()
-    page.get_by_role("link", name="Recent", exact=True).click()
-    expect(page.locator("#transfer-toggle")).to_have_count(0)
+    toggle = page.locator("#transfer-toggle")
+    for destination in (
+        "Recent",
+        "Starred",
+        "Performance",
+        "Preloads",
+        "Settings",
+        "Connections",
+        "Backups",
+        "Shared Links",
+    ):
+        open_admin(page)
+        page.locator(".drive-nav").get_by_role(
+            "link", name=destination, exact=True
+        ).click()
+        expect(
+            page.get_by_role("heading", name=destination, exact=True).first
+        ).to_be_visible()
+        expect(toggle).to_have_attribute("aria-expanded", "true")
+        expect(row(page, "first.txt")).to_be_visible()
+    toggle.click()
     page.go_back()
-    expect(page.locator("#transfer-toggle")).to_have_attribute("aria-expanded", "true")
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+    expect(
+        page.get_by_role("progressbar", name="Transfer panel progress")
+    ).to_be_visible()
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-expanded", "true")
     expect(row(page, "first.txt").locator(".transfer-metrics")).to_contain_text("/s")
     expect(row(page, "first.txt").locator(".transfer-metrics")).to_contain_text(
         "remaining"
@@ -2971,9 +2995,7 @@ def test_queued_uploads_have_no_elapsed_speed_or_eta(
     panel = page.locator("#transfer-dialog")
     expect(panel.locator(".transfer-batch")).to_have_count(0)
     expect(panel.locator(".transfer-item")).to_have_count(2)
-    expect(
-        page.get_by_role("heading", name="2 uploads waiting", exact=True)
-    ).to_be_visible()
+    expect(panel.locator(".transfer-queue-title")).to_contain_text("2 uploads waiting")
     page.wait_for_timeout(1200)
     assert "Elapsed" not in panel.inner_text()
     assert "remaining" not in panel.inner_text()
@@ -3425,9 +3447,7 @@ def test_ui_polish_batched_visual_states(
     panel = page.locator("#transfer-dialog")
     expect(panel.locator(".transfer-batch")).to_have_count(0)
     expect(panel.locator(".transfer-item")).to_have_count(3)
-    expect(
-        page.get_by_role("heading", name="3 uploads waiting", exact=True)
-    ).to_be_visible()
+    expect(panel.locator(".transfer-queue-title")).to_contain_text("3 uploads waiting")
     capture("dark-transfer-queued")
     expect(panel.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
     capture("dark-transfer-filters")
@@ -3543,13 +3563,30 @@ def test_transfer_progress_and_safe_panel_controls(
     login(page, server.url)
     expect(page.locator(".drive-protection")).to_have_count(0)
     fraction = 0.0
+    second_phase = "uploading"
+    second_size_known = True
+    second_percentage = None
 
     def measured_progress(route: Any) -> None:
         response = route.fetch()
         payload = response.json()
         for job in payload["jobs"]:
             if job["status"] in {"queued", "running"}:
-                job["current"] = int(job["total"] * fraction)
+                if job["name"] == "batch-second.bin":
+                    job["total"] = 192 * 1024 if second_size_known else 0
+                    job["phase"] = second_phase
+                    if second_percentage is not None:
+                        job["percentage"] = second_percentage
+                own_fraction = (
+                    0.5
+                    if job["name"] == "batch-first.bin" and fraction == 0.25
+                    else fraction
+                )
+                job["current"] = (
+                    48 * 1024
+                    if job["name"] == "batch-second.bin" and not second_size_known
+                    else int(job["total"] * own_fraction)
+                )
         route.fulfill(response=response, json=payload)
 
     page.route("**/api/v1/jobs", measured_progress)
@@ -3571,6 +3608,8 @@ def test_transfer_progress_and_safe_panel_controls(
     expect(single.get_by_role("progressbar")).to_have_attribute("value", "0.25")
     expect(single.locator(".transfer-bytes")).to_have_text("16 / 64 KB")
     expect(single.locator(".transfer-batch-percent")).to_have_text("25%")
+    panel_progress = page.get_by_role("progressbar", name="Transfer panel progress")
+    expect(panel_progress).to_have_count(0)
     page.get_by_role("link", name="Transfers", exact=False).click()
     expect(single.get_by_role("progressbar")).to_have_attribute("value", "0.25")
     expect(page.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
@@ -3581,13 +3620,34 @@ def test_transfer_progress_and_safe_panel_controls(
     page.get_by_role("link", name="My Files", exact=True).click()
     page.get_by_role("button", name="Hide Transfer Details", exact=True).click()
     expect(page.locator("#transfer-list")).not_to_be_visible()
+    expect(panel_progress).to_have_attribute("aria-valuenow", "25")
+    fraction = 0.5
+    expect(panel_progress).to_have_attribute("aria-valuenow", "50")
+    expect(page.locator(".transfer-panel-progress-label")).to_contain_text(
+        "single-progress.bin"
+    )
+    expect(page.locator(".transfer-panel-progress-label")).to_contain_text("50%")
+    page.screenshot(path=ARTIFACTS / "upload-progress-panel-collapsed.png")
     page.get_by_role("button", name="Show Transfer Details", exact=True).click()
     expect(single).to_be_visible()
+    expect(single.get_by_role("progressbar")).to_have_attribute("value", "0.5")
+    page.screenshot(path=ARTIFACTS / "upload-progress-panel-expanded.png")
     page.set_viewport_size({"width": 390, "height": 844})
     # The phone layout replaces the expanded desktop panel with its summary.
     # Wait for that React transition before examining controls from the new layout.
     expect(page.locator("#transfer-dialog")).to_have_count(0)
     assert_layout(page)
+    mobile_panel = page.get_by_role("button", name="Open transfer progress")
+    expect(mobile_panel).to_contain_text("single-progress.bin")
+    expect(mobile_panel.locator(".transfer-panel-stage-metrics")).to_contain_text(
+        "32 / 64 KB"
+    )
+    expect(mobile_panel.get_by_role("progressbar")).to_have_attribute(
+        "aria-valuenow", "50"
+    )
+    page.locator(".mobile-transfer-status").screenshot(
+        path=ARTIFACTS / "queue-mobile.png"
+    )
     page.screenshot(path=ARTIFACTS / "single-transfer-mobile.png", full_page=True)
     page.set_viewport_size({"width": 1440, "height": 960})
 
@@ -3612,17 +3672,81 @@ def test_transfer_progress_and_safe_panel_controls(
     upload(page, ["batch-first.bin", "batch-second.bin"])
     server.wait_started(3)
     expect(page.locator(".transfer-batch")).to_have_count(0)
-    for name in ("batch-first.bin", "batch-second.bin"):
-        expect(row(page, name).locator(".transfer-bytes")).to_have_text("0 B / 64 KB")
-    fraction = 0.25
-    for name in ("batch-first.bin", "batch-second.bin"):
-        item = row(page, name)
-        expect(item.get_by_role("progressbar")).to_have_attribute("value", "0.25")
-        expect(item.locator(".transfer-bytes")).to_have_text("16 / 64 KB")
-    expect(page.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
-    page.screenshot(
-        path=ARTIFACTS / "multi-transfer-telegram-bytes.png", full_page=True
+    expect(row(page, "batch-first.bin").locator(".transfer-bytes")).to_have_text(
+        "0 B / 64 KB"
     )
+    expect(row(page, "batch-second.bin").locator(".transfer-bytes")).to_have_text(
+        "0 B / 192 KB"
+    )
+    fraction = 0.25
+    expect(row(page, "batch-first.bin").locator(".transfer-bytes")).to_have_text(
+        "32 / 64 KB"
+    )
+    expect(row(page, "batch-second.bin").locator(".transfer-bytes")).to_have_text(
+        "48 / 192 KB"
+    )
+    expect(page.get_by_role("button", name="Show Files", exact=True)).to_have_count(0)
+    page.get_by_role("button", name="Hide Transfer Details", exact=True).click()
+    expect(panel_progress).to_have_attribute("aria-valuenow", "31.25")
+    expect(page.locator(".transfer-panel-progress-label")).to_contain_text(
+        "Uploading to Telegram"
+    )
+    expect(page.locator(".transfer-panel-stage-metrics")).to_contain_text("2 files")
+    expect(page.locator(".transfer-panel-stage-metrics")).to_contain_text("80 / 256 KB")
+    expect(page.get_by_role("button", name="Cancel All", exact=True)).to_have_count(0)
+    expect(page.locator(".transfer-panel-progress-label strong")).to_contain_text(
+        "and 1 more"
+    )
+    page.screenshot(path=ARTIFACTS / "multi-transfer-telegram-bytes.png")
+    page.emulate_media(color_scheme="light", reduced_motion="reduce")
+    page.screenshot(path=ARTIFACTS / "multi-transfer-light.png")
+    second_phase = "downloading"
+    upload_stage = page.locator(".transfer-panel-progress").filter(
+        has_text="batch-first.bin"
+    )
+    download_stage = page.locator(".transfer-panel-progress").filter(
+        has_text="batch-second.bin"
+    )
+    expect(upload_stage.get_by_role("progressbar")).to_have_attribute(
+        "aria-valuenow", "50"
+    )
+    expect(download_stage.get_by_role("progressbar")).to_have_attribute(
+        "aria-valuenow", "25"
+    )
+    expect(upload_stage).to_contain_text("32 / 64 KB")
+    expect(download_stage).to_contain_text("48 / 192 KB")
+    page.screenshot(path=ARTIFACTS / "mixed-transfer-stages.png")
+
+    second_size_known = False
+    second_phase = "uploading"
+    expect(download_stage).to_contain_text("48 KB transferred")
+    expect(download_stage.get_by_role("progressbar")).to_have_attribute(
+        "data-indeterminate", "true"
+    )
+    expect(upload_stage.get_by_role("progressbar")).to_have_attribute(
+        "aria-valuenow", "50"
+    )
+    second_size_known = True
+
+    second_phase = "finalizing"
+    second_percentage = 65
+    expect(download_stage).to_contain_text("Publishing to the channel")
+    expect(download_stage.get_by_role("progressbar")).to_have_attribute(
+        "aria-valuenow", "65"
+    )
+    expect(download_stage).not_to_contain_text("192 KB")
+    second_percentage = None
+    expect(download_stage.get_by_role("progressbar")).to_have_attribute(
+        "data-indeterminate", "true"
+    )
+    expect(download_stage).not_to_contain_text("192 KB")
+    page.get_by_role("button", name="Show Transfer Details", exact=True).click()
+    expect(panel_progress).to_have_count(0)
+    page.get_by_role("button", name="All transfers", exact=True).click()
+    expect(
+        page.get_by_role("heading", name="Transfers", exact=True).first
+    ).to_be_visible()
+    expect(row(page, "batch-second.bin")).to_be_visible()
     cancel_all(page)
 
 
@@ -3860,6 +3984,65 @@ def test_transfer_sections_locate_highlight_and_normal_preview(
         route.abort()
 
 
+def test_four_transfers_leave_history_controls_in_view(server, desktop):
+    _, page = desktop
+    page.set_viewport_size({"width": 1536, "height": 695})
+    page.emulate_media(color_scheme="light", reduced_motion="reduce")
+    login(page, server.url)
+    names = ["Study book.pdf", "Reference.pdf", "Lecture notes.pdf", "Revision.pdf"]
+    queue_last_two = True
+
+    def job_progress(route):
+        response = route.fetch()
+        payload = response.json()
+        for job in payload["jobs"]:
+            if queue_last_two and job["name"] in names[2:]:
+                job.update(status="queued", phase="queued", current=0)
+            elif job["name"] in names:
+                job.update(current=48 * 1024)
+        route.fulfill(response=response, json=payload)
+
+    page.route("**/api/v1/jobs", job_progress)
+    upload(page, names)
+    server.wait_started(len(names))
+    page.get_by_role("link", name="Transfers", exact=False).click()
+    history = page.get_by_role("region", name="Transfer History", exact=True)
+    running = history.get_by_role("region", name="Running", exact=True)
+    queued = history.get_by_role("region", name="Queued", exact=True)
+    expect(running.get_by_role("listitem")).to_have_count(2)
+    expect(queued.get_by_role("listitem")).to_have_count(2)
+    expect(running.get_by_text("48 / 64 KB", exact=True)).to_have_count(2)
+
+    page.screenshot(path=ARTIFACTS / "transfer-density-1536.png")
+    for row in history.locator(".transfer-item").all():
+        assert row.bounding_box()["height"] <= 58
+    expect(history.get_by_text("You can close this tab", exact=True)).to_have_count(1)
+    last_row = history.get_by_role("listitem").last
+    expect(last_row).to_be_in_viewport(ratio=1)
+    expect(history.get_by_role("button", name="Clear history")).to_have_count(0)
+
+    queue_last_two = False
+    expect(running.get_by_role("listitem")).to_have_count(4)
+    expect(last_row).to_be_in_viewport(ratio=1)
+    page.screenshot(path=ARTIFACTS / "transfer-density-four-running.png")
+
+    for width in (390, 320):
+        page.set_viewport_size({"width": width, "height": 844})
+        page.emulate_media(color_scheme="dark")
+        expect(last_row).to_be_in_viewport(ratio=1)
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        cancel = running.get_by_role("button", name="Cancel Study book.pdf")
+        assert cancel.bounding_box()["width"] >= 44
+        assert cancel.bounding_box()["height"] >= 44
+        assert cancel.evaluate("""button => {
+            const rect = button.getBoundingClientRect();
+            return button.contains(document.elementFromPoint(
+                rect.x + rect.width / 2, rect.y + rect.height / 2
+            ));
+        }""")
+        page.screenshot(path=ARTIFACTS / f"transfer-density-{width}.png")
+
+
 def test_transfer_columns_handle_long_names_paths_and_narrow_screens(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
@@ -3967,6 +4150,28 @@ def test_transfer_columns_handle_long_names_paths_and_narrow_screens(
             assert layout["folder"]["right"] <= layout["size"]["x"]
             assert layout["size"]["right"] <= layout["date"]["x"]
             assert layout["row"]["height"] <= 60
+        toggle = completed.get_by_role("button", name="Show full filename", exact=True)
+        if width in (390, 320):
+            name = completed.locator(".transfer-item-name")
+            expect(toggle).to_be_visible()
+            assert name.evaluate(
+                """node => {
+                    const lineHeight = parseFloat(getComputedStyle(node).lineHeight);
+                    return node.clientHeight <= 2 * lineHeight + 1;
+                }"""
+            )
+            toggle.press("Enter")
+            expect(name).to_have_text(long_name)
+            assert name.evaluate("n => n.clientHeight >= n.scrollHeight - 1")
+            completed.get_by_role("button", name="Collapse filename", exact=True).press(
+                "Space"
+            )
+            expect(toggle).to_be_focused()
+            expect(
+                cancelled.get_by_role("button", name="Show full filename")
+            ).to_have_count(0)
+        else:
+            expect(toggle).to_have_count(0)
         if width in (1920, 390):
             page.screenshot(
                 path=ARTIFACTS / ("transfer-columns-" + str(width) + ".png"),

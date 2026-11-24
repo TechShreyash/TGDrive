@@ -108,6 +108,48 @@ def test_device_upload_reports_bytes_before_first_chunk_receipt(
     )
 
 
+@pytest.mark.parametrize(
+    "layout,width,height", [("Grid", 1920, 869), ("List", 1536, 695)]
+)
+def test_desktop_transfer_panel_keeps_file_browser_size(
+    server: Server, desktop: tuple[Any, Any], layout: str, width: int, height: int
+) -> None:
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": height})
+    page.emulate_media(color_scheme="dark", reduced_motion="reduce")
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    page.get_by_role("button", name=f"{layout} view", exact=True).click()
+    file_list = page.get_by_role("region", name="File list", exact=True)
+    actions = file_list.locator('summary[aria-label^="Actions for "]')
+    expect(actions.last).to_be_attached()
+
+    def geometry():
+        return (
+            page.locator(".file-workspace").bounding_box(),
+            file_list.bounding_box(),
+        )
+
+    before = geometry()
+    _choose_upload(page, "upload-overlay.bin", 64 * 1024)
+    server.wait_started(1)
+    panel = page.locator("#transfer-dialog")
+    expect(panel.get_by_text("upload-overlay.bin", exact=True)).to_be_visible()
+    assert geometry() == before
+    page.screenshot(path=ARTIFACTS / f"upload-overlay-{layout.lower()}-{width}.png")
+
+    # A bottom-row action can scroll clear of the floating panel.
+    file_list.evaluate("list => { list.scrollTop = list.scrollHeight; }")
+    expect(actions.last).to_be_in_viewport(ratio=1)
+    action_bounds = actions.last.bounding_box()
+    assert action_bounds["y"] + action_bounds["height"] <= panel.bounding_box()["y"]
+    actions.last.click(trial=True)
+
+    for label in ("Hide Transfer Details", "Show Transfer Details"):
+        panel.get_by_role("button", name=label, exact=True).click()
+        assert geometry() == before
+
+
 def test_native_upload_cancel_stops_before_telegram_job(
     server: Server, desktop: tuple[Any, Any]
 ) -> None:
@@ -362,10 +404,14 @@ def test_folder_eta_survives_small_file_handoffs_and_publishing(
         page.set_viewport_size({"width": width, "height": 844})
         expect(metrics).to_contain_text(re.compile(r"About .+ remaining"))
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-        assert batch.locator(".transfer-device-status").evaluate("""el =>
-          el.getBoundingClientRect().height <=
-            parseFloat(getComputedStyle(el).lineHeight) * 1.1
-        """), "The short close-tab notice should stay together"
+        guidance = page.locator(".transfer-page-guidance")
+        expect(guidance).to_have_text("You can close this tab")
+        assert guidance.evaluate("""el => {
+            const text = el.getBoundingClientRect();
+            const header = el.parentElement.getBoundingClientRect();
+            return text.left >= header.left && text.right <= header.right &&
+                text.top >= header.top && text.bottom <= header.bottom;
+        }"""), "The close-tab notice should fit within the queue heading"
         page.screenshot(
             path=ARTIFACTS / f"folder-rolling-eta-mobile-{width}.png", full_page=True
         )

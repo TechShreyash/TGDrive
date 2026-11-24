@@ -242,14 +242,14 @@ def test_collapsed_panel_shows_running_finished_and_blocked_work(
     mobile = width <= 720
     if mobile:
         status = page.get_by_role("button", name="Open transfer progress", exact=True)
-        expect(status).to_have_text("1 upload in progress")
+        expect(status).to_contain_text("compact-status.bin")
     else:
         panel = page.locator("main > #transfer-dialog")
         expect(panel).to_be_in_viewport(ratio=1)
         assert panel.evaluate("""element => {
             const workspace = element.previousElementSibling;
             return workspace.matches(".workspace") &&
-                workspace.getBoundingClientRect().bottom <=
+                workspace.getBoundingClientRect().bottom >
                     element.getBoundingClientRect().top;
         }""")
         collapse()
@@ -269,7 +269,7 @@ def test_collapsed_panel_shows_running_finished_and_blocked_work(
     seed_recovery(page, [recovery_row("original-needed.bin")])
     page.reload()
     if mobile:
-        expect(status).to_have_text("Uploads need attention")
+        expect(status).to_contain_text("Choose the original file to resume")
     else:
         expect(toggle).to_be_visible()
         collapse()

@@ -6,6 +6,7 @@ import {
     formatProgressPercent,
     transferDetails,
     transferProgress,
+    transferStageProgress,
 } from "./progress";
 describe("truthful stage timing", () => {
     it("shows measured progress below one percent without rounding it up", () => {
@@ -304,4 +305,60 @@ it("keeps acknowledged upload progress during local verification without reporti
     expect(baseline.rate).toBeUndefined();
     const resumed = sampleProgress(baseline, "receiving", 97, 3000);
     expect(resumed.rate).toBe(10); // Only new bytes count toward transfer speed.
+});
+
+describe("presented stage measurements", () => {
+    const item = {
+        state: "uploading",
+        serverStatus: "running",
+        stage: "uploading",
+        phase: "Uploading to Telegram",
+        current: 100,
+        total: 100,
+    };
+
+    it("reaches 100% for the transmitted bytes and clears the meter when publishing starts", () => {
+        expect(transferStageProgress(item).fraction).toBe(1);
+        expect(
+            transferStageProgress({
+                ...item,
+                state: "receiving",
+                stage: "confirming",
+            }),
+        ).toEqual({ bytes: undefined, fraction: undefined });
+        expect(transferStageProgress({ ...item, stage: "finalizing" })).toEqual(
+            {
+                bytes: undefined,
+                fraction: undefined,
+            },
+        );
+        expect(
+            transferStageProgress({
+                ...item,
+                stage: "rewriting_pdf",
+                reportedPercentage: 65,
+            }),
+        ).toEqual({
+            bytes: undefined,
+            fraction: 0.65,
+        });
+    });
+
+    it("keeps observed bytes without inventing a denominator or treating deletion counts as bytes", () => {
+        expect(transferStageProgress({ ...item, total: 0 })).toMatchObject({
+            bytes: { current: 100, total: 0 },
+            fraction: undefined,
+        });
+        expect(transferStageProgress({ ...item, kind: "delete" })).toEqual({
+            bytes: undefined,
+            fraction: undefined,
+        });
+        expect(
+            transferStageProgress({
+                ...item,
+                total: 0,
+                reportedPercentage: 101,
+            }).fraction,
+        ).toBeUndefined();
+    });
 });

@@ -74,7 +74,7 @@
     }
 }
 .transfer-history .transfer-category[data-category="finished"] > .empty-state {
-    padding-block: 40px;
+    padding-block: 24px;
     animation: none;
 }
 @media (max-width: 540px) {

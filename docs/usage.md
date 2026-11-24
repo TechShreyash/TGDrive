@@ -36,15 +36,24 @@ A folder marked **Finished** can include failed or cancelled files: check its re
 | Publishing to the channel | Finishing messages and saving the file record |
 | Completed | The file and its record are confirmed |
 
-The panel shows device progress until every remaining file from this browser is
-received and accepted. Accepted files show **Received** during that stage;
-Telegram work already runs in the background. The panel then switches to
-Telegram progress. A full device bar still needs server confirmation.
+An expanded folder tracks device progress until TGDrive accepts all of its
+files. Accepted files show **Received** as their Telegram work continues.
+The folder summary then switches to Telegram progress. The compact desktop
+panel can show both stages while they overlap.
 
-Time remaining estimates only the displayed stage; it disappears during stale
-progress, blocked work and final confirmation. **Hide/Show** collapses the desktop
-panel. On phones, the status button opens **Transfers** for work started in
-this browser. The **Transfers** tab includes server jobs from other devices.
+The compact panel shows the filename or folder, its current stage, and a ring
+with the measured percentage when the size is known. Within the same stage
+the percentage uses the combined bytes and combined sizes. An unknown size
+can still show bytes transferred. A stage that reports only its percentage
+shows that reading for its own transfer. When the bytes reach 100%, TGDrive
+may still be confirming or publishing the file. The new stage has its own
+readout. Select the panel to expand individual transfers.
+
+Time remaining applies to the displayed stage and disappears when progress
+stalls or the server is confirming completion. On phones, tap the filename
+and progress ring to open **Transfers**. If a transfer needs attention, its
+filename and recovery status appear there first. The **Transfers** tab includes
+server jobs from other devices.
 In short landscape and other views with little vertical space, routine uploads
 use the tab count. Uploads from this browser that need attention still get a
 status button.
@@ -435,7 +444,11 @@ only** in TGDrive's proxy; keep owner pages protected.
 
 ## Transfer history
 
+Running and queued transfers use compact rows above the history filters. While
+uploads are active, the Transfers page shows one tab notice for the queue.
+
 **Transfers** lists **Running** and **Queued**, then history once a task finishes.
+On narrow screens, use the chevron beside a long filename to read its full name.
 When there are no transfers, **Open My Files** takes you to the file browser.
 The **Finished** count covers all pages of the current search and filter.
 Filter by **All / Successful /
@@ -462,9 +475,20 @@ still needing originals, including failed uploads with resumable [receipts](refe
 Folders with unfinished files retain their rows until cleared after completion.
 Server history clears for all devices; browser-only history clears here.
 
-The desktop floating panel remembers whether you collapsed it as you navigate.
-The panel shows this browser's work; Transfers also shows other
-devices' server jobs. Clearing the panel does not erase saved history.
+The desktop transfer panel floats on your drive pages. Open **Transfers** for
+the full queue. Click the floating panel’s header to collapse it. Your choice
+stays in effect as you navigate. The compact view shows the
+active filename or folder, its stage and a progress
+ring. Concurrent files in the same stage share a byte-weighted percentage. The
+byte count and estimated time refer to that stage. A folder also shows how
+many files the server has received or finished. When the total is unknown, the
+ring indicates activity. A waiting transfer shows its reason.
+
+Click the summary to expand the queue and see individual files, retry or cancel.
+**All transfers** opens the full history. Scroll files above the panel to reach
+their actions.
+**Transfers** also shows server jobs from other devices. Use the history page
+to manage saved records.
 [History storage](architecture.md#finished-history).
 
 <a id="create-and-extract-zip-archives"></a>

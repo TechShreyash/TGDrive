@@ -407,7 +407,9 @@ def test_new_folder_gets_device_slots_while_older_folder_and_telegram_are_pendin
         expect(new_batch).to_contain_text("Received")
         expect(new_batch).not_to_contain_text("Uploading to Telegram")
         expect(new_batch.locator(".transfer-batch-throughput")).to_have_text("")
-        expect(new_batch).to_contain_text("Keep this tab open for other uploads")
+        expect(page.locator("#transfer-summary .transfer-device-status")).to_have_text(
+            "Keep this tab open"
+        )
         assert _device_close_blocked(page)
         page.screenshot(path=ARTIFACTS / "pipeline-new-folder-fair-slots.png")
     finally:

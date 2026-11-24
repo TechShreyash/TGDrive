@@ -1384,7 +1384,7 @@ export default function FileBrowser({
                     "file-list-scroll" +
                     (layout === "grid" ? " file-grid-scroll" : "")
                 }
-                tabIndex={0}
+                tabIndex={-1}
                 role="region"
                 aria-label="File list"
                 aria-busy={typePending && !typeError}

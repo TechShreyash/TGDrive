@@ -80,12 +80,17 @@
     margin-inline-end: 8px;
 }
 .file-list-scroll {
+    --file-list-bottom-padding: 88px;
     flex: 1;
     min-height: 0;
     overflow: auto;
     overscroll-behavior-y: contain;
     scrollbar-gutter: stable;
-    padding-bottom: 88px;
+    padding-bottom: max(
+        var(--file-list-bottom-padding),
+        var(--transfer-overlay-clearance, 0px)
+    );
+    scroll-padding-bottom: var(--transfer-overlay-clearance, 0px);
 }
 .file-list-scroll:focus-visible {
     outline: 2px solid var(--action);
@@ -137,6 +142,7 @@
         flex: 0 0 auto;
     }
     .file-list-scroll {
+        --file-list-bottom-padding: 0px;
         flex: 0 0 auto;
         overflow: visible;
         padding-bottom: 0;
@@ -1764,7 +1770,7 @@
         margin-bottom: 9px;
     }
     .file-workspace .file-list-scroll {
-        padding-bottom: 20px;
+        --file-list-bottom-padding: 20px;
     }
     .file-workspace .file-grid,
     .file-workspace .file-skeleton[data-layout="grid"] {

@@ -41,11 +41,12 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function render(items: Transfer[], expandedPage = true) {
+function render(items: Transfer[], expandedPage = true, pageContext = "files") {
     return renderToStaticMarkup(
         createElement(TransferPanel, {
             items,
             expandedPage,
+            pageContext,
             onError: () => {},
         }),
     );
@@ -93,6 +94,139 @@ function renderExpandedBatches(items: Transfer[], noticeBatch?: string) {
 }
 
 describe("visible device receipt feedback", () => {
+    it("shows active preparation without inventing a percentage", () => {
+        const html = render(
+            [
+                local({
+                    state: "verifying",
+                    phase: "Checking the original file",
+                }),
+            ],
+            false,
+            "shares",
+        );
+        expect(html).toContain("Checking the original file");
+        expect(html).toContain('aria-label="Transfer panel progress"');
+        expect(html).toContain('data-indeterminate="true"');
+        expect(html).not.toContain("aria-valuenow");
+    });
+
+    it("weights concurrent uploads by bytes rather than averaging percentages", () => {
+        const html = render(
+            [
+                local({
+                    key: "small",
+                    state: "uploading",
+                    jobId: "a",
+                    stage: "uploading",
+                    phase: "Uploading to Telegram",
+                    current: 100,
+                }),
+                local({
+                    key: "large",
+                    state: "uploading",
+                    jobId: "b",
+                    stage: "uploading",
+                    phase: "Uploading to Telegram",
+                    size: 300,
+                    total: 300,
+                    current: 100,
+                }),
+            ],
+            false,
+            "shares",
+        );
+
+        expect(html).toContain('aria-valuenow="50"');
+        expect(html).toContain("2 files");
+        expect(html).not.toContain("Cancel All");
+    });
+
+    it("keeps folder receipt, Telegram, and archive work in separate stages", () => {
+        const html = render(
+            [
+                local({
+                    key: "sent",
+                    relativePath: "Pictures/Sent.jpg",
+                    state: "uploading",
+                    phase: "Uploading to Telegram",
+                    stage: "uploading",
+                    jobId: "sent",
+                    current: 20,
+                }),
+                local({
+                    key: "sending",
+                    relativePath: "Pictures/Sending.jpg",
+                    state: "receiving",
+                    phase: "Uploading from your device",
+                    stage: "receiving",
+                    current: 50,
+                }),
+                local({
+                    key: "zip",
+                    kind: "archive",
+                    state: "uploading",
+                    phase: "Creating ZIP on the server",
+                    stage: "archiving",
+                    jobId: "zip",
+                    current: 65,
+                }),
+            ],
+            false,
+            "shares",
+        );
+
+        expect(html).toContain("Uploading from your device · Pictures");
+        expect(html).toContain("1/2 received");
+        expect(html).toContain('aria-valuenow="75"');
+        expect(html).toContain("Uploading to Telegram · Pictures");
+        expect(html).toContain('aria-valuenow="20"');
+        expect(html).toContain("1 more stage");
+        expect(html).toContain("Keep this tab open");
+    });
+
+    it("uses an active indicator for URL work with no known size and leaves queued files out of the meter", () => {
+        const html = render(
+            [
+                local({
+                    key: "url",
+                    kind: "remote",
+                    state: "uploading",
+                    stage: "downloading",
+                    phase: "Downloading from URL",
+                    jobId: "url",
+                    size: 0,
+                    total: 0,
+                }),
+                local({ key: "queued" }),
+            ],
+            false,
+            "shares",
+        );
+
+        expect(html).toContain("1 running · 1 queued");
+        expect(html).toContain("Downloading from URL");
+        expect(html).toContain('data-indeterminate="true"');
+        expect(html).not.toContain("aria-valuenow");
+    });
+
+    it("keeps the retry reason visible without an activity animation", () => {
+        const html = render(
+            [
+                local({
+                    state: "uploading",
+                    stage: "retry_wait",
+                    phase: "Waiting to retry",
+                }),
+            ],
+            false,
+            "shares",
+        );
+        expect(html).toContain("Waiting to retry");
+        expect(html).toContain("1 waiting");
+        expect(html).not.toContain('aria-label="Transfer panel progress"');
+    });
+
     it("keeps dismissible resume feedback inside its originating folder", () => {
         const html = renderExpandedBatches(
             [

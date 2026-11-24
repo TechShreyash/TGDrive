@@ -81,6 +81,7 @@ export interface ProgressTransfer {
     phase: string;
     current: number;
     sentCurrent?: number;
+    reportedPercentage?: number;
     total: number;
     createdAt?: number;
     startedAt?: number;
@@ -93,22 +94,56 @@ export interface ProgressTransfer {
     progressUpdatedAt?: number | null;
     serverObservedAt?: number;
 }
-export function transferDetails(item: ProgressTransfer, now: number) {
-    const local =
+const serverByteStages = [
+    "saving",
+    "uploading",
+    "downloading",
+    "torrent_uploading",
+    "archiving",
+    "extracting",
+];
+
+function measuresDeviceBytes(item: ProgressTransfer) {
+    return (
         item.state === "receiving" &&
-        !["preparing", "confirming"].includes(item.stage || "");
-    const server =
+        !["preparing", "confirming"].includes(item.stage || "")
+    );
+}
+
+function measuresServerBytes(item: ProgressTransfer) {
+    return (
         item.state === "uploading" &&
         item.serverStatus !== "queued" &&
-        [
-            "saving",
-            "uploading",
-            "downloading",
-            "torrent_uploading",
-            "archiving",
-            "extracting",
-        ].includes(item.stage || "") &&
-        item.kind !== "delete";
+        item.kind !== "delete" &&
+        serverByteStages.includes(item.stage || "")
+    );
+}
+
+/** Counters on non-byte stages can still belong to the previous stage. */
+export function transferStageProgress(item: ProgressTransfer) {
+    const bytes =
+        measuresDeviceBytes(item) ||
+        measuresServerBytes(item) ||
+        item.state === "verifying"
+            ? transferProgress(item)
+            : undefined;
+    const reported =
+        item.serverStatus === "running" &&
+        item.reportedPercentage !== undefined &&
+        Number.isFinite(item.reportedPercentage) &&
+        item.reportedPercentage >= 0 &&
+        item.reportedPercentage <= 100
+            ? item.reportedPercentage / 100
+            : undefined;
+    return {
+        bytes,
+        fraction: bytes?.total ? bytes.current / bytes.total : reported,
+    };
+}
+
+export function transferDetails(item: ProgressTransfer, now: number) {
+    const local = measuresDeviceBytes(item);
+    const server = measuresServerBytes(item);
     const freshServer =
         now - (item.serverObservedAt || 0) < 15000 &&
         (!item.progressUpdatedAt ||

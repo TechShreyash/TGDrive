@@ -109,7 +109,9 @@ import type { SortOrder } from "../features/files/fileSorting";
 import ActionDialog, {
     type ActionDialogState,
 } from "../features/files/ActionDialog";
-import TransferPanel from "../features/transfers/TransferPanel";
+import TransferPanel, {
+    MobileTransferSummary,
+} from "../features/transfers/TransferPanel";
 import TransferHistory from "../features/transfers/TransferHistory";
 import FolderUpload from "../features/transfers/FolderUpload";
 import DeletionNotice from "../features/transfers/DeletionNotice";
@@ -2660,20 +2662,19 @@ export default function App() {
                         </Activity>
                     )}
                 </section>
-                {!mobile &&
-                    !isPublic &&
-                    ["files", "trash", "shares"].includes(view) && (
-                        <TransferPanel
-                            pageContext={view}
-                            collapsed={transferPanelCollapsed}
-                            onCollapsedChange={setTransferPanelCollapsed}
-                            items={items}
-                            onLocate={(item, folder) =>
-                                void locateTransfer(item, folder)
-                            }
-                            onError={(message) => notify(message, true)}
-                        />
-                    )}
+                {!mobile && !isPublic && view !== "activity" && (
+                    <TransferPanel
+                        pageContext={view}
+                        collapsed={transferPanelCollapsed}
+                        onCollapsedChange={setTransferPanelCollapsed}
+                        onOpenTransfers={() => navigate("/", "activity")}
+                        items={items}
+                        onLocate={(item, folder) =>
+                            void locateTransfer(item, folder)
+                        }
+                        onError={(message) => notify(message, true)}
+                    />
+                )}
                 {mobile &&
                     !isPublic &&
                     view !== "activity" &&
@@ -2686,15 +2687,10 @@ export default function App() {
                                 className="mobile-transfer-open"
                                 onClick={() => navigate("/", "activity")}
                                 aria-label="Open transfer progress"
+                                aria-describedby="mobile-transfer-description"
                             >
-                                <Upload size={18} aria-hidden="true" />
-                                <span>
-                                    {mobileUploadIssues
-                                        ? "Uploads need attention"
-                                        : mobileActiveCount +
-                                          (mobileActiveCount === 1
-                                              ? " upload in progress"
-                                              : " uploads in progress")}
+                                <span id="mobile-transfer-description">
+                                    <MobileTransferSummary items={items} />
                                 </span>
                                 <ChevronRight size={18} aria-hidden="true" />
                             </button>

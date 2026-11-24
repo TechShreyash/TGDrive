@@ -55,6 +55,7 @@ export interface Transfer {
     current: number;
     /** Transient browser-observed bytes; current remains the confirmed resume offset. */
     sentCurrent?: number;
+    reportedPercentage?: number;
     total: number;
     uploadId?: string;
     jobId?: string;
@@ -509,6 +510,7 @@ export function fromJob(job: Job, previousKind?: string): Partial<Transfer> {
               : {}),
         current: job.current ?? 0,
         total: job.total ?? 0,
+        reportedPercentage: job.percentage,
         error: job.error || undefined,
         stage: job.phase,
         botIntakeReviewRequired: job.bot_intake_review_required,
