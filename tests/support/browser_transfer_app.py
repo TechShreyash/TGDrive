@@ -224,6 +224,7 @@ class FixtureTransfers:
         return await self.registry.review_bot_intake(job_id)
 
     async def start_deletion(self, path: str) -> TransferRecord:
+        name = self.store.validate_deletion(path)["name"]
         intent = self.store.begin_deletion(path)
         if intent["state"] == "failed":
             self.store.confirm_deletion_messages(intent["id"], [])
@@ -232,7 +233,7 @@ class FixtureTransfers:
         )
         record.context.update(
             kind="delete",
-            name=self.store.get_directory(path, include_trashed=True)["name"],
+            name=name,
             path=path,
         )
         self.release[record.id] = asyncio.Event()

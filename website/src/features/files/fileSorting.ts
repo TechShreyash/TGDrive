@@ -2,6 +2,7 @@ import type { DriveItem } from "../../shared/types";
 import type { FileSort } from "./SortMenu";
 
 export type SortOrder = "asc" | "desc";
+export const DEFAULT_FILE_SORT: FileSort = "modified";
 export const defaultSortOrder = (sort: FileSort): SortOrder =>
     sort === "name" ? "asc" : "desc";
 export function sortDriveItems(

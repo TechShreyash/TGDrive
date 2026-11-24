@@ -125,7 +125,7 @@ def test_notifications_are_single_dismissible_and_usable_in_modals(
     page.keyboard.press("Escape")
 
 
-def test_delete_dialog_failure_is_inline_without_duplicate_popup(server, desktop):
+def test_background_delete_failure_returns_item_and_shows_one_error(server, desktop):
     _, page = desktop
     login(page, server.url)
     select_item(page, "Private folder")
@@ -144,9 +144,10 @@ def test_delete_dialog_failure_is_inline_without_duplicate_popup(server, desktop
     dialog = page.get_by_role("dialog")
     confirm = dialog.get_by_role("button", name="Delete Permanently", exact=True)
     confirm.click()
-    expect(dialog.get_by_role("alert")).to_have_text(detail)
-    expect(confirm).to_be_enabled()
-    expect(page.locator(".toast")).to_have_count(0)
+    expect(dialog).to_have_count(0)
+    toast = page.locator(".toast")
+    expect(toast).to_have_count(1)
+    expect(toast).to_have_text(detail)
     expect(
         page.get_by_role("button", name="Private folder", exact=True)
     ).to_be_visible()

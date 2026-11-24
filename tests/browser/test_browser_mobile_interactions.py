@@ -290,7 +290,7 @@ def test_phone_navigation_search_new_and_owner_controls_are_reachable(
             expect(badge).to_have_text("1")
             expect(status).to_have_count(0)
             page.set_viewport_size({"width": height, "height": width})
-            expect(status).to_have_text("1 upload in progress")
+            expect(status).to_contain_text("landscape.bin")
             page.set_viewport_size({"width": width, "height": height})
             expect(status).to_have_count(0)
             row_action = page.locator(".file-row summary").first
@@ -417,7 +417,8 @@ def test_phone_navigation_search_new_and_owner_controls_are_reachable(
                 ),
             )
             fixtures.upload(page, ["needs-attention.bin"])
-            expect(status).to_have_text("Uploads need attention")
+            expect(status).to_contain_text("needs-attention.bin")
+            expect(status).to_contain_text("Transfer needs attention")
             status.tap()
             expect(page.locator(".workspace h1").first).to_have_text("Transfers")
         assert errors == [], errors

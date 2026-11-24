@@ -89,6 +89,7 @@ import "./FileBrowser.css";
 import { isExtractableArchive } from "./archiveApi";
 import { COMPACT_LAYOUT_QUERY } from "../../shared/responsive";
 import {
+    DEFAULT_FILE_SORT,
     defaultSortOrder,
     sortDriveItems,
     type SortOrder,
@@ -284,6 +285,7 @@ export default function FileBrowser({
     onReturnFocus,
     loading,
     typePending = false,
+    sortPending = false,
     staleTypeRows = false,
     typeError = "",
     onRetryType,
@@ -321,6 +323,7 @@ export default function FileBrowser({
     onReturnFocus?: () => void;
     loading: boolean;
     typePending?: boolean;
+    sortPending?: boolean;
     staleTypeRows?: boolean;
     typeError?: string;
     onRetryType?: () => void;
@@ -436,8 +439,10 @@ export default function FileBrowser({
     }, []);
     const selectionActive = useRef(false);
     selectionActive.current = !!selectionMode || selected.size > 0;
-    const [localSort, setLocalSort] = useState<FileSort>("name");
-    const [localOrder, setLocalOrder] = useState<SortOrder>("asc");
+    const [localSort, setLocalSort] = useState<FileSort>(DEFAULT_FILE_SORT);
+    const [localOrder, setLocalOrder] = useState<SortOrder>(
+        defaultSortOrder(DEFAULT_FILE_SORT),
+    );
     const compact = useMediaQuery(COMPACT_LAYOUT_QUERY, false, {
         getInitialValueInEffect: false,
     });
@@ -690,13 +695,16 @@ export default function FileBrowser({
         setFilter(value);
         setPage(0);
     };
-    const [showTypeProgress, setShowTypeProgress] = useState(false);
+    const [showListingProgress, setShowListingProgress] = useState(false);
     useEffect(() => {
-        setShowTypeProgress(false);
-        if (!typePending || typeError) return;
-        const timer = window.setTimeout(() => setShowTypeProgress(true), 200);
+        setShowListingProgress(false);
+        if ((!typePending && !sortPending) || typeError) return;
+        const timer = window.setTimeout(
+            () => setShowListingProgress(true),
+            200,
+        );
         return () => window.clearTimeout(timer);
-    }, [filter, typePending, typeError]);
+    }, [filter, sort, order, typePending, sortPending, typeError]);
     const filteredItems =
         paging || filter === "all"
             ? allItems
@@ -716,6 +724,20 @@ export default function FileBrowser({
               ? `Showing ${searchPagination.offset + 1}–${searchPagination.offset + allItems.length}${searchPagination.hasMore ? " · More available" : ""}`
               : "No Results"
           : `${count} ${count === 1 ? "item" : "items"}${isRecent && !paging?.complete ? " · More available" : ""}`;
+    const sorting = sortPending && showListingProgress && !typeError;
+    const fileCount = (
+        <>
+            <span className={sorting ? "sort-count-hidden" : undefined}>
+                {fileCountLabel}
+                {isPublic ? " · Read-only" : ""}
+            </span>
+            {sorting && (
+                <span className="file-sort-progress" role="status">
+                    Sorting…
+                </span>
+            )}
+        </>
+    );
     const pageSlots = paging
         ? Array.from(
               {
@@ -745,47 +767,16 @@ export default function FileBrowser({
         selection.setAnchor(null);
     }, [selection, listingKey, page, filter, sort, order, resultOffset]);
     const chosen = allItems.filter((item) => selected.has(item.id));
-    const recentItems = useMemo(
-        () =>
-            allItems
-                .filter((item) => item.type === "file" && item.upload_date)
-                .sort((a, b) =>
-                    String(b.upload_date).localeCompare(String(a.upload_date)),
-                )
-                .slice(0, 8),
-        [allItems],
-    );
-    const showRecent =
-        layout === "grid" &&
-        filter === "all" &&
-        page === 0 &&
-        !isSearch &&
-        !isTrash &&
-        !isStarred &&
-        !isRecent &&
-        !isPublic &&
-        (!paging || paging.complete) &&
-        recentItems.length >= 4 &&
-        allItems.length >= 12 &&
-        recentItems.some(
-            (item, index) =>
-                item.id !==
-                allItems.filter((entry) => entry.type === "file")[index]?.id,
-        );
     const videoIds =
         loading || error || isTrash
             ? []
-            : [
-                  ...new Set(
-                      [...visibleItems, ...(showRecent ? recentItems : [])]
-                          .filter(
-                              (item) =>
-                                  item.type === "file" &&
-                                  fileKind(item.name) === "video",
-                          )
-                          .map((item) => item.id),
-                  ),
-              ];
+            : visibleItems
+                  .filter(
+                      (item) =>
+                          item.type === "file" &&
+                          fileKind(item.name) === "video",
+                  )
+                  .map((item) => item.id);
     const videoMode = isPublic ? "share" : progressMode;
     const videoKey = JSON.stringify([listingKey, videoMode, videoIds]);
     const [videoProgress, setVideoProgress] = useState<{
@@ -1190,8 +1181,7 @@ export default function FileBrowser({
                         <>
                             {!narrow && (
                                 <span className="file-item-count">
-                                    {fileCountLabel}
-                                    {isPublic ? " · Read-only" : ""}
+                                    {fileCount}
                                 </span>
                             )}
                             <div className="file-toolbar-actions">
@@ -1347,8 +1337,7 @@ export default function FileBrowser({
                     )}
                     {narrow && (
                         <span className="file-item-count file-mobile-item-count">
-                            {fileCountLabel}
-                            {isPublic ? " · Read-only" : ""}
+                            {fileCount}
                         </span>
                     )}
                 </div>
@@ -1356,16 +1345,19 @@ export default function FileBrowser({
             {typeError ? (
                 <div className="file-type-status">
                     <span role="alert">
-                        Could not load{" "}
-                        {FILE_FILTERS.find(
-                            ([value]) => value === filter,
-                        )?.[1].toLowerCase()}
-                        . {typeError}
+                        {sortPending
+                            ? "Could not sort files."
+                            : "Could not load " +
+                              FILE_FILTERS.find(
+                                  ([value]) => value === filter,
+                              )?.[1].toLowerCase() +
+                              "."}{" "}
+                        {typeError}
                     </span>
                     <button className="text-button" onClick={onRetryType}>
                         Retry
                     </button>
-                    {filter !== "all" && (
+                    {!sortPending && filter !== "all" && (
                         <button
                             className="text-button"
                             onClick={() => changeFilter("all")}
@@ -1374,7 +1366,7 @@ export default function FileBrowser({
                         </button>
                     )}
                 </div>
-            ) : typePending && showTypeProgress ? (
+            ) : typePending && showListingProgress ? (
                 <p className="file-type-status" role="status">
                     Updating files…
                 </p>
@@ -1387,7 +1379,7 @@ export default function FileBrowser({
                 tabIndex={-1}
                 role="region"
                 aria-label="File list"
-                aria-busy={typePending && !typeError}
+                aria-busy={(typePending || sortPending) && !typeError}
                 inert={staleTypeRows}
             >
                 {error ? (
@@ -1527,54 +1519,6 @@ export default function FileBrowser({
                     </div>
                 ) : (
                     <>
-                        {showRecent && (
-                            <section
-                                className="recent-files"
-                                aria-labelledby="recent-files-title"
-                            >
-                                <h2 id="recent-files-title">Recently added</h2>
-                                <ul>
-                                    {recentItems.map((item, index) => (
-                                        <li
-                                            key={item.id}
-                                            style={
-                                                {
-                                                    "--i": index,
-                                                } as CSSProperties
-                                            }
-                                        >
-                                            <button
-                                                type="button"
-                                                className="recent-file"
-                                                aria-label={"Open " + item.name}
-                                                onClick={() => onOpen(item)}
-                                            >
-                                                <FileThumbnail
-                                                    item={item}
-                                                    progress={visibleVideoProgress?.get(
-                                                        item.id,
-                                                    )}
-                                                    auth={auth}
-                                                />
-                                                <span className="recent-file-name">
-                                                    <FileIcon
-                                                        name={item.name}
-                                                    />
-                                                    <span>{item.name}</span>
-                                                </span>
-                                                <span className="recent-file-meta">
-                                                    {formatBytes(item.size) +
-                                                        " · " +
-                                                        formatShortDate(
-                                                            item.upload_date,
-                                                        )}
-                                                </span>
-                                            </button>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </section>
-                        )}
                         <div className="file-table-wrap">
                             <Collection
                                 className={
@@ -1772,7 +1716,7 @@ export default function FileBrowser({
                                             : undefined
                                     }
                                 >
-                                    {visibleItems.map((item, index) => [
+                                    {visibleItems.flatMap((item, index) => [
                                         gridSection(item, index),
                                         <Row
                                             key={item.id}
@@ -2501,7 +2445,10 @@ export default function FileBrowser({
                                     <button
                                         type="button"
                                         className="secondary-button"
-                                        disabled={!searchPagination.offset}
+                                        disabled={
+                                            sortPending ||
+                                            !searchPagination.offset
+                                        }
                                         onClick={searchPagination.onPrevious}
                                     >
                                         Previous Results
@@ -2509,7 +2456,10 @@ export default function FileBrowser({
                                     <button
                                         type="button"
                                         className="secondary-button"
-                                        disabled={!searchPagination.hasMore}
+                                        disabled={
+                                            sortPending ||
+                                            !searchPagination.hasMore
+                                        }
                                         onClick={searchPagination.onNext}
                                     >
                                         Next Results

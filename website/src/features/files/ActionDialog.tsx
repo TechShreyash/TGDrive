@@ -71,7 +71,7 @@ export default function ActionDialog({
     onClose: () => void;
     onChanged: () => void;
     onNotice: (message: string, error?: boolean) => void;
-    onDelete: (items: DriveItem[]) => Promise<void>;
+    onDelete: (items: DriveItem[]) => void;
     onRestore: (items: DriveItem[]) => Promise<void>;
 }) {
     const originalName = dialog.type === "rename" ? dialog.item.name : "";
@@ -334,32 +334,15 @@ export default function ActionDialog({
                     removed in the background. You cannot restore them after
                     deletion. Failed items reappear in Trash so you can retry.
                 </p>
-                <ErrorNotice message={error} />
                 <div className="dialog-actions">
-                    <button
-                        className="secondary-button"
-                        disabled={busy}
-                        onClick={onClose}
-                    >
+                    <button className="secondary-button" onClick={onClose}>
                         Keep in Trash
                     </button>
                     <button
                         className="danger-button"
-                        disabled={busy}
-                        onClick={() =>
-                            void run(async () => {
-                                await onDelete(dialog.items);
-                                onChanged();
-                            })
-                        }
+                        onClick={() => onDelete(dialog.items)}
                     >
-                        {busy ? (
-                            <>
-                                <Spinner /> Deleting…
-                            </>
-                        ) : (
-                            "Delete Permanently"
-                        )}
+                        Delete Permanently
                     </button>
                 </div>
             </Modal>

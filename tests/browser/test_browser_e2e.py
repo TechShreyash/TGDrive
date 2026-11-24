@@ -2996,7 +2996,7 @@ def test_light_dark_theme_preference_persists_and_preserves_sort_keyboard(
     assert_theme_contrast(page)
     page.reload()
     expect(page.locator("html")).to_have_attribute("data-theme", "dark")
-    sort = page.get_by_role("button", name="Sort Files: Name", exact=True)
+    sort = page.get_by_role("button", name="Sort Files: Date Added", exact=True)
     sort.focus()
     page.keyboard.press("ArrowUp")
     menu = page.get_by_role("menu", name=re.compile(r"^Sort Files: "))
@@ -3297,20 +3297,41 @@ def test_bulk_deletion_is_one_notice_with_refresh_failure_and_retry(
 ) -> None:
     _, page = desktop
     login(page, server.url)
-    for name in ("Private folder", "資料", "Preview samples"):
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    select_item(page, "sample.pdf")
+    page.get_by_role("button", name="Trash", exact=True).click()
+    page.locator(".drive-nav").get_by_role("link", name="My Files", exact=True).click()
+    for name in ("Private folder", "資料"):
         select_item(page, name)
     page.get_by_role("button", name="Trash", exact=True).click()
     page.get_by_role("link", name="Trash", exact=True).click()
-    for name in ("Private folder", "資料", "Preview samples"):
+    for name in ("Private folder", "資料", "sample.pdf"):
         select_item(page, name)
     page.get_by_role("button", name="Delete Permanently", exact=True).click()
-    page.get_by_role("dialog").get_by_role(
-        "button", name="Delete Permanently", exact=True
-    ).click()
+    pending = []
+
+    def hold(route):
+        pending.append(route)
+
+    bulk = "**/api/v1/nodes/bulk"
+    page.route(bulk, hold)
+    confirmation = page.get_by_role("dialog")
+    with page.expect_request(bulk):
+        confirmation.get_by_role(
+            "button", name="Delete Permanently", exact=True
+        ).click()
+    expect(confirmation).to_have_count(0)
+    expect(page.get_by_text("Requesting deletion…", exact=True)).to_be_visible()
+    page.locator(".drive-nav").get_by_role("link", name="My Files", exact=True).click()
+    expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
+    page.get_by_role("link", name="Trash", exact=True).click()
+    assert len(pending) == 1
+    pending[0].continue_()
+    page.unroute(bulk, hold)
     notice = page.get_by_role("region", name="File Deletion", exact=True)
     expect(notice.get_by_role("status")).to_contain_text("Deleting 3 items…")
     expect(notice).to_contain_text("You can close this tab.")
-    for name in ("Private folder", "資料", "Preview samples"):
+    for name in ("Private folder", "資料", "sample.pdf"):
         expect(page.get_by_role("button", name=name, exact=True)).to_have_count(0)
     page.reload()
     expect(notice.get_by_role("status")).to_contain_text("Deleting 3 items…")

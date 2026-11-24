@@ -9,9 +9,12 @@
     font-size: 13px;
 }
 .file-sort-trigger > span {
-    min-inline-size: 11ch;
     white-space: nowrap;
-    text-align: start;
+}
+.file-sort-trigger:has(> span) {
+    /* Fit Date Added while keeping the neighboring controls in place. */
+    min-inline-size: 11em;
+    justify-content: center;
 }
 .file-sort-trigger:hover,
 .file-sort-trigger[aria-expanded="true"] {

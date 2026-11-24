@@ -105,7 +105,11 @@ import {
     NAVIGATION_DRAWER_QUERY,
 } from "../shared/responsive";
 import type { FileSort } from "../features/files/SortMenu";
-import type { SortOrder } from "../features/files/fileSorting";
+import {
+    DEFAULT_FILE_SORT,
+    defaultSortOrder,
+    type SortOrder,
+} from "../features/files/fileSorting";
 import ActionDialog, {
     type ActionDialogState,
 } from "../features/files/ActionDialog";
@@ -331,8 +335,10 @@ export default function App() {
         pending: Set<string>;
     } | null>(null);
     const folderPage = useRef(0);
-    const [folderSort, setFolderSort] = useState<FileSort>("name");
-    const [folderOrder, setFolderOrder] = useState<SortOrder>("asc");
+    const [folderSort, setFolderSort] = useState<FileSort>(DEFAULT_FILE_SORT);
+    const [folderOrder, setFolderOrder] = useState<SortOrder>(
+        defaultSortOrder(DEFAULT_FILE_SORT),
+    );
     const [folderFilterState, setFolderFilterState] = useState<{
         path: string;
         filter: FileFilter;
@@ -355,8 +361,11 @@ export default function App() {
     const scopedQuery =
         scopedSearch.view === location.view ? scopedSearch.query : "";
     const [searchOffset, setSearchOffset] = useState(searchHistoryOffset);
-    const [searchSort, setSearchSort] = useState<FileSort>("name");
-    const [searchOrder, setSearchOrder] = useState<SortOrder>("asc");
+    const [searchSort, setSearchSort] = useState<FileSort>(DEFAULT_FILE_SORT);
+    const [searchOrder, setSearchOrder] = useState<SortOrder>(
+        defaultSortOrder(DEFAULT_FILE_SORT),
+    );
+    const [displayedSearchOffset, setDisplayedSearchOffset] = useState(0);
     const [searchMore, setSearchMore] = useState(false);
     const [searchCapped, setSearchCapped] = useState(false);
     const [searchItems, setSearchItems] = useState<DriveItem[]>([]);
@@ -379,6 +388,7 @@ export default function App() {
         undefined,
     );
     const searchComposing = useRef(false);
+    const pendingRemovals = useRef(new Set<string>());
     const ownSearchNavigation = useRef<string | null>(null);
     const searchOrigin = useRef<string | null>(
         typeof window.history.state?.tgdriveSearchOrigin === "string"
@@ -593,22 +603,35 @@ export default function App() {
     // A type filter belongs to the folder it was chosen in.
     const folderFilter =
         folderFilterState.path === folderKey ? folderFilterState.filter : "all";
-    const listingScope = JSON.stringify([
-        authenticated,
-        view,
-        currentPath,
-        location.auth,
-        isSearch ? searchOffset : 0,
-        isSearch ? searchSort : "",
-        isSearch ? searchOrder : "",
-        ["trash", "starred"].includes(view) ? scopedQuery : "",
-        isPaged ? [folderSort, folderOrder] : "",
-    ]);
-    const listingPrefix = listingScope + "\n";
+    const listingScope =
+        JSON.stringify([
+            authenticated,
+            view,
+            currentPath,
+            location.auth,
+            ["trash", "starred"].includes(view) ? scopedQuery : "",
+        ]) + "\n";
+    const sortPrefix =
+        listingScope +
+        JSON.stringify(
+            isSearch
+                ? [searchSort, searchOrder]
+                : isPaged && !isRecent
+                  ? [folderSort, folderOrder]
+                  : [],
+        ) +
+        "\n";
+    const listingPrefix = sortPrefix + (isSearch ? searchOffset : 0) + "\n";
     const listingKey = listingPrefix + (isPaged ? folderFilter : "");
     const listingPending = displayedKey !== listingKey;
     const changingType =
         isPaged && listingPending && displayedKey.startsWith(listingPrefix);
+    const changingSort =
+        listingPending &&
+        (isPaged || isSearch) &&
+        displayedKey.startsWith(listingScope) &&
+        !displayedKey.startsWith(sortPrefix);
+    const keepListing = changingType || changingSort;
     const localTypeRows = useMemo(
         () =>
             changingType &&
@@ -641,12 +664,12 @@ export default function App() {
     );
     const directory = useMemo(
         () =>
-            listingPending && !changingType
+            listingPending && !keepListing
                 ? { contents: {} }
                 : isPaged
                   ? folderDirectory(pages)
                   : plainDirectory,
-        [listingPending, changingType, isPaged, pages, plainDirectory],
+        [listingPending, keepListing, isPaged, pages, plainDirectory],
     );
     const loadedListing = useRef<string | null>(null);
     const listingRefresh = useRef<ReturnType<
@@ -670,7 +693,8 @@ export default function App() {
             .map(transferTaskId),
     ).size;
     const [dismissedTransferNotice, setDismissedTransferNotice] = useState("");
-    const [transferPanelCollapsed, setTransferPanelCollapsed] = useState<boolean>();
+    const [transferPanelCollapsed, setTransferPanelCollapsed] =
+        useState<boolean>();
     const mobileTransfersButton = useRef<HTMLButtonElement>(null);
     const mobileIssueTasks = new Set(
         items
@@ -1095,6 +1119,7 @@ export default function App() {
                             )
                             .then((result) => {
                                 if (!controller.signal.aborted) {
+                                    setDisplayedSearchOffset(searchOffset);
                                     setSearchMore(result.has_more);
                                     setSearchCapped(Boolean(result.capped));
                                     setNextSearchOffset(result.next_offset);
@@ -1147,7 +1172,7 @@ export default function App() {
                 if (isPublic && needsSharePassword(error))
                     setLockedShare(location.auth);
                 if (
-                    changingType &&
+                    keepListing &&
                     !background &&
                     (!error.status ||
                         error.status === 408 ||
@@ -1519,6 +1544,15 @@ export default function App() {
         targets: DriveItem[],
         allowPublic = false,
     ) => {
+        const removals = pendingRemovals.current;
+        if (type !== "restore") {
+            targets = targets.filter((item) => !removals.has(itemPath(item)));
+            if (!targets.length) return;
+            targets.forEach((item) => removals.add(itemPath(item)));
+            notify(
+                type === "delete" ? "Requesting deletion…" : "Moving to Trash…",
+            );
+        }
         try {
             const response = await api.bulk(
                 targets.map(itemPath),
@@ -1585,10 +1619,12 @@ export default function App() {
                 error.code.includes("PUBLIC_EXPOSURE")
             )
                 setDialog({ type: "restore", items: targets });
-            else if (type !== "delete" && !allowPublic)
-                notify(errorMessage(error), true);
+            else if (!allowPublic) notify(errorMessage(error), true);
             reloadMetadata();
             throw error;
+        } finally {
+            if (type !== "restore")
+                targets.forEach((item) => removals.delete(itemPath(item)));
         }
     };
     const clearSearch = () => {
@@ -1689,7 +1725,7 @@ export default function App() {
         <div className="page-heading">
             <div>
                 {isFiles &&
-                    (!listingPending || changingType) &&
+                    (!listingPending || keepListing) &&
                     !isSearch &&
                     view !== "trash" &&
                     view !== "starred" &&
@@ -2378,11 +2414,17 @@ export default function App() {
                                     : undefined
                             }
                             loading={
-                                !changingType && (loading || listingPending)
+                                !keepListing && (loading || listingPending)
                             }
                             typePending={changingType}
-                            staleTypeRows={changingType && !localTypeRows}
-                            typeError={changingType ? filterFailure : ""}
+                            sortPending={changingSort}
+                            staleTypeRows={
+                                (changingType && !localTypeRows) ||
+                                (changingSort &&
+                                    isPaged &&
+                                    !displayedKey.endsWith("\n" + folderFilter))
+                            }
+                            typeError={keepListing ? filterFailure : ""}
                             onRetryType={() =>
                                 void listingRefresh.current?.request()
                             }
@@ -2463,7 +2505,9 @@ export default function App() {
                             searchPagination={
                                 isSearch
                                     ? {
-                                          offset: searchOffset,
+                                          offset: changingSort
+                                              ? displayedSearchOffset
+                                              : searchOffset,
                                           hasMore: searchMore,
                                           capped: searchCapped,
                                           onPrevious: () =>
@@ -2484,7 +2528,7 @@ export default function App() {
                             }
                             searchItems={
                                 isSearch
-                                    ? listingPending
+                                    ? listingPending && !keepListing
                                         ? []
                                         : searchItems
                                     : undefined
@@ -2494,12 +2538,12 @@ export default function App() {
                                     ? {
                                           rows:
                                               localTypeRows ??
-                                              (listingPending && !changingType
+                                              (listingPending && !keepListing
                                                   ? []
                                                   : pages.rows),
                                           total:
                                               localTypeRows?.length ??
-                                              (listingPending && !changingType
+                                              (listingPending && !keepListing
                                                   ? 0
                                                   : pages.total),
                                           error: listingPending
@@ -2527,7 +2571,7 @@ export default function App() {
                                                   path: folderKey,
                                                   filter,
                                               }),
-                                          onPage: changingType
+                                          onPage: keepListing
                                               ? undefined
                                               : ensurePage,
                                       }
@@ -2894,7 +2938,10 @@ export default function App() {
                         if (dialog.type !== "download-link") setDialog(null);
                     }}
                     onNotice={notify}
-                    onDelete={(targets) => action("delete", targets)}
+                    onDelete={(targets) => {
+                        closeDialog();
+                        void action("delete", targets).catch(() => {});
+                    }}
                     onRestore={(targets) => action("restore", targets, true)}
                 />
             )}

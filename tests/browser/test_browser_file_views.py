@@ -442,10 +442,12 @@ def test_grid_views_preserve_selection_actions_and_bounded_thumbnails(
             return observer;
         }"""
     )
-    # The first row can already be visible while the thumbnail is still in view.
-    page.locator(".workspace, .file-grid-scroll").evaluate_all(
-        "(areas) => areas.forEach(area => area.scrollTo({top: 0, behavior: 'instant'}))"
-    )
+    # Move to the farthest end regardless of the fixture's date order.
+    scroller = page.locator(".workspace" if width < 721 else ".file-grid-scroll")
+    scroller.evaluate("""area => {
+        const end = area.scrollHeight - area.clientHeight;
+        area.scrollTo({top: area.scrollTop < end / 2 ? end : 0, behavior: 'instant'});
+    }""")
     expect(preview).to_have_attribute("data-in-view", "false")
     expect(image).to_have_attribute("src", source)
     sample.scroll_into_view_if_needed()
@@ -927,6 +929,11 @@ def test_sort_direction_and_trash_original_location_work_in_both_views(server, d
     ).to_be_visible()
     page.get_by_role("link", name="My Files", exact=True).click()
     choose_view(page, "List view")
+    expect(page.locator(".file-table th[aria-sort=descending]")).to_contain_text(
+        "Added"
+    )
+    page.get_by_role("button", name="Sort Files: Date Added", exact=True).click()
+    page.get_by_role("menuitemradio", name="Name", exact=True).click()
     page.get_by_role("button", name="Sort Files: Name", exact=True).click()
     page.get_by_role("menuitemradio", name="Descending", exact=True).click()
     names = page.locator(".file-table .item-name-button").all_text_contents()
@@ -936,18 +943,25 @@ def test_sort_direction_and_trash_original_location_work_in_both_views(server, d
         "aria-sort", "ascending"
     )
     search = page.get_by_role("searchbox", name="Search Files and Folders", exact=True)
-    search.fill("sample")
+    with page.expect_request(
+        lambda request: (
+            "/api/v1/search?" in request.url
+            and parse_qs(urlparse(request.url).query).get("sort") == ["date"]
+            and parse_qs(urlparse(request.url).query).get("order") == ["desc"]
+        )
+    ):
+        search.fill("sample")
     expect(
         page.get_by_role("heading", name="Search Results", exact=True)
     ).to_be_visible()
-    page.get_by_role("button", name="Sort Files: Name", exact=True).click()
+    page.get_by_role("button", name="Sort Files: Date Added", exact=True).click()
     with page.expect_response(
         lambda response: (
             "/api/v1/search?" in response.url
-            and parse_qs(urlparse(response.url).query).get("order") == ["desc"]
+            and parse_qs(urlparse(response.url).query).get("order") == ["asc"]
         )
     ):
-        page.get_by_role("menuitemradio", name="Descending", exact=True).click()
+        page.get_by_role("menuitemradio", name="Ascending", exact=True).click()
     choose_view(page, "Grid view")
     expect(page.get_by_role("list", name="Files and folders")).to_be_visible()
 
@@ -1270,6 +1284,14 @@ def test_escape_selection_returns_focus_to_file_control_not_workspace(
     page.set_viewport_size({"width": width, "height": 844})
     login(page, server.url)
     choose_view(page, view)
+    listing = page.get_by_role("region", name="File list", exact=True)
+    expect(listing).to_have_attribute("tabindex", "-1")
+    listing.focus()
+    expect(listing).to_have_css("outline-style", "none")
+    page.keyboard.press("Tab")
+    assert listing.evaluate(
+        "el => el.contains(document.activeElement) && el !== document.activeElement"
+    )
     page.get_by_role("button", name="Select", exact=True).click()
     checkbox = page.get_by_role("checkbox", name="Select Preview samples", exact=True)
     checkbox.check()
@@ -1653,8 +1675,8 @@ def test_sort_labels_keep_file_toolbar_in_place(server, desktop, width, height, 
     switch = toolbar.locator(".file-view-toggle")
     initial = [element.bounding_box() for element in (toolbar, controls, switch)]
     assert initial[0] and initial[1]
-    label = "View and sort" if width < 721 else "Sort Files: Name"
-    for sort in ("Date Added", "File Size", "Name"):
+    label = "View and sort" if width < 721 else "Sort Files: Date Added"
+    for sort in ("Name", "File Size", "Date Added"):
         toolbar.get_by_role("button", name=label, exact=True).click()
         page.get_by_role("menuitemradio", name=sort, exact=True).click()
         if width >= 721:
@@ -1664,3 +1686,46 @@ def test_sort_labels_keep_file_toolbar_in_place(server, desktop, width, height, 
             element.bounding_box() for element in (toolbar, controls, switch)
         ] == initial
         assert toolbar.evaluate("node => node.scrollWidth <= node.clientWidth")
+
+
+@pytest.mark.parametrize("width,height", [(1536, 695), (390, 844)])
+def test_slow_folder_sort_keeps_title_filters_and_rows_mounted(
+    server, desktop, width, height
+):
+    _, page = desktop
+    page.set_viewport_size({"width": width, "height": height})
+    login(page, server.url)
+    page.get_by_role("button", name="Preview samples", exact=True).press("Enter")
+    heading = page.get_by_role("heading", name="Preview samples", exact=True)
+    item = page.get_by_role("button", name="sample.pdf", exact=True)
+    expect(item).to_be_visible()
+    page.evaluate("document.fonts.ready")
+    toolbar = page.locator(".file-toolbar")
+    bounds = toolbar.bounding_box()
+    row = item.element_handle()
+    assert row
+    listing = page.get_by_role("region", name="File list", exact=True)
+    held = []
+    pattern = "**/api/v1/nodes?*sort=name*"
+    page.route(pattern, lambda route: held.append(route))
+    before = "View and sort" if width < 721 else "Sort Files: Date Added"
+    after = "View and sort" if width < 721 else "Sort Files: Name"
+
+    toolbar.get_by_role("button", name=before, exact=True).click()
+    with page.expect_request(pattern):
+        page.get_by_role("menuitemradio", name="Name", exact=True).click()
+    expect(listing).to_have_attribute("aria-busy", "true")
+    expect(page.get_by_role("status").filter(has_text="Sorting…")).to_be_visible()
+    expect(heading).to_be_visible()
+    expect(item).to_be_visible()
+    expect(page.locator(".file-skeleton")).to_have_count(0)
+    assert toolbar.bounding_box() == bounds
+    assert item.evaluate("(node, previous) => node === previous", row)
+    assert len(held) == 1
+
+    held[0].continue_()
+    expect(listing).to_have_attribute("aria-busy", "false")
+    expect(toolbar.get_by_role("button", name=after, exact=True)).to_be_focused()
+    expect(item).to_be_visible()
+    assert item.evaluate("(node, previous) => node === previous", row)
+    assert toolbar.bounding_box() == bounds

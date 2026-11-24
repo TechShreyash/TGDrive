@@ -137,13 +137,14 @@ to configure the two directions independently.
 | Sort/change view | Name, Date Added or File Size; List/Grid; **View and sort** on phones |
 | Filter by type | Chips above the list or **All types** when the file area is narrow. The control shows the active filter. |
 
-Folders stay first when sorting; click an active column to reverse order. Large
+Files and folders start sorted by **Date Added**, newest first. Folders stay
+first. Click the active column to reverse the order. Large
 folders load 200 items first and more as you page. Sort and type filters apply
 to the whole folder and return to page 1. Until a folder is fully loaded, every
 type chip stays visible; a filter with no matches shows **Choose All to see
-everything in this folder**, and **Recently added** appears only once the folder
-is fully loaded. A new browser opens in List view and remembers your choice
-when you switch views. Grid shows the file name, preview, and actions. It fits
+everything in this folder**. Open **Recent** to find files you recently added
+or opened. A new browser opens in List view and remembers your choice when you
+switch views. Grid shows the file name, preview, and actions. It fits
 up to five cards per row and uses fewer columns as the available space narrows.
 Use List to compare file sizes and added dates. Name conflicts offer
 **keep both** or **skip**.
@@ -576,7 +577,9 @@ Trash shows **Deleted from: My Files / …** to identify each item's source.
 - **Delete permanently** removes its database records, descendants and shares
   after confirmation. It cannot be cancelled or restored from Trash.
 
-Accepted deletions continue on the server after closing the tab or restarting.
+You can keep browsing as soon as you confirm a deletion. Trash shows progress
+after the server accepts it. Accepted deletions continue after you close the tab
+or restart TGDrive.
 Failed items reappear; use **Retry Failed deletions** in the Trash notice.
 
 ### Why permanent deletion keeps the Telegram files
