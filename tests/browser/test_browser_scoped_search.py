@@ -243,7 +243,7 @@ def test_transfer_search_resets_cursor_and_filters_active_and_old_finished_names
     search.fill("Archive")
     finished = page.locator('[data-category="finished"]')
     expect(finished).to_contain_text("Archive video.mp4")
-    expect(page.get_by_text("1 task", exact=True)).to_be_visible()
+    expect(finished.get_by_role("heading").first.locator("span")).to_have_text("1")
     expect(pager).to_have_count(0)
     expect(finished.locator(".transfer-item-name")).to_have_count(1)
     assert seen[-1]["q"] == "Archive" and seen[-1]["offset"] == 0

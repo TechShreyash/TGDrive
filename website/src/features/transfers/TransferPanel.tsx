@@ -60,6 +60,8 @@ export default function TransferPanel({
     onLocate,
     pageContext = "files",
     finishedControls,
+    finishedCount,
+    onBrowseFiles,
     finishedEmpty,
 }: {
     items: Transfer[];
@@ -68,6 +70,8 @@ export default function TransferPanel({
     pageContext?: string;
     onLocate?: (item: Transfer, folder?: boolean) => void;
     finishedControls?: ReactNode;
+    finishedCount?: number;
+    onBrowseFiles?: () => void;
     finishedEmpty?: ReactNode;
 }) {
     // The Transfers page is global; the floating receipt belongs to this browser.
@@ -254,9 +258,19 @@ export default function TransferPanel({
     if (!items.length && !finishedControls)
         return expandedPage ? (
             <div className="empty-state">
-                <Upload size={40} />
+                <Upload size={40} aria-hidden="true" />
                 <h2>No Transfers Yet</h2>
-                <p>Uploads started from a folder in My Files appear here.</p>
+                <p>
+                    Start an upload or import in My Files to track its progress
+                    here.
+                </p>
+                <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={onBrowseFiles}
+                >
+                    Open My Files
+                </button>
             </div>
         ) : null;
     return (
@@ -335,7 +349,11 @@ export default function TransferPanel({
                                 hidden={!expandedPage && groups.length === 1}
                             >
                                 {group.label}
-                                <span>{group.count}</span>
+                                <span>
+                                    {group.key === "finished"
+                                        ? (finishedCount ?? group.count)
+                                        : group.count}
+                                </span>
                             </CategoryHeading>
                             {expandedPage && index === 0 && cancelAll}
                         </header>

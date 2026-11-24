@@ -2617,6 +2617,7 @@ export default function App() {
                             mode={view === "activity" ? "visible" : "hidden"}
                         >
                             <TransferHistory
+                                onBrowseFiles={() => navigate("/", "files")}
                                 onClearSearch={clearSearch}
                                 active={view === "activity"}
                                 onNotice={notify}

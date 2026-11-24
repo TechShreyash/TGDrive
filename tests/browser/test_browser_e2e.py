@@ -3626,13 +3626,16 @@ def test_transfer_history_filters_cleared_records_and_empty_state(
     history = page.get_by_role("region", name="Transfer History", exact=True)
     filters = history.get_by_role("group", name="Filter Finished Transfers", exact=True)
     expect(
-        history.get_by_role("heading", name="No Finished Transfers Yet", exact=True)
+        history.get_by_role("heading", name="No Transfers Yet", exact=True)
     ).to_be_visible()
     expect(
         history.get_by_role("button", name="Upload Files", exact=True)
     ).to_have_count(0)
-    for name in ("All", "Successful", "Failed", "Cancelled"):
-        expect(filters.get_by_role("button", name=name, exact=True)).to_be_visible()
+    expect(filters).to_have_count(0)
+    expect(history.get_by_role("button", name="Clear history")).to_have_count(0)
+    history.get_by_role("button", name="Open My Files").click()
+    expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
+    page.get_by_role("link", name="Transfers", exact=False).click()
     # New first opens the destination context instead of a picker on Transfers.
     page.locator("#new-button").click()
     expect(page.get_by_role("heading", name="My Files", exact=True)).to_be_visible()
@@ -3655,11 +3658,7 @@ def test_transfer_history_filters_cleared_records_and_empty_state(
     # History behavior is independent of the browser's receive concurrency.
     assert held
     page.get_by_role("link", name="Transfers", exact=False).click()
-    filters.get_by_role("button", name="Failed", exact=True).click()
-    expect(
-        history.get_by_role("heading", name="No Failed Transfers", exact=True)
-    ).to_be_visible()
-    filters.get_by_role("button", name="All", exact=True).click()
+    expect(filters).to_have_count(0)
     expect(history.get_by_role("button", name="Show Files", exact=True)).to_have_count(
         0
     )
@@ -3780,19 +3779,19 @@ def test_transfer_task_numbered_pages_keep_folder_intact(
     second = navigation.get_by_role(
         "button", name="Page 2 of finished transfers", exact=True
     )
-    expect(finished.locator(".transfer-category-title > span")).to_have_text("20")
+    expect(finished.locator(".transfer-category-title > span")).to_have_text("23")
     expect(folder.locator(".transfer-batch-count")).to_have_text("72 files")
     expect(center.locator(".transfer-item")).to_have_count(19)
     expect(first).to_have_attribute("aria-current", "page")
     second.click()
-    expect(finished.locator(".transfer-category-title > span")).to_have_text("3")
+    expect(finished.locator(".transfer-category-title > span")).to_have_text("23")
     expect(folder).to_have_count(0)
     expect(center.locator(".transfer-item")).to_have_count(3)
     expect(second).to_have_attribute("aria-current", "page")
     assert 20 in offsets
     first.click()
     expect(first).to_have_attribute("aria-current", "page")
-    expect(finished.locator(".transfer-category-title > span")).to_have_text("20")
+    expect(finished.locator(".transfer-category-title > span")).to_have_text("23")
     expect(folder.locator(".transfer-batch-count")).to_have_text("72 files")
     folder.get_by_role("button", name="Show Files", exact=True).click()
     expect(folder.locator(".transfer-item")).to_have_count(20)
@@ -4558,12 +4557,12 @@ def test_history_and_shares_failed_loads_have_retry_without_false_empty_state(
     page.get_by_role("link", name="Transfers", exact=False).click()
     expect(page.get_by_role("button", name="Try Again", exact=True)).to_be_visible()
     expect(
-        page.get_by_role("heading", name="No Finished Transfers Yet", exact=True)
+        page.get_by_role("heading", name="No Transfers Yet", exact=True)
     ).to_have_count(0)
     failing["history"] = False
     page.get_by_role("button", name="Try Again", exact=True).click()
     expect(
-        page.get_by_role("heading", name="No Finished Transfers Yet", exact=True)
+        page.get_by_role("heading", name="No Transfers Yet", exact=True)
     ).to_be_visible()
     page.get_by_role("link", name="Shared Links", exact=True).click()
     expect(page.get_by_role("button", name="Try Again", exact=True)).to_be_visible()

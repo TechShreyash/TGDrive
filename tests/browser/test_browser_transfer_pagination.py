@@ -136,6 +136,7 @@ def test_finished_history_cursor_pages_keep_live_sections_and_reset_filters(
     )
     next_page.click()
     expect(pager.get_by_role("status")).to_contain_text("Page 3 of 3")
+    expect(finished.get_by_role("heading").first).to_contain_text(str(len(records)))
     expect(finished).to_contain_text("oldest-failure.bin")
     expect(next_page).to_be_disabled()
     previous.click()
@@ -147,7 +148,7 @@ def test_finished_history_cursor_pages_keep_live_sections_and_reset_filters(
     expect(finished).to_contain_text("recent-success.bin")
     expect(finished).not_to_contain_text("recent-failure.bin")
     page.set_viewport_size({"width": 320, "height": 640})
-    expect(history_region.get_by_text("2 tasks", exact=True)).to_be_visible()
+    expect(finished.get_by_role("heading").first.locator("span")).to_have_text("2")
     expect(pager).to_have_count(0)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.screenshot(

@@ -43,6 +43,7 @@ export default function TransferHistory({
     onLocate,
     onNotice,
     onClearSearch,
+    onBrowseFiles,
     query = "",
 }: {
     active: boolean;
@@ -51,6 +52,7 @@ export default function TransferHistory({
     onError: (message: string) => void;
     onNotice?: RefreshNotice;
     onClearSearch: () => void;
+    onBrowseFiles: () => void;
     query?: string;
 }) {
     const [filter, setFilter] = useState<HistoryFilter>("all");
@@ -165,6 +167,7 @@ export default function TransferHistory({
             setPageNumber(1);
             setLoading(true);
             setError("");
+            setFilter("all");
             setConfirmClear(false);
             onNotice?.("Transfer history cleared.");
         } catch (cause) {
@@ -216,6 +219,12 @@ export default function TransferHistory({
         true,
         true,
     );
+    const noHistory =
+        !loading &&
+        !error &&
+        filter === "all" &&
+        !query &&
+        page?.total_tasks === 0;
     const controls = (
         <div className="transfer-history-toolbar">
             <div
@@ -297,7 +306,7 @@ export default function TransferHistory({
                     ? "Try another name or clear the search."
                     : filter === "all"
                       ? "Successful, failed and cancelled transfers appear here."
-                      : "Try another filter to see other finished uploads."}
+                      : "Try another filter to see other finished transfers."}
             </p>
             {query && (
                 <button
@@ -317,36 +326,40 @@ export default function TransferHistory({
                 onError={onError}
                 onLocate={onLocate}
                 expandedPage
+                onBrowseFiles={onBrowseFiles}
+                finishedCount={page?.total_tasks}
                 finishedControls={
-                    <>
-                        {controls}
-                        {error && (
-                            <div className="page-load-error">
-                                <ErrorNotice message={error} />
-                                {loadedContext.current === context && (
-                                    <p>
-                                        Showing the last loaded history. It may
-                                        be out of date.
-                                    </p>
-                                )}
-                                <button
-                                    className="secondary-button"
-                                    disabled={loading || manual.refreshing}
-                                    aria-busy={manual.refreshing}
-                                    onClick={() => void retry()}
-                                >
-                                    {manual.refreshing && <Spinner />}
-                                    {manual.refreshing
-                                        ? "Refreshing…"
-                                        : "Try Again"}
-                                </button>
-                            </div>
-                        )}
-                    </>
+                    !noHistory && (
+                        <>
+                            {(page || filter !== "all" || query) && controls}
+                            {error && (
+                                <div className="page-load-error">
+                                    <ErrorNotice message={error} />
+                                    {loadedContext.current === context && (
+                                        <p>
+                                            Showing the last loaded history. It
+                                            may be out of date.
+                                        </p>
+                                    )}
+                                    <button
+                                        className="secondary-button"
+                                        disabled={loading || manual.refreshing}
+                                        aria-busy={manual.refreshing}
+                                        onClick={() => void retry()}
+                                    >
+                                        {manual.refreshing && <Spinner />}
+                                        {manual.refreshing
+                                            ? "Refreshing…"
+                                            : "Try Again"}
+                                    </button>
+                                </div>
+                            )}
+                        </>
+                    )
                 }
                 finishedEmpty={empty}
             />
-            {page && page.total_tasks > 0 && (
+            {page && page.total_pages > 1 && (
                 <HistoryPagination
                     page={pageNumber}
                     totalPages={page.total_pages}
@@ -432,13 +445,7 @@ export function HistoryPagination({
     onPageChange: (page: number) => void;
 }) {
     const taskCount = totalTasks === 1 ? "1 task" : totalTasks + " tasks";
-    if (totalPages <= 1)
-        return (
-            <p className="transfer-history-count" role="status">
-                {taskCount}
-                {loading ? " · Loading…" : ""}
-            </p>
-        );
+    if (totalPages <= 1) return null;
     return (
         <nav
             className="transfer-history-pagination"

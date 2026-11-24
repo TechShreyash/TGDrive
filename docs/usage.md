@@ -434,8 +434,10 @@ only** in TGDrive's proxy; keep owner pages protected.
 
 ## Transfer history
 
-**Transfers** lists **Running** and **Queued**, then finished history. A single
-page shows the task count without page controls. Filter by **All / Successful /
+**Transfers** lists **Running** and **Queued**, then history once a task finishes.
+When there are no transfers, **Open My Files** takes you to the file browser.
+The **Finished** count covers all pages of the current search and filter.
+Filter by **All / Successful /
 Failed / Cancelled**, or search names across history pages.
 Each page holds 20 tasks; a folder counts once and expands to its files.
 Completed files offer **Show in folder**; folder batches offer **Show folder**.
