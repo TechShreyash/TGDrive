@@ -114,7 +114,7 @@ def test_thumbnail_requires_access_before_fetch_or_cached_response(app_client):
     conditional = client.get(
         "/api/v1/thumbnail",
         params={"path": path},
-        headers={"If-None-Match": response.headers["etag"]},
+        headers={"If-None-Match": '"other", W/' + response.headers["etag"]},
     )
     assert conditional.status_code == 304
     assert conditional.content == b""

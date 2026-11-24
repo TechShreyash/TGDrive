@@ -710,3 +710,8 @@ The installed FFmpeg tools perform conversion; no additional browser decoder is
 downloaded. Source reads and output delivery retain current authorization and
 file-transfer speed limits. Closing the request or losing access cancels owned
 conversion work.
+
+The file grid can revalidate up to four visible thumbnails concurrently.
+The server still limits cold thumbnail generation to two concurrent fills.
+An authorized thumbnail or poster with a matching weak or strong ETag returns
+304, so reopening a folder can reuse the browser's copy.

@@ -4,6 +4,8 @@ import {
     thumbnailCandidate,
     thumbnailUrl,
     MAX_THUMBNAIL_BYTES,
+    THUMBNAIL_CONCURRENCY,
+    THUMBNAIL_PENDING,
 } from "./thumbnails";
 const item = {
     id: "id",
@@ -114,22 +116,24 @@ describe("bounded provider thumbnails", () => {
         );
         vi.stubGlobal("fetch", request);
         const controllers = Array.from(
-            { length: 35 },
+            { length: THUMBNAIL_CONCURRENCY + THUMBNAIL_PENDING + 1 },
             () => new AbortController(),
         );
         const pending = controllers.map((controller, i) =>
             fetchThumbnail("/thumb/" + i, controller.signal),
         );
         const results = Promise.allSettled(pending);
-        expect(request).toHaveBeenCalledTimes(2);
-        controllers.slice(2).forEach((controller) => controller.abort());
+        expect(request).toHaveBeenCalledTimes(THUMBNAIL_CONCURRENCY);
+        controllers
+            .slice(THUMBNAIL_CONCURRENCY)
+            .forEach((controller) => controller.abort());
         releases.forEach((release) => release());
         const settled = await results;
-        expect(settled[34]).toMatchObject({
+        expect(settled.at(-1)).toMatchObject({
             status: "rejected",
             reason: { name: "QuotaExceededError" },
         });
-        expect(request).toHaveBeenCalledTimes(2);
+        expect(request).toHaveBeenCalledTimes(THUMBNAIL_CONCURRENCY);
     });
     it("limits concurrency and cancels queued work before it sends anything", async () => {
         const releases: (() => void)[] = [];
@@ -146,15 +150,16 @@ describe("bounded provider thumbnails", () => {
                 ),
         );
         vi.stubGlobal("fetch", request);
-        const first = fetchThumbnail("/one", new AbortController().signal);
-        const second = fetchThumbnail("/two", new AbortController().signal);
+        const active = Array.from({ length: THUMBNAIL_CONCURRENCY }, (_, i) =>
+            fetchThumbnail("/active/" + i, new AbortController().signal),
+        );
         const controller = new AbortController();
-        const third = fetchThumbnail("/three", controller.signal);
-        expect(request).toHaveBeenCalledTimes(2);
+        const queued = fetchThumbnail("/queued", controller.signal);
+        expect(request).toHaveBeenCalledTimes(THUMBNAIL_CONCURRENCY);
         controller.abort();
-        await expect(third).rejects.toMatchObject({ name: "AbortError" });
+        await expect(queued).rejects.toMatchObject({ name: "AbortError" });
         releases.forEach((release) => release());
-        await Promise.all([first, second]);
-        expect(request).toHaveBeenCalledTimes(2);
+        await Promise.all(active);
+        expect(request).toHaveBeenCalledTimes(THUMBNAIL_CONCURRENCY);
     });
 });

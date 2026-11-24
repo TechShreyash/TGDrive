@@ -64,6 +64,7 @@ from tgdrive.media.streaming import (
     TelegramFileNotFound,
     TelegramVariantNotFound,
     _is_playback_request,
+    _not_modified,
     _record_request_error,
     stream_telegram_file,
 )
@@ -1415,7 +1416,7 @@ def create_app(
             # missing original. Keep real authorization/file failures distinct.
             return Response(status_code=204, headers=headers)
         headers["ETag"] = thumbnail.etag
-        if request.headers.get("if-none-match") == thumbnail.etag:
+        if _not_modified(request, thumbnail.etag):
             return Response(status_code=304, headers=headers)
         return Response(
             thumbnail.content, media_type=thumbnail.media_type, headers=headers
@@ -1473,7 +1474,7 @@ def create_app(
         if image is None:
             return Response(status_code=204, headers=headers)
         headers["ETag"] = image.etag
-        if request.headers.get("if-none-match") == image.etag:
+        if _not_modified(request, image.etag):
             return Response(status_code=304, headers=headers)
         return Response(image.content, media_type="image/jpeg", headers=headers)
 
@@ -1570,7 +1571,6 @@ def create_app(
             )
             from tgdrive.media.streaming import (
                 _content_disposition,
-                _not_modified,
                 _request_range,
                 media_etag,
             )

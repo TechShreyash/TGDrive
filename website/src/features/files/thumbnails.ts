@@ -1,7 +1,7 @@
 import { itemPath, type DriveItem } from "../../shared/types";
 
 export const MAX_THUMBNAIL_BYTES = 128 * 1024;
-export const THUMBNAIL_CONCURRENCY = 2;
+export const THUMBNAIL_CONCURRENCY = 4;
 export const THUMBNAIL_PENDING = 32;
 const candidates = new Set([
     "cbr",
