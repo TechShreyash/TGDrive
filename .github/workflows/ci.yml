@@ -323,6 +323,7 @@ jobs:
                       TELEGRAM_ADMIN_IDS="12345",
                       STORAGE_CHANNEL=-1001234567890,
                       ADMIN_PASSWORD="synthetic-container-password",
+                      ENCRYPTION_KEY="e" * 64,
                       SESSION_SECRET="s" * 48,
                   )
                   app = create_app(settings, runtime=SimpleNamespace())
