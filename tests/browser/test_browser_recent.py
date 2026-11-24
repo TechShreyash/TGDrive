@@ -7,7 +7,13 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from tests.browser.test_browser_e2e import Server, expect, fixture_nodes, login
+from tests.browser.test_browser_e2e import (
+    ARTIFACTS,
+    Server,
+    expect,
+    fixture_nodes,
+    login,
+)
 from tests.browser.test_browser_e2e import browser as browser_fixture
 from tests.browser.test_browser_e2e import desktop as desktop_fixture
 from tests.browser.test_browser_e2e import server as server_fixture
@@ -72,6 +78,47 @@ def test_recent_lists_activity_filters_and_shows_the_folder(
     page.get_by_role("button", name="Show in Folder", exact=True).click()
     expect(page).to_have_url(server.url + "/?path=%2F" + folder["id"])
     expect(page.locator("tr.selected .file-name")).to_have_text("private.txt")
+
+
+def test_recent_view_controls_stay_at_end_of_toolbar(server, desktop):
+    _, page = desktop
+    login(page, server.url)
+    page.get_by_role("link", name="Recent", exact=True).click()
+    toolbar = page.locator(".file-toolbar")
+    view = toolbar.get_by_role("group", name="File view")
+    select = toolbar.get_by_role("button", name="Select", exact=True)
+    done = toolbar.get_by_role("button", name="Done", exact=True)
+    view.get_by_role("button", name="Grid view", exact=True).click()
+    for width in (1536, 1920, 820):
+        page.set_viewport_size({"width": width, "height": 900})
+        expect(view).to_be_visible()
+        for button in (select, done):
+            button.click()
+            # The theme control moves to the app header on tablet.
+            theme = toolbar.locator(".theme-control")
+            end = theme if theme.is_visible() else toolbar
+            rect = end.bounding_box()
+            toggle = view.bounding_box()
+            title = toolbar.get_by_role("heading", name="Recent").bounding_box()
+            assert rect and toggle and title
+            edge = rect["x"] if theme.is_visible() else rect["x"] + rect["width"]
+            assert 0 <= edge - toggle["x"] - toggle["width"] <= 24
+            assert (
+                toggle["y"]
+                <= title["y"] + title["height"]
+                <= toggle["y"] + toggle["height"] + 2
+            )
+        if width == 1536:
+            page.screenshot(path=ARTIFACTS / "recent-desktop.png")
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    compact_view = toolbar.get_by_role("button", name="View and sort", exact=True)
+    compact_view.click()
+    page.get_by_role("menuitemradio", name="List view", exact=True).click()
+    expect(page.locator("tr.file-row").first).to_be_visible()
+    expect(select).to_be_visible()
+    assert toolbar.bounding_box()["height"] <= 70
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
 def test_recent_pages_by_cursor_and_shows_an_empty_state(

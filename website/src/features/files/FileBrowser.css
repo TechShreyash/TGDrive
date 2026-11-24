@@ -30,6 +30,14 @@
     flex: 0 1 clamp(312px, 26%, 380px);
     min-width: 0;
 }
+@media (min-width: 721px) {
+    .file-toolbar:not(:has(.search-form)) .page-heading > div:first-child {
+        flex: 1 1 0;
+    }
+    .file-toolbar:not(:has(.search-form)) .file-toolbar-controls {
+        flex-basis: auto;
+    }
+}
 .file-toolbar h1 {
     font-size: 24px;
     line-height: 1.3;
