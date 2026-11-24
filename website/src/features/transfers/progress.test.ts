@@ -211,6 +211,25 @@ describe("stage-local byte and percentage display", () => {
         current: 100,
         total: 100,
     };
+    it("keeps acknowledged bytes while verifying the original", () => {
+        const checking = {
+            ...item,
+            state: "verifying",
+            phase: "Checking the original file",
+            current: 0,
+        };
+        expect(transferStageProgress(checking)).toEqual({
+            bytes: undefined,
+            fraction: undefined,
+        });
+        expect(
+            transferStageProgress({ ...checking, current: 80 }),
+        ).toMatchObject({
+            bytes: { current: 80, total: 100 },
+            fraction: 0.8,
+        });
+    });
+
     it("starts Telegram at zero after finishing the device transfer", () => {
         expect(transferProgress(item)).toMatchObject({
             current: 100,

@@ -124,7 +124,7 @@ export function transferStageProgress(item: ProgressTransfer) {
     const bytes =
         measuresDeviceBytes(item) ||
         measuresServerBytes(item) ||
-        item.state === "verifying"
+        (item.state === "verifying" && item.current > 0)
             ? transferProgress(item)
             : undefined;
     const reported =
