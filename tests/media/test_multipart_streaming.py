@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from starlette.requests import ClientDisconnect
@@ -199,7 +200,9 @@ async def test_invalid_ranges_are_rejected_before_any_telegram_rpc(header, statu
     pool = ClientPool([client])
     await pool.start()
     try:
-        result = await stream(pool, contents, header)
+        authorize = AsyncMock()
+        result = await stream(pool, contents, header, authorize=authorize)
+        authorize.assert_awaited_once_with()
         assert result.status_code == status
         assert not client.fetches and not client.reads
         assert (await pool.health()).active_leases == 0

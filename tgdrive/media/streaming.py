@@ -410,8 +410,6 @@ async def stream_telegram_file(
     request_status=None,
 ) -> Response:
     """Stream with an optional Premium user and a balanced client lease."""
-    if authorize is not None:
-        await authorize()
     if parts is not None:
         from tgdrive.media.multipart_streaming import stream_multipart_file
 
@@ -430,6 +428,9 @@ async def stream_telegram_file(
             request_id=request_id,
             request_status=request_status,
         )
+
+    if authorize is not None:
+        await authorize()
 
     lease: AbstractAsyncContextManager[Any] = pool.lease(
         prefer_premium=True, respect_cooldown=True
