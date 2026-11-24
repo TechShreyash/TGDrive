@@ -22,7 +22,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol, TypedDict, cast
 
-from telethon import TelegramClient, events, functions, types, utils
+from telethon import events, functions, types, utils
 from telethon.errors import (
     FileReferenceExpiredError,
     FileReferenceInvalidError,
@@ -49,6 +49,7 @@ from tgdrive.telegram.connection_errors import (
     TelegramConnectionError,
     connection_problem,
 )
+from tgdrive.telegram.telethon_client import MediaTelegramClient
 from tgdrive.transfers.bandwidth import payload_timeout, provider_timeout
 from tgdrive.transfers.file_window import FileWindow
 from tgdrive.transfers.tasks import _journalled
@@ -499,7 +500,7 @@ class Client:
             if session_string
             else str(directory / self.name)
         )
-        self.native = TelegramClient(
+        self.native = MediaTelegramClient(
             session,
             settings.api_id,
             settings.api_hash.get_secret_value(),
@@ -536,7 +537,7 @@ class Client:
             session_name = getattr(self.native.session, "filename", None)
             if session_name:
                 await asyncio.to_thread(Path(session_name).chmod, 0o600)
-            if isinstance(self.native, TelegramClient):
+            if isinstance(self.native, MediaTelegramClient):
                 await self._refresh_main_endpoint()
             deadline = None
             if self._identity_pool is not None:

@@ -250,6 +250,10 @@ and a recent native part time under one fifth of the elapsed wait, TGDrive close
 the stalled read and retries the block through normal admission. This handoff
 can happen once per block and uses the existing retry budget. Queued waits,
 paced HTTP sends and distant read-ahead do not trigger it.
+The handoff also covers opening a connection to the file's Telegram data
+center. An interrupted setup releases its connection. Once a sender has been
+borrowed, cleanup returns it to the account's pool before releasing the read
+lease. The other account resumes at the start of the missing block.
 A coalesced media metadata lookup has its own eight-second provider deadline.
 
 Independent blocks can use different healthy clients and shared in-flight

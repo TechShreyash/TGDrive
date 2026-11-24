@@ -99,7 +99,7 @@ class FixtureClient(clients.Client):
 @pytest.fixture(autouse=True)
 def native_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     NativeClient.instances.clear()
-    monkeypatch.setattr(clients, "TelegramClient", NativeClient)
+    monkeypatch.setattr(clients, "MediaTelegramClient", NativeClient)
     monkeypatch.setattr(
         clients,
         "StringSession",
